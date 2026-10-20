@@ -165,14 +165,15 @@ func TestHiddenReasoningThroughTranslation(t *testing.T) {
 			u := lastUsage(t)
 			r := lastRoute(s)
 			n, w := u.Decode()
-			if rec.Code != 200 || u.FirstReasoning != 0 || r.FirstReasoning != 0 || n != 0 || w != 0 || u.Reasoning != 1400 {
+			if rec.Code != 200 || u.FirstReasoning != 0 || r.FirstReasoning != 0 || n != 1500 || w != u.Millis || u.Reasoning != 1400 {
 				t.Fatalf("hidden reasoning acquired speed after translation: %d %+v %s", rec.Code, u, rec.Body)
 			}
 		})
 	}
 }
 
-// A visible portion never licenses timing a sealed portion of the same turn.
+// A sealed portion of a turn doesn't keep it from being timed: the turn's
+// whole time is the turn's, whatever its vendor kept out of the stream.
 func TestMixedRedactedReasoning(t *testing.T) {
 	events := []string{
 		`data: {"type":"message_start","message":{"id":"m","role":"assistant","model":"m1","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}`,
@@ -205,8 +206,8 @@ func TestMixedRedactedReasoning(t *testing.T) {
 			s.Handler().ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
 			row := lastUsage(t)
 			n, ms := row.Decode()
-			if w.Code != 200 || row.FirstReasoning != 0 || !row.ReasoningHidden || n != 0 || ms != 0 {
-				t.Fatalf("mixed sealed reasoning timed: %d %+v", w.Code, row)
+			if w.Code != 200 || row.FirstReasoning != 0 || !row.ReasoningHidden || n != 120 || ms != row.Millis {
+				t.Fatalf("mixed sealed reasoning: %d %+v", w.Code, row)
 			}
 		})
 	}
@@ -297,8 +298,8 @@ func TestCodexBackendHiddenReasoningWithoutCount(t *testing.T) {
 	}
 	r := lastUsage(t)
 	n, ms := r.Decode()
-	if !r.ReasoningHidden || n != 0 || ms != 0 {
-		t.Fatalf("Codex hidden reasoning timed with no count: %+v", r)
+	if !r.ReasoningHidden || n != 120 || ms != r.Millis {
+		t.Fatalf("Codex hidden reasoning wasn't timed by its whole turn: %+v", r)
 	}
 }
 
@@ -374,7 +375,11 @@ func TestLiveVisibleReasoningFixture(t *testing.T) {
 		t.Fatalf("live reasoning fixture lost its start: %d/%d", f.reasoningMs(provider.Chat), sample.Events[0].At)
 	}
 	n, ms := usage.DecodeOf(sample.Record.Out, sample.Record.Reasoning, sample.Record.Ms, sample.Record.TTFT, 0, sample.Record.Flow, sample.First)
-	if n != 76 || ms != 731 {
-		t.Fatalf("live tool turn speed %d/%d; want 76/731", n, ms)
+	if n != 0 || ms != 0 {
+		t.Fatalf("live tool turn speed %d/%d; want none: its 76 tokens came in the 187 ms its content took", n, ms)
+	}
+	// without its flow, the whole turn: 76 tokens over 7.5 s
+	if n, ms := usage.DecodeOf(sample.Record.Out, sample.Record.Reasoning, sample.Record.Ms, sample.Record.TTFT, 0, 0, sample.First); n != 76 || ms != 7518 {
+		t.Fatalf("live tool turn speed %d/%d; want 76/7518", n, ms)
 	}
 }

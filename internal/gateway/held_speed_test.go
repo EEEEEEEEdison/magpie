@@ -226,8 +226,8 @@ func TestKimiHeldBurstTellsNoSpeed(t *testing.T) {
 // The same three at John's own times (first content at 5.2 s, the end at
 // 16 s, 550 tokens of which 22 reasoning), read by firstToken as the
 // gateway reads a Chat stream, without waiting them out: the held ones
-// read 2,237 tok/s before, the held call by its flow and the held answer
-// by its window from its first text.
+// tell none, by their flow; the steady one its whole turn's rate, its
+// tokens over the 16 s it took.
 func TestKimiHeldBurstAtJohnsTimes(t *testing.T) {
 	const first, end = 5200 * time.Millisecond, 16000 * time.Millisecond
 	for _, sh := range kimiShapes {
@@ -250,7 +250,9 @@ func TestKimiHeldBurstAtJohnsTimes(t *testing.T) {
 			}
 			ok := got == 0
 			if sh.want > 0 {
-				ok = got > sh.want*0.9 && got < sh.want*1.1
+				// the whole turn's tokens over the whole turn it took
+				turn := float64(out) * 1000 / float64(ms)
+				ok = got > turn*0.9 && got < turn*1.1
 			}
 			if !ok {
 				t.Errorf("%d tokens in %d ms read %.0f tok/s (out %d, ttft %d, first text %d, flow %d); want %v", n, w, got, out, ttft, text, flow, sh.want)

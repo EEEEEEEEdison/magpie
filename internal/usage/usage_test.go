@@ -130,20 +130,21 @@ func TestSummarizeSessions(t *testing.T) {
 }
 
 // The timed calls (#196) sum to a mean time to the first token and how
-// fast the replies were written after it; old records, whole replies and
-// failures aren't in them, and a record without them reads as before.
+// fast their whole turns came: every token, the wait for the first one
+// included, over the ms the call took. A record that wasn't timed, or
+// failed, is in neither, and a record without them reads as before.
 func TestSummarizeTimesFirstTokens(t *testing.T) {
 	now := time.Date(2026, 9, 23, 15, 30, 0, 0, time.UTC)
 	at := now.Add(-time.Hour)
 	recs := []Record{
-		{Time: at, Provider: "p", Model: "m", Output: 100, Millis: 3000, TTFT: 1000, FirstText: 2000, Status: 200},
-		{Time: at, Provider: "p", Model: "m", Output: 50, Millis: 1500, TTFT: 500, Status: 200},
-		{Time: at, Provider: "p", Model: "m", Output: 999, Millis: 800, Status: 200}, // not streamed
-		{Time: at, Provider: "p", Model: "m", Millis: 100, TTFT: 90, Status: 502},    // failed
+		{Time: at, Provider: "p", Model: "m", Output: 100, Millis: 4000, TTFT: 1000, FirstText: 2000, Status: 200}, // 25 tok/s
+		{Time: at, Provider: "p", Model: "m", Output: 50, Millis: 2000, TTFT: 500, Status: 200},                    // 25 tok/s
+		{Time: at, Provider: "p", Model: "m", Output: 999, Status: 200},                                            // not timed
+		{Time: at, Provider: "p", Model: "m", Millis: 100, TTFT: 90, Status: 502},                                  // failed
 	}
 	s := summarize(Today, now, recs)
 	m := s.Models[0]
-	if m.Timed != 2 || m.MeanTTFT() != 750 || m.DecodeMs != 3000 || m.DecodeOut != 150 || m.Speed() != 50 {
+	if m.Timed != 2 || m.MeanTTFT() != 750 || m.DecodeMs != 6000 || m.DecodeOut != 150 || m.Speed() != 25 {
 		t.Fatalf("model: %+v", m.Totals)
 	}
 	if s.Timed != 2 || s.Series[14].Timed != 2 {
@@ -158,78 +159,83 @@ func TestSummarizeTimesFirstTokens(t *testing.T) {
 	}
 }
 
-// A reply that came in one burst at its end tells no speed (#731): the
-// reporter's Gemini turn, one write tool call of 8264 tokens whose first
-// content came 1 ms before the end, read 8,264,000 tok/s and lifted the
-// summed speed of three calls from 100 tok/s to 616. Its TTFT still
-// counts; ordinary replies are timed as before, ledger rows alike.
-func TestBurstTellsNoSpeed(t *testing.T) {
+// A reply that came in one burst at its end is timed by its whole turn, so
+// the reporter's Gemini turn, one write tool call of 8264 tokens whose first
+// content came 1 ms before the end, reads 339 tok/s over its 24.36 s rather
+// than 8,264,000 over 1 ms. A turn whose tokens all came inside a window too
+// short for them still tells no speed (the bound above), and a reply cut off
+// from its turn by its flow does too (DecodeOf).
+func TestBurstIsTimedByItsWholeTurn(t *testing.T) {
 	now := time.Date(2026, 10, 2, 15, 30, 0, 0, time.UTC)
 	at := now.Add(-time.Hour)
 	recs := []Record{
 		{Time: at, Provider: "antigravity", Model: "gemini-3.8-flash", Input: 4087, CacheRead: 97505, Output: 8264, Millis: 24360, TTFT: 24359, Status: 200},
-		{Time: at, Provider: "antigravity", Model: "gemini-3.8-flash", Output: 1200, Millis: 15000, TTFT: 3000, Status: 200}, // 100 tok/s
-		{Time: at, Provider: "antigravity", Model: "gemini-3.8-flash", Output: 400, Millis: 6000, TTFT: 2000, Status: 200},   // 100 tok/s
+		{Time: at, Provider: "antigravity", Model: "gemini-3.8-flash", Output: 1200, Millis: 15000, TTFT: 3000, Status: 200}, // 80 tok/s
+		{Time: at, Provider: "antigravity", Model: "gemini-3.8-flash", Output: 400, Millis: 6000, TTFT: 2000, Status: 200},   // 67 tok/s
 	}
 	m := summarize(Today, now, recs).Models[0]
-	if m.Timed != 3 || m.MeanTTFT() != (24359+3000+2000)/3 || m.DecodeMs != 16000 || m.DecodeOut != 1600 || m.Speed() != 100 {
-		t.Fatalf("model: %+v, %v tok/s", m.Totals, m.Speed())
+	if m.Timed != 3 || m.MeanTTFT() != (24359+3000+2000)/3 || m.DecodeMs != 45360 || m.DecodeOut != 9864 {
+		t.Fatalf("model: %+v", m.Totals)
+	}
+	if s := m.Speed(); s < 217 || s > 218 {
+		t.Fatalf("model: %v tok/s", s)
 	}
 	var rows Totals
 	for _, r := range recs {
 		rows.addRow(Row{Record: r})
 	}
-	if rows.Timed != 3 || rows.DecodeMs != 16000 || rows.DecodeOut != 1600 || rows.Speed() != 100 {
+	if rows.Timed != 3 || rows.DecodeMs != 45360 || rows.DecodeOut != 9864 {
 		t.Fatalf("rows: %+v", rows)
 	}
 	for _, c := range []struct {
 		out      int
-		ms, ttft int64
+		ms, from int64
 		want     int64
 	}{
-		{8264, 24360, 24359, 0}, // the report: 1 ms
-		{8264, 24360, 24360, 0}, // none at all
-		{3, 1050, 1000, 0},      // under 100 ms: too short to time
-		{8264, 1500, 1000, 0},   // 500 ms, 16,528 tok/s: a burst all the same
-		{100, 3000, 1000, 2000}, // 50 tok/s
-		{1000, 1100, 1000, 100}, // 10,000 tok/s over 100 ms, the bounds
-		{0, 3000, 1000, 0},      // wrote nothing
-		{100, 3000, 0, 0},       // not streamed
+		{8264, 24360, 0, 24360}, // the report: the whole turn
+		{8264, 800, 0, 0},       // 10,330 tok/s over 800 ms: too fast to tell
+		{3, 80, 0, 0},           // under 100 ms: too short to time
+		{8264, 500, 0, 0},       // 16,528 tok/s over 500 ms: the same bound
+		{100, 3000, 0, 3000},    // 33 tok/s
+		{1000, 1100, 0, 1100},   // 909 tok/s, inside the bounds
+		{0, 3000, 0, 0},         // wrote nothing
+		{100, 3000, 3000, 0},    // nothing after the start
+		{100, 3000, -1, 0},      // a start the turn doesn't have
 	} {
-		if got := DecodeWindow(c.out, c.ms, c.ttft); got != c.want {
-			t.Errorf("DecodeWindow(%d, %d, %d) = %d, want %d", c.out, c.ms, c.ttft, got, c.want)
+		if got := DecodeWindow(c.out, c.ms, c.from); got != c.want {
+			t.Errorf("DecodeWindow(%d, %d, %d) = %d, want %d", c.out, c.ms, c.from, got, c.want)
 		}
 	}
 }
 
-// A reply that reasoned is timed by its answer (tony on Discord: gpt-6.1-sol
-// read 163 tok/s with a 14 s first token). A Codex turn of 2000 hidden
-// reasoning tokens before its first content at 14 s and a 200-token answer
-// over the 1.5 s after counted 2200 tokens in 1.5 s, 1,467 tok/s; it's 200
-// in 1.5 s, 133. Two such subagents running at once are each their own
-// window, summed, not the wall clock's. A reply that reasoned and wrote
-// only tool calls has no first text and tells no speed; one that didn't
-// reason, or wasn't streamed, is timed as before. The summary, ledger rows
-// and the timeline's parts agree.
-func TestReasoningReplyTimedByItsAnswer(t *testing.T) {
+// A reply that reasoned is timed with its reasoning: its whole turn, every
+// token it wrote over the ms it took, the wait for its first content in it,
+// where it used to be timed by its answer alone (tony on Discord: gpt-6.1-sol
+// read 163 tok/s with a 14 s first token). Two subagents running at once are
+// each their own window, summed, not the wall clock's. The summary, ledger
+// rows and the timeline's parts agree.
+func TestReasoningReplyTimedByItsWholeTurn(t *testing.T) {
 	now := time.Date(2026, 10, 6, 15, 30, 0, 0, time.UTC)
 	at := now.Add(-time.Hour)
 	codex := func(out, reasoning int, ms, ttft, text int64) Record {
 		return Record{Time: at, Provider: "codex", Model: "gpt-6.1-sol", Output: out, Reasoning: reasoning, Millis: ms, TTFT: ttft, FirstText: text, Status: 200}
 	}
 	recs := []Record{
-		codex(2200, 2000, 15500, 14000, 14000), // the turn: 200 in 1.5 s
-		codex(2200, 2000, 15500, 13990, 14000), // a summary 10 ms before the text: the same
-		codex(1300, 1000, 9000, 6000, 6000),    // a subagent at once: 300 in 3 s
-		codex(1500, 1400, 9000, 8000, 0),       // reasoning, then tool calls only: no speed
-		codex(900, 1000, 9000, 6000, 6000),     // reasoning over output: none
-		{Time: at, Provider: "codex", Model: "gpt-6.1-sol", Output: 500, Millis: 7000, TTFT: 2000, Status: 200},     // no reasoning: 500 in 5 s
-		{Time: at, Provider: "codex", Model: "gpt-6.1-sol", Output: 900, Reasoning: 300, Millis: 7000, Status: 200}, // not streamed
+		codex(2200, 2000, 15500, 14000, 14000),
+		codex(2200, 2000, 15500, 13990, 14000),
+		codex(1300, 1000, 9000, 6000, 6000),
+		codex(1500, 1400, 9000, 8000, 0),   // reasoning, then tool calls only
+		codex(900, 1000, 9000, 6000, 6000), // reasoning over output
+		{Time: at, Provider: "codex", Model: "gpt-6.1-sol", Output: 500, Millis: 7000, TTFT: 2000, Status: 200},
+		{Time: at, Provider: "codex", Model: "gpt-6.1-sol", Output: 900, Reasoning: 300, Millis: 7000, TTFT: 500, Status: 200},
 	}
-	const ms, out = 1500 + 1500 + 3000 + 5000, 200 + 200 + 300 + 500
+	const ms, out = 15500 + 15500 + 9000 + 9000 + 9000 + 7000 + 7000, 2200 + 2200 + 1300 + 1500 + 900 + 500 + 900
 	m := summarize(Today, now, recs).Models[0]
-	if m.Timed != 6 || m.DecodeMs != ms || m.DecodeOut != out || m.Speed() != 109.0909090909091 {
-		t.Fatalf("model: %+v, %v tok/s", m.Totals, m.Speed())
+	if m.Timed != 7 || m.DecodeMs != ms || m.DecodeOut != out {
+		t.Fatalf("model: %+v", m.Totals)
+	}
+	if s := m.Speed(); s < 131 || s > 132 {
+		t.Fatalf("model: %v tok/s", s)
 	}
 	var rows Totals
 	var lr []Row
@@ -241,7 +247,7 @@ func TestReasoningReplyTimedByItsAnswer(t *testing.T) {
 		r.Time = held
 		lr = append(lr, Row{Record: r})
 	}
-	if rows.Timed != 6 || rows.DecodeMs != ms || rows.DecodeOut != out {
+	if rows.Timed != 7 || rows.DecodeMs != ms || rows.DecodeOut != out {
 		t.Fatalf("rows: %+v", rows)
 	}
 	_, pts := LedgerSeries(Today, lr)
@@ -259,10 +265,11 @@ func TestReasoningReplyTimedByItsAnswer(t *testing.T) {
 		n int
 		w int64
 	}{
-		{recs[0], 200, 1500},
-		{recs[3], 0, 0},
-		{recs[5], 500, 5000},
-		{recs[6], 0, 0},
+		{recs[0], 2200, 15500},
+		{recs[3], 1500, 9000},
+		{recs[5], 500, 7000},
+		// reasoning its vendor kept out of the stream counts with the rest
+		{Record{Output: 900, Reasoning: 300, Millis: 7000, ReasoningHidden: true}, 900, 7000},
 	} {
 		if n, w := c.r.Decode(); n != c.n || w != c.w {
 			t.Errorf("Decode(%+v) = %d, %d; want %d, %d", c.r, n, w, c.n, c.w)

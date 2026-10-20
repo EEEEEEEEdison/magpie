@@ -368,14 +368,14 @@ const (
 // Periods lists the windows in order.
 var Periods = []Period{Today, Week, Month, All}
 
-// CostAt is what the call costs at a price: at the tier its input reaches,
-// its 1-hour cache writes at theirs. A reported call that said what it
-// cost costs that, at any price.
+// CostAt is what the call costs at a price: at the price of the window it
+// was made in, at the tier its input reaches, its 1-hour cache writes at
+// theirs. A reported call that said what it cost costs that, at any price.
 func (r Record) CostAt(p catalog.Price) float64 {
 	if r.OwnCost != nil {
 		return *r.OwnCost // a reported call's own cost (#1874)
 	}
-	return p.CostSplit(r.Input, r.Output, r.CacheRead, r.CacheWrite, r.CacheWrite1h)
+	return p.CostSplitAt(r.Time, r.Input, r.Output, r.CacheRead, r.CacheWrite, r.CacheWrite1h)
 }
 
 // Totals is a sum of calls.
@@ -403,10 +403,11 @@ type Totals struct {
 	Credits  float64 `json:"credits,omitempty"`
 	Credited int     `json:"credited,omitempty"`
 	// Timed: the answered calls whose first token was timed (streamed),
-	// TTFT the sum of their ttft_ms; DecodeMs the time from it to the end
-	// of those that wrote any, over which DecodeOut tokens came (a
-	// reasoning reply's answer, Record.Decode): their mean wait, and how
-	// fast they wrote (#196)
+	// TTFT the sum of their ttft_ms: their mean wait. DecodeMs is the time
+	// of the answered calls that wrote any, from the request to the last
+	// token, over which DecodeOut tokens came (Record.Decode): how fast
+	// they wrote (#196). A session file's call has its turn's ms without
+	// its first token timed, so it is in the speed and not in the wait.
 	Timed     int   `json:"timed,omitempty"`
 	TTFT      int64 `json:"ttft_ms,omitempty"`
 	DecodeMs  int64 `json:"decode_ms,omitempty"`
@@ -435,8 +436,8 @@ func (t Totals) MeanTTFT() int64 {
 	return t.TTFT / int64(t.Timed)
 }
 
-// Speed is how fast the timed calls wrote, in tokens a second after their
-// first: 0 for none.
+// Speed is how fast the answered calls wrote over their whole turn, in
+// tokens a second: 0 for none.
 func (t Totals) Speed() float64 {
 	if t.DecodeMs <= 0 {
 		return 0
@@ -471,92 +472,51 @@ const (
 	MaxDecodeSpeed = 10000
 )
 
-// DecodeWindow is the ms a reply of out tokens, ms long with its first
-// content at ttft, took to write them: 0 when it wasn't timed, wrote
-// nothing, or came too fast to tell a speed by (above).
-func DecodeWindow(out int, ms, ttft int64) int64 {
-	w := ms - ttft
-	if out <= 0 || ttft <= 0 || w < MinDecodeMs || int64(out)*1000 > MaxDecodeSpeed*w {
+// DecodeWindow is the ms a reply of out tokens took over ms from when its
+// speed starts being timed, from in the request: 0 when it wasn't timed,
+// wrote nothing, or came too fast to tell a speed by (above).
+func DecodeWindow(out int, ms, from int64) int64 {
+	w := ms - from
+	if out <= 0 || from < 0 || w < MinDecodeMs || int64(out)*1000 > MaxDecodeSpeed*w {
 		return 0
 	}
 	return w
 }
 
-// DecodeOf is what a reply's speed is told by: the tokens it was seen to
-// write and the ms it took (tony on Discord: gpt-6.1-sol read 163 tok/s,
-// with a 14 s first token). A reply that reasoned counts only its answer —
-// its output less the reasoning, from its first text — as most vendors
-// keep the reasoning out of the stream (OpenAI's is encrypted, its summary
-// sent when it's done; Claude's may come with no text): its tokens were
-// written before the first content, over time the window from it doesn't
-// hold, and counting them read a 2,000-token think and a 200-token answer
-// in 1.5 s as 1,467 tok/s. Its time goes to the wait before the answer.
-// With no answer text, paced visible reasoning can time all output from
-// firstReasoning. Missing evidence (including older records), hidden reasoning
-// and an unknown flow leave the speed untold. The
-// window is DecodeWindow's: 0 for a reply that tells none.
+// DecodeOf is what a reply's speed is told by: every token it wrote, the
+// reasoning in them, over the whole turn, from the request to its last token,
+// the wait for its first token in that time.
 //
-// A reply its vendor held back and let go in a burst at its end tells
-// none either (John on Discord: Kimi Code answering OpenCode read 1,367,
-// then 2,237 and 2,012 tok/s). The burst is told two ways, as the reply's
-// text came before it or with it:
+// It used to count only the writing after the first token, which read a reply
+// of 2.5 s of wait and 10 s of writing faster than it was: the wait is part
+// of how long the answer took, and the number the card shows is what the
+// turn's tokens came at. ttft, firstText and firstReasoning are the timing
+// the turn was seen with, and count no longer; a reply of none, or one that
+// came too fast to tell (MinDecodeMs, MaxDecodeSpeed), tells no speed.
 //
-//   - flow, when known (Record.Flow), is how long its content took to come
-//     from where its window starts. A window HeldShare times longer had
-//     its content come in a small part of it: the rest was a wait while
-//     the vendor wrote and held it. The time it took to come is not the
-//     time it took to write (a burst let go over 236 ms read 528 tokens at
-//     2,237 tok/s), and that time is not seen, so it tells no speed. A
-//     stream that came as it was written has a flow about its window.
-//   - a reply that reasoned is timed from its first text, its reasoning
-//     written before. When the answer would have been written over
-//     ThinkPace times faster than its reasoning came before it, from the
-//     first content to the first text, its first text came with the burst
-//     and the wait before it was the answer being written and held (22
-//     reasoning tokens over 10.5 s, then 528 answer tokens in 236 ms). A
-//     reasoning hidden from the stream (OpenAI's, Claude's omitted) comes
-//     before the first content and leaves this time short; one that
-//     streams comes at the pace its answer does.
+// A reply its vendor held back and let go in a burst at its end still tells
+// none (John on Discord: Kimi Code answering OpenCode read 1,367, then 2,237
+// and 2,012 tok/s): flow, when known (Record.Flow), is how long its content
+// took to come. A turn HeldShare times longer had its content come in a small
+// part of it: the rest was a wait while the vendor wrote and held it, and the
+// time it took to write is not seen.
 func DecodeOf(out, reasoning int, ms, ttft, firstText, flow int64, firstReasoning ...int64) (tokens int, w int64) {
-	start := ttft
-	if reasoning > 0 {
-		if firstText > 0 {
-			out, start = out-reasoning, firstText
-		} else if len(firstReasoning) > 0 && firstReasoning[0] >= ttft && flow > 0 && reasoning <= out {
-			start = firstReasoning[0]
-		} else {
-			return 0, 0
-		}
-	}
-	if ttft <= 0 {
-		return 0, 0
-	}
-	if w = DecodeWindow(out, ms, start); w == 0 {
+	if w = DecodeWindow(out, ms, 0); w == 0 {
 		return 0, 0
 	}
 	if flow > 0 && flow*HeldShare < w {
 		return 0, 0
 	}
-	if reasoning > 0 && firstText > 0 && int64(out)*(firstText-ttft) > ThinkPace*int64(reasoning)*w {
-		return 0, 0
-	}
 	return out, w
 }
 
-// HeldShare and ThinkPace tell a reply held back and let go in a burst
-// (DecodeOf): its content came in under a quarter of its window, or its
-// answer at over 20 times the pace its reasoning came. routing/client.js's
+// HeldShare tells a reply held back and let go in a burst (DecodeOf): its
+// content came in under a quarter of its window. routing/client.js's
 // decodeOf and app.js's ledDecode have the same.
-const (
-	HeldShare = 4
-	ThinkPace = 20
-)
+const HeldShare = 4
 
 // Decode is the record's DecodeOf.
 func (r Record) Decode() (tokens int, w int64) {
-	if r.ReasoningHidden && r.FirstText <= 0 {
-		return 0, 0
-	}
 	return DecodeOf(r.Output, r.Reasoning, r.Millis, r.TTFT, r.FirstText, r.Flow, r.FirstReasoning)
 }
 
@@ -610,6 +570,8 @@ func (t *Totals) addFrom(row Row, price *catalog.Price) {
 	if r.TTFT > 0 && !r.Failed() {
 		t.Timed++
 		t.TTFT += r.TTFT
+	}
+	if !r.Failed() {
 		if n, w := row.Decode(); w > 0 {
 			t.DecodeMs += w
 			t.DecodeOut += n

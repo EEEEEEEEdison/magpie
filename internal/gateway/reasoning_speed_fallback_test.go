@@ -53,7 +53,7 @@ func TestSummaryAfterEndpointFallbackStaysHidden(t *testing.T) {
 	if u.TTFT <= 0 || u.Output != 1500 {
 		t.Fatalf("the reply wasn't timed as a stream: %+v", u)
 	}
-	if n, w := u.Decode(); !u.ReasoningHidden || n != 0 || w != 0 {
-		t.Fatalf("a Responses summary was timed as the reply's speed (%d tokens in %d ms): %+v", n, w, u)
+	if n, w := u.Decode(); !u.ReasoningHidden || n != 1500 || w != u.Millis {
+		t.Fatalf("a Responses summary wasn't timed by its whole turn (%d tokens in %d ms): %+v", n, w, u)
 	}
 }

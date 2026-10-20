@@ -333,57 +333,43 @@ words (`stop`, `tool_calls`, `end_turn`, a Responses reply's
 `completed`), empty when it said none. A request's row on the Requests
 page shows it as Upstream stop reason.
 
-**Output speed** (tok/s on the Usage and Routing pages, `magpie usage`) is
-output tokens over the time after the first token, summed per request: the
-tokens of every timed request over the sum of their windows, so concurrent
-subagents never add up. A reply that reasoned counts only its answer, from its
-first text (`usage.DecodeOf`): hidden reasoning is written before the stream
-shows anything, so counting it in a window that starts after it read
-gpt-6.1-sol at hundreds of tok/s. A reply that reasoned and then wrote only
-tool calls, one not streamed, and a burst (under 100 ms, or over 10,000 tok/s)
-tell no speed. So does a reply its vendor held back and let go in a burst at
-its end, however long the burst took to come: one whose content came in under
-a quarter of its window (`flow_ms`, from a tenth of its bytes to nine tenths,
-scaled to the whole), or that reasoned and whose answer would have come over
-20 times faster than its reasoning came before its first text (its text came
-with the burst). The time a burst takes to come is not the time it took to
-write, and that time isn't seen. History is read the same way, as it keeps the
-reasoning, the first text and the flow; a record from before the flow was kept
-is told by its reasoning's pace alone.
+**Output speed** (tok/s on the Usage and Routing pages, `magpie usage`) is a
+reply's output tokens over its turn, summed per request: the tokens of every
+timed request over the sum of their turns, so concurrent subagents never add
+up. A turn is from the request to its last token, the wait for the first token
+in it, and counts every token the reply wrote, its reasoning among them
+(`usage.DecodeOf`): the answer took that time to come, the wait and all. One
+not streamed, and a burst (under 100 ms, or over 10,000 tok/s) tell no speed.
+So does a reply its vendor held back and let go in a burst at its end,
+however long the burst took to come: one whose content came in under a quarter
+of its turn (`flow_ms`, from a tenth of its bytes to nine tenths, scaled to
+the whole). The time a burst takes to come is not the time it took to write,
+and that time isn't seen. History is read the same way.
 
-A call read from an agent's session file rather than seen by the gateway has
-no first token: Claude Code's file has only when the line that asked for a
-reply and the reply's last line were written. Such a row on the Requests tab
-shows the least its reply wrote at instead (`≥98 tok/s`): its output tokens
-over that whole time, the wait for the first token in it, so the speed after
-the first token is never under it. Only a reply of 1,000 tokens or more
-written over a second or more shows one; a shorter reply's wait is too much
-of its time to tell anything; a count of tokens bounds that share, a
-duration doesn't (a 5 s reply can be 4 s of wait). Claude Code's, Claude
-Desktop's and Codex's rows show one: Claude's line that asked for a reply is
-written before it is sent, and a Codex call in a turn of several is timed
-from what the model had last been given before the call's first output
-item to its last, never from the output of a tool the call itself ran,
-which an older rollout writes before the call's token count. OpenCode's rows
-show none.
+A call read from an agent's session file rather than seen by the gateway may
+have no first token: Claude Code's file has only when the line that asked for
+a reply and the reply's last line were written. Its speed is still its output
+over its whole turn, the same as a gateway row's: a turn's ms and the tokens
+it wrote are all a speed is told by, and when its first token came is not
+asked. So Pi's rows, which have their turn's ms and no first token, show one.
+Such a call is in no mean wait for the first token, which counts the calls
+whose first token was timed.
 A call whose session file timed it (a Codex turn of one call) shows its own
-speed when the time after its first token is a second or more and it wrote
-100 tokens or more in it (`usage.CodexWindowMs`, `usage.CodexBodyTokens`).
-That time can be one network push rather than the writing: a reply whose
-first token came at 6.8 s and the rest 0.2 s later read 1,900 tok/s. When
-that call reasoned, the file has its first token but not its first text, so
-no speed is measured; it shows the least its answer wrote at instead: its
-output less the reasoning, all written after the first token, over the time
-from the first token to its end, held to the same second and 100 tokens. Its
-whole output over that time would count reasoning written before the first
-token and read high. A Codex turn of one call that tells neither shows the
-least it wrote at over the whole turn, the wait for the first token in it
-(`≥120 tok/s` for 1,200 tokens in 10 s), by the same rule as any floor over
-a whole time: 1,000 tokens or more over a second or more. Under that the
-wait is too much of the time to tell anything, so an 11-token answer in
-2.75 s shows none, as an 815-token Claude Code reply does. Gateway rows and other agents' keep their own
-speed. A floor never mixes into a measured speed: the Speed trend and
-`magpie usage` count timed calls only.
+speed when its turn is a second or more and it wrote 100 tokens or more in it
+(`usage.CodexWindowMs`, `usage.CodexBodyTokens`): a turn that short can be one
+network push rather than the writing, and a reply whose first token came at
+6.8 s with the rest 0.2 s later read 1,900 tok/s. A row that still tells no
+speed may show the least it wrote at instead (`≥98 tok/s`, `usage.Row.Floor`),
+for the agents whose session files time a call from inside it: Claude Code's
+line that asked for a reply is written before it is sent, and a Codex call in
+a turn of several is timed from what the model had last been given before the
+call's first output item to its last, never from the output of a tool the
+call itself ran, which an older rollout writes before the call's token count.
+A floor needs 1,000 tokens or more over a second or more (`usage.Row.Floor`).
+The wait is too much of a shorter reply's time to tell anything, so an
+11-token answer in 2.75 s shows none, as an 815-token Claude Code reply does.
+OpenCode's rows show none. A floor never mixes into a measured speed: the
+Speed trend and `magpie usage` count timed calls only.
 
 A group's speed (a row of the Usage page's ranking, by model, provider or
 agent, its Output speed card, and the overview's lists) says how many
@@ -1948,16 +1934,16 @@ curl -s http://127.0.0.1:3425/v1/magpie/usage/requests \
   required. `in`, `out`, `cache_read`, `cache_write`, `cache_write_1h`,
   `reasoning`, `ms`, `ttft_ms`, `first_text_ms`, `flow_ms`, `status`,
   `cost` (USD), `effort`, `session` and `err` may be left out.
-- **Speed:** the Requests page tells a reply's speed from `out`, `ms` and
-  `ttft_ms` (ms from the request to the reply's first content: text,
-  reasoning or a tool call). A reply that reasoned (`reasoning` above 0)
-  is timed from its first text, so it tells a speed only with
-  `first_text_ms` (ms from the request to its first text), which may not
-  be before `ttft_ms` or after `ms`. `flow_ms` is how long the content
-  took to come, from where the speed is timed: the time from a tenth of
-  it to nine tenths, times 10/8 (at most `ms` × 10/8). A reply whose
-  content came in under a quarter of its window was held and let go in a
-  burst, and tells no speed. Leave out what you don't know.
+- **Speed:** the Requests page tells a reply's speed from `out` and `ms`:
+  its output over its whole turn, `ms`, every token it wrote counted, its
+  `reasoning` among them. `ttft_ms` (ms from the request to the reply's
+  first content: text, reasoning or a tool call) is not needed for that
+  speed: it is the wait a mean wait for the first token is of. `flow_ms` is
+  how long the content took to come: the time from a tenth of it to nine
+  tenths, times 10/8 (at most `ms` × 10/8). A reply whose content came in
+  under a quarter of its turn was held and let go in a burst, and tells no
+  speed. `first_text_ms` is kept and counts no longer. Leave out what you
+  don't know.
 - **Pricing:** a record without `cost` is priced at magpie's prices for
   its provider and model.
 - **Past times:** `t` is taken as given, however far back, so a history

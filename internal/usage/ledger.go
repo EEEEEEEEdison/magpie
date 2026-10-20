@@ -726,6 +726,8 @@ func (t *Totals) addRow(r Row) {
 	if r.TTFT > 0 && !r.Failed() {
 		t.Timed++
 		t.TTFT += r.TTFT
+	}
+	if !r.Failed() {
 		if n, w := r.Decode(); w > 0 {
 			t.DecodeMs += w
 			t.DecodeOut += n
@@ -985,6 +987,8 @@ func (p *Part) add(r Row) {
 	if r.TTFT > 0 && !r.Failed() {
 		p.Timed++
 		p.TTFT += r.TTFT
+	}
+	if !r.Failed() {
 		if n, w := r.Decode(); w > 0 {
 			p.DecodeMs += w
 			p.DecodeOut += n
