@@ -1,9 +1,11 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
-// A reply that came in one burst at its end tells no speed in the Routing
-// page's story (#731, Arcadia822: a Gemini turn of one write tool call, 8264
-// tokens whose first content came 1 ms before the end, read 8,264,000
-// tok/s); its first token still shows, and an ordinary reply keeps its
-// speed.
+// A reply whose whole turn was one burst tells its turn's own speed in the
+// Routing page's story, never an absurd one (#731, Arcadia822: a Gemini turn
+// of one write tool call, 8264 tokens whose first content came 1 ms before the
+// end, read 8,264,000 tok/s — it reads its 8,264 over its 24.36 s, 339); a
+// reply the vendor held back and let go in a burst at its end tells none, its
+// flow_ms saying its content came in a small part of its turn; its first token
+// still shows, and an ordinary reply keeps its speed.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -16,15 +18,15 @@ const day = [now.getFullYear(), now.getMonth() + 1, now.getDate()].map((n) => St
 const at = (i) => new Date(now.getTime() - (i + 1) * 60e3).toISOString();
 const key = { id: "antigravity", provider: "antigravity", name: "Antigravity", kind: "provider", model: "gemini-3.8-flash" };
 // newest first: the report's burst, a 500 ms burst, then ordinary replies
-// (100 tok/s and 50 tok/s; a few rows, so the stage above holds still)
+// (80 tok/s and 33 tok/s; a few rows, so the stage above holds still)
 // and last, a reply whose first words came at 5.1 s and the rest held back
 // and sent at once (John on Discord: Kimi Code, 1,367 tok/s): its flow says
 // its content took 2 ms to come
 // Then John's rows after that fix (Kimi Code again: 2,237 and 2,012 tok/s),
 // a burst let go over 236 ms and 196 ms: 550 tokens, 22 of them reasoning,
 // in 16 s with the first content at 5.2 s, its text early (5.4 s) and
-// with the burst (15.764 s); 395 tokens in 19 s. And a steady 50 tok/s
-// answer after the same reasoning, which keeps its speed.
+// with the burst (15.764 s); 395 tokens in 19 s. And the same turn whose
+// content streamed over 10.6 s of it, which tells its own 552 in 16 s, 35.
 // [out, ms, ttft, flow, reasoning, firstText]
 const timing = [[8264, 24360, 24359], [8264, 1500, 1000], [1200, 15000, 3000], [100, 3000, 1000], [100, 3000, 1000], [100, 3000, 1000], [2187, 6700, 5100, 2],
   [550, 16000, 5200, 236, 22, 5400], [550, 16000, 5200, 236, 22, 15764], [395, 19000, 5200, 196], [552, 16000, 5200, 10600, 22, 5400]];
@@ -60,13 +62,13 @@ function serve(lang) {
 }
 
 const want = {
-  en: { first: /first token in 24 s/, speed: /tok\/s/, normal: /· 100 tok\/s/, slow: /· 50 tok\/s/ },
-  zh: { first: /24 秒 后首响/, speed: /token\/秒/, normal: /· 100 token\/秒/, slow: /· 50 token\/秒/ },
+  en: { first: /first token in 24 s/, speed: /tok\/s/, burst: /· 339 tok\/s/, half: /· 5509 tok\/s/, normal: /· 80 tok\/s/, slow: /· 33 tok\/s/, steady: /· 35 tok\/s/ },
+  zh: { first: /24 秒 后首响/, speed: /token\/秒/, burst: /· 339 token\/秒/, half: /· 5509 token\/秒/, normal: /· 80 token\/秒/, slow: /· 33 token\/秒/, steady: /· 35 token\/秒/ },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const lang of ["en", "zh"]) {
-    test(`${engine} ${lang}: a reply that came in one burst tells no speed`, async (t) => {
+    test(`${engine} ${lang}: a burst at a reply's end tells its turn's speed, or none`, async (t) => {
       const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
       const context = await browser.newContext({ viewport: { width: 1100, height: 760 }, reducedMotion: "reduce" });
       const page = await context.newPage();
@@ -120,13 +122,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(await page.evaluate(() => [scrollX, scrollY, document.scrollingElement.scrollTop]), scrolled);
         return page.locator(".rt-steps").textContent();
       };
-      // the report: its first token, and no speed
+      // the report: its first token, and its turn's own 339, never the
+      // 8,264,000 the 1 ms after its first content read
       const burst = await story(0);
       assert.match(burst, want[lang].first);
-      assert.doesNotMatch(burst, want[lang].speed);
+      assert.match(burst, want[lang].burst);
       assert.doesNotMatch(burst, /8264000|8,264,000/);
-      // half a second for 8264 tokens is a burst all the same
-      assert.doesNotMatch(await story(1), want[lang].speed);
+      // half a second for 8264 tokens tells 5509, under the 10,000 ceiling
+      assert.match(await story(1), want[lang].half);
       // ordinary replies keep theirs
       assert.match(await story(2), want[lang].normal);
       assert.match(await story(3), want[lang].slow);
@@ -141,8 +144,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.doesNotMatch(s, want[lang].speed, `row ${i}: ${s}`);
         assert.doesNotMatch(s, n);
       }
-      // a steady answer after the same reasoning keeps its 50 tok/s
-      assert.match(await story(10), want[lang].slow);
+      // the same turn, its content streamed over 10.6 s of its 16 s, tells 35
+      assert.match(await story(10), want[lang].steady);
       assert.deepEqual(errors, []);
     });
   }

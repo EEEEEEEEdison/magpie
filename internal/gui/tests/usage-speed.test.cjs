@@ -1,6 +1,6 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
 // How fast the replies came, on the Usage page's Requests tab (huoranxuanyuan,
-// #860): each row's speed in tokens a second after its first, a KPI of the
+// #860): each row's speed in tokens a second over its whole turn, a KPI of the
 // period's with its first-token time, a Speed trend that sets each model's
 // beside the others', and the ranking's tok/s. At the reporter's own window
 // (975px, 125%) the table fits without scrolling sideways, the columns it
@@ -25,8 +25,9 @@ const row = (i, model, out, ttft) => ({
   effort: "high", in: 41200 + i, out, cache_read: 30000, cache_write: 2000, ms: 600 + 1800 * (model === "glm-fast" ? 1 : 0) + (model === "kimi-slow" ? 2000 : 0),
   ttft_ms: ttft, status: 200, rid: "req_" + i, ep: "/v1/messages", cost: 0.0123, priced: true,
 });
-// glm-fast: 135 tokens in the 1.8 s after its first, 75 tok/s; kimi-slow: 20
-// in 2 s, 10 tok/s; the last wasn't streamed, so it has no speed
+// glm-fast: 135 tokens over its 2.4 s turn, 56 tok/s; kimi-slow: 20 over its
+// 2.6 s turn, 8; the one at index 3 wasn't streamed, and tells a speed all
+// the same (135 in 3 s, 45): a turn's ms is its own
 const ROWS = [row(0, "glm-fast", 135, 600), row(1, "kimi-slow", 20, 600), row(2, "glm-fast", 135, 600)];
 ROWS.push({ ...row(3, "glm-fast", 135, 0), ttft_ms: undefined, ms: 3000 });
 for (let i = 4; i < 30; i++) ROWS.push(row(i, "glm-fast", 135, 600));
@@ -35,15 +36,15 @@ for (let i = 4; i < 30; i++) ROWS.push(row(i, "glm-fast", 135, 600));
 ROWS[4].flow_ms = 2;
 // and John's after that fix (Kimi Code: 2,237 tok/s): 550 tokens, 22 of
 // them reasoning, in 16 s from a first content at 5.2 s, the rest let go
-// over 236 ms, its text early or with the burst; then a steady 50 tok/s
-// answer after the same reasoning
+// over 236 ms, its text early or with the burst; then the same turn whose
+// content streamed over 10.6 s of it, which tells its own 552 in 16 s, 35
 const kimi = { out: 550, reasoning: 22, ms: 16000, ttft_ms: 5200, flow_ms: 236 };
 Object.assign(ROWS[5], kimi, { first_text_ms: 5400 });
 Object.assign(ROWS[6], kimi, { first_text_ms: 15764 });
 Object.assign(ROWS[7], kimi, { out: 552, first_text_ms: 5400, flow_ms: 10600 });
 
-const FAST = { id: "glm-fast", calls: 28, input: 1, output: 3780, cache_read: 0, cache_write: 0, cost: 0.3, timed: 27, ttft_ms: 27 * 600, decode_ms: 27 * 1800, decode_out: 27 * 135 };
-const SLOW = { id: "kimi-slow", calls: 1, input: 1, output: 20, cache_read: 0, cache_write: 0, cost: 0.01, timed: 1, ttft_ms: 600, decode_ms: 2000, decode_out: 20 };
+const FAST = { id: "glm-fast", calls: 28, input: 1, output: 3780, cache_read: 0, cache_write: 0, cost: 0.3, timed: 27, ttft_ms: 27 * 600, decode_ms: 27 * 2400, decode_out: 27 * 135 };
+const SLOW = { id: "kimi-slow", calls: 1, input: 1, output: 20, cache_read: 0, cache_write: 0, cost: 0.01, timed: 1, ttft_ms: 600, decode_ms: 2600, decode_out: 20 };
 const part = (x) => ({ calls: x.calls, tokens: x.output, cost: x.cost, timed: x.timed, ttft_ms: x.ttft_ms, decode_ms: x.decode_ms, decode_out: x.decode_out });
 const sum = (k) => FAST[k] + SLOW[k];
 
@@ -51,16 +52,16 @@ function ledger(period) {
   return {
     period, rows: ROWS, offset: 0, total: ROWS.length, calls: ROWS.length, errors: 0,
     input: sum("input"), output: sum("output"), cache_read: 0, cache_write: 0, cost: sum("cost"), unpriced: 0,
-    // 3665 tokens in 50.6 s after the first: 72 tok/s
+    // 3665 tokens over 67.4 s of turns: 54 tok/s
     timed: sum("timed"), ttft_ms: sum("ttft_ms"), decode_ms: sum("decode_ms"), decode_out: sum("decode_out"),
     by: { model: [FAST, SLOW] }, bucket: "hour",
     series: [
-      { label: "", time: hour(1), calls: 14, input: 1, output: 1890, ...{ timed: 14, ttft_ms: 8400, decode_ms: 25200, decode_out: 1890 }, by: { model: { "glm-fast": part({ ...FAST, calls: 14, output: 1890, timed: 14, ttft_ms: 8400, decode_ms: 25200, decode_out: 1890 }) } } },
-      // hour(0): the hour's own is 1910 tokens in 27.4 s (69.7 tok/s) while
-      // glm-fast answered 1755 in 23.4 s (75.0), so its mark leaves the column
-      // and gets a leader line; kimi-slow (10) stays under it. hour(1) is the
+      { label: "", time: hour(1), calls: 14, input: 1, output: 1890, ...{ timed: 14, ttft_ms: 8400, decode_ms: 33600, decode_out: 1890 }, by: { model: { "glm-fast": part({ ...FAST, calls: 14, output: 1890, timed: 14, ttft_ms: 8400, decode_ms: 33600, decode_out: 1890 }) } } },
+      // hour(0): the hour's own is 1775 tokens in 33.8 s (52.5 tok/s) while
+      // glm-fast answered 1755 in 31.2 s (56.25), so its mark leaves the column
+      // and gets a leader line; kimi-slow (7.7) stays under it. hour(1) is the
       // hour's own equal to the one model that answered in it, so no line
-      { label: "", time: hour(0), calls: 15, input: 1, output: 1910, ...{ timed: 14, ttft_ms: 8400, decode_ms: 27400, decode_out: 1910 }, by: { model: { "glm-fast": part({ ...FAST, calls: 14, output: 1890, timed: 13, ttft_ms: 7800, decode_ms: 23400, decode_out: 1755 }), "kimi-slow": part(SLOW) } } },
+      { label: "", time: hour(0), calls: 15, input: 1, output: 1910, ...{ timed: 14, ttft_ms: 8400, decode_ms: 33800, decode_out: 1775 }, by: { model: { "glm-fast": part({ ...FAST, calls: 14, output: 1890, timed: 13, ttft_ms: 7800, decode_ms: 31200, decode_out: 1755 }), "kimi-slow": part(SLOW) } } },
     ],
     agents: [{ id: "claude", name: "Claude Code", icon: "claudecode-color" }],
   };
@@ -96,8 +97,8 @@ function server(lang) {
 }
 
 const L = {
-  en: { speed: "Speed", kpi: "Output speed", fast: "75 tok/s", slow: "10 tok/s", all: "72 tok/s", first: "first token in 600 ms on average · 28 timed replies", sent: "Sent", hint: "Sent, Effort, the first token and the cache are in each row's details" },
-  zh: { speed: "速度", kpi: "输出速度", fast: "75 token/秒", slow: "10 token/秒", all: "72 token/秒", first: "首字平均 600 毫秒 · 28 次计时", sent: "发送模型", hint: "窗口较窄：发送模型、推理强度、首响和缓存在每行的详情里" },
+  en: { speed: "Speed", kpi: "Output speed", fast: "56 tok/s", slow: "8 tok/s", all: "54 tok/s", first: "first token in 600 ms on average · 28 timed replies", sent: "Sent", hint: "Sent, Effort, the first token and the cache are in each row's details" },
+  zh: { speed: "速度", kpi: "输出速度", fast: "56 token/秒", slow: "8 token/秒", all: "54 token/秒", first: "首字平均 600 毫秒 · 28 次计时", sent: "发送模型", hint: "窗口较窄：发送模型、推理强度、首响和缓存在每行的详情里" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -122,18 +123,20 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await p.locator("#ledWrap .led tbody tr").first().waitFor();
         await p.waitForTimeout(300);
 
-        // each row's speed, a column of its own; "—" for one not streamed
+        // each row's speed, a column of its own; "—" for one the vendor held
+        // back and let go in a burst at its end, whose content came in a small
+        // part of its turn
         const heads = await p.locator(".led thead th").evaluateAll((ths) => ths.filter((th) => th.offsetParent).map((th) => th.textContent));
         const at = heads.indexOf(w.speed);
         assert(at > 0, "a Speed column: " + heads.join(", "));
         const cell = (i) => p.locator(".led tbody tr.led-row").nth(i).locator("td").filter({ visible: true }).nth(at);
         assert.equal((await cell(0).textContent()).trim(), w.fast);
         assert.equal((await cell(1).textContent()).trim(), w.slow);
-        assert.equal((await cell(3).textContent()).trim(), "—");
+        assert.equal((await cell(3).textContent()).trim(), lang === "en" ? "45 tok/s" : "45 token/秒");
         assert.equal((await cell(4).textContent()).trim(), "—");
         assert.equal((await cell(5).textContent()).trim(), "—");
         assert.equal((await cell(6).textContent()).trim(), "—");
-        assert.equal((await cell(7).textContent()).trim(), lang === "en" ? "50 tok/s" : "50 token/秒");
+        assert.equal((await cell(7).textContent()).trim(), lang === "en" ? "35 tok/s" : "35 token/秒");
 
         // the table fits the window; what it leaves out is in the details,
         // the first token's column (#2522) among them at this width
@@ -167,9 +170,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // a model faster than the hour's own leaves its mark above the column:
         // a dotted leader line ties the two, so the mark reads as this hour's
         // rather than as a stray dash (huoranxuanyuan, #860). The hour(0)
-        // fixture is the one where that happens: 1755 tokens in 23.4 s is
-        // 75.0 tok/s for glm-fast against the hour's own 1910 in 27.4 s,
-        // 69.7, while kimi-slow answers 10
+        // fixture is the one where that happens: 1755 tokens in 31.2 s is
+        // 56.25 tok/s for glm-fast against the hour's own 1775 in 33.8 s,
+        // 52.5, while kimi-slow answers 7.7
         const stems = p.locator("#ledChart line.stem");
         assert.equal(await stems.count(), 1, "a leader line for the mark that leaves its column");
         const stem = await stems.first().evaluate((l) => ({ x1: l.x1.baseVal.value, x2: l.x2.baseVal.value, y1: l.y1.baseVal.value, y2: l.y2.baseVal.value }));
