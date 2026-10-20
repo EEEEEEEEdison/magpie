@@ -2133,6 +2133,15 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 			}
 		}
 	}
+	// then a price they set for the same model under a name another
+	// provider sells it by (a workbuddy2api/deepseek-v4.1-flash price is
+	// the price of deepseek-v4.1-flash too), so one price covers every
+	// provider serving the model; still the user's word, so still before
+	// any list price
+	if pr, ok := sameModelPrice(s.ModelPrices, model); ok {
+		catalog.OneHourFor(model, &pr)
+		return pr, true
+	}
 	if !known {
 		if pr, ok := MakerPrice(model); ok {
 			return pr, true
@@ -2151,6 +2160,33 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 		pr = pr.Times(p.PriceRate)
 	}
 	return pr, ok
+}
+
+// sameModelPrice is the price the user said this model costs from any
+// provider under another of the names it is sold by, for none: a "*/"
+// price names no provider, so the model it is for is the model, whatever
+// the provider it goes to calls it (BareModel). Only the "*/" keys count,
+// so a price set for one provider's model is not spent on another's; the
+// keys are read in order, so which one answers doesn't depend on the map's.
+func sameModelPrice(prices map[string]settings.ModelPrice, model string) (catalog.Price, bool) {
+	bare := BareModel(model)
+	if bare == "" {
+		return catalog.Price{}, false
+	}
+	var keys []string
+	for key := range prices {
+		rest, ok := strings.CutPrefix(key, settings.AnyProvider)
+		if ok && BareModel(rest) == bare {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if pr, bad := prices[key].Price(); bad == "" {
+			return pr, true
+		}
+	}
+	return catalog.Price{}, false
 }
 
 // EntryPriceIn is what a call to an entry of the catalog costs the user,

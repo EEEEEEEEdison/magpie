@@ -1,0 +1,67 @@
+package provider
+
+import (
+	"testing"
+
+	"github.com/yetone/magpie/internal/catalog"
+)
+
+// A model's own name is what is left of its id once the maker or path a
+// provider sells it under, its version, the size of its context and its
+// case are off: the names one model is sold by are one model.
+func TestBareModelIsTheModelItself(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"workbuddy2api/deepseek-v4.1-flash", "deepseek-v4.1-flash"},
+		{"9router/workbuddy/deepseek-v4.1-flash", "deepseek-v4.1-flash"},
+		{"deepseek-v4.1-flash", "deepseek-v4.1-flash"},
+		{"nvtokens/GPT-6.1-sol", "gpt-6.1-sol"},
+		{"muse-spark-1.3-contributor", "muse-spark-1.3-contributor"},
+		{"claude-opus-5-5-20260801", "claude-opus-5-5"},
+		{"us.anthropic.claude-sonnet-4-5-20250929", "claude-sonnet-4-5"},
+		{"grok-4.7@500k", "grok-4.7"},
+		{"claude-opus-5[1m]", "claude-opus-5"},
+		// v3 is another model than v2, so it is not a version tail
+		{"deepseek-v3", "deepseek-v3"},
+	} {
+		if got := BareModel(tc.in); got != tc.want {
+			t.Errorf("BareModel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A price the user set for a model from any provider is the price of that
+// model under every name the providers serving it sell it by, so one price
+// covers them all. A price set for one provider's model is not spent on
+// another's, and a provider's own price for it still wins.
+func TestAnyPriceCoversTheModelUnderItsOtherNames(t *testing.T) {
+	priceHome(t)
+	priceCatalog(t)
+	for _, p := range []Provider{
+		{ID: "cpa", Name: "CPA", Key: "k", Chat: "https://cpa.example/v1", Models: []string{"workbuddy2api/deepseek-v4.1-flash"}},
+		{ID: "opencode-go", Name: "OpenCode", Key: "k", Chat: "https://oc.example/v1", Models: []string{"deepseek-v4.1-flash"}},
+	} {
+		if err := Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SetModelPrice("*/workbuddy2api/deepseek-v4.1-flash", &catalog.Price{Input: 3, Output: 30, CacheRead: 0.3, CacheWrite: 3}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []struct{ provider, model string }{
+		{"cpa", "workbuddy2api/deepseek-v4.1-flash"},
+		{"opencode-go", "deepseek-v4.1-flash"},
+	} {
+		if pr, ok := EffectivePrice(q.provider, q.model); !ok || pr.Input != 3 || pr.Output != 30 {
+			t.Errorf("%s/%s: %+v %v; want the $3/$30 set for the model from any provider", q.provider, q.model, pr, ok)
+		}
+	}
+	if err := SetModelPrice("cpa/workbuddy2api/deepseek-v4.1-flash", &catalog.Price{Input: 7, Output: 70}); err != nil {
+		t.Fatal(err)
+	}
+	if pr, ok := EffectivePrice("opencode-go", "deepseek-v4.1-flash"); !ok || pr.Input != 3 {
+		t.Errorf("opencode-go: %+v %v; want the $3 set for the model from any provider, not cpa's $7", pr, ok)
+	}
+	if pr, ok := EffectivePrice("cpa", "workbuddy2api/deepseek-v4.1-flash"); !ok || pr.Input != 7 {
+		t.Errorf("cpa: %+v %v; want its own $7", pr, ok)
+	}
+}

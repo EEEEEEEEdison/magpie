@@ -156,7 +156,9 @@ func (f Filter) keepsRecord(r Record, codexIdentity bool, subagent, parentAgent 
 	if f.RouteID != 0 && r.RouteID != f.RouteID {
 		return false
 	}
-	if f.Model != "" && r.Model != f.Model {
+	// the pick is a model's own name from the "model" ranking (bareModel),
+	// or a "provider/model" from the "modelAt" one: either matches
+	if f.Model != "" && r.Model != f.Model && bareModel(r.Model) != f.Model {
 		return false
 	}
 	if f.Agent != "" && ReportedAs(r.Agent) != f.Agent {
@@ -356,7 +358,7 @@ func logRecord(c sessions.Call) Record {
 	}
 	if r.Requested != "" {
 		// sent as asked, less the size of its context Claude Code names it by
-		r.Model = contextTail.ReplaceAllString(r.Requested, "")
+		r.Model = provider.ContextTail.ReplaceAllString(r.Requested, "")
 	}
 	return r
 }
@@ -899,24 +901,28 @@ func (r Row) key(by string) string {
 		}
 		return r.Computer
 	}
-	return r.Model
+	// a model's own name, whatever maker or path prefix the provider sells
+	// it under, so one model's calls at every provider are one row
+	return bareModel(r.Model)
 }
 
 // keyer is Row.key for many rows, made once for each provider and model:
-// a "modelAt" is a string built of two, which a page of thousands of rows
-// would otherwise build again for each.
-type keyer map[[2]string]string
+// a "modelAt" is a string built of two, and a "model" strips a maker or
+// path prefix and a version, which a page of thousands of rows would
+// otherwise build again for each.
+type keyer map[[3]string]string
 
 func (m keyer) key(r Row, by string) string {
-	if by != "modelAt" {
-		return r.key(by)
+	switch by {
+	case "model", "modelAt":
+		k, ok := m[[3]string{by, r.Provider, r.Model}]
+		if !ok {
+			k = r.key(by)
+			m[[3]string{by, r.Provider, r.Model}] = k
+		}
+		return k
 	}
-	k, ok := m[[2]string{r.Provider, r.Model}]
-	if !ok {
-		k = r.key(by)
-		m[[2]string{r.Provider, r.Model}] = k
-	}
-	return k
+	return r.key(by)
 }
 
 // AllTokens is what went in and out and through the cache.
