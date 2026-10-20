@@ -347,8 +347,10 @@ let usageWithCache = false;
 try { usageWithCache = localStorage.getItem("magpie.usageWithCache") === "1"; } catch {}
 const cacheOf = (x) => (x.cache_read || 0) + (x.cache_write || 0);
 const usageTokens = (x) => tokensOf(x) + (usageWithCache ? cacheOf(x) : 0);
-// the tokens tile's label: a pop-up of the two ways to count
-function usageTokensPick() {
+// the tokens tile's label: a pop-up of the two ways to count. Two tabs draw
+// a tokens tile of their own, so the pick tells the one that drew it which
+// page to draw again.
+function usageTokensPick(redraw = renderUsage) {
   const b = el("button", "kpi-pick");
   b.type = "button";
   b.setAttribute("aria-haspopup", "menu");
@@ -363,7 +365,7 @@ function usageTokensPick() {
     ], usageWithCache ? "1" : "", (v) => {
       usageWithCache = v === "1";
       try { localStorage.setItem("magpie.usageWithCache", usageWithCache ? "1" : "0"); } catch {}
-      renderUsage();
+      redraw();
     }, "Token totals", "sess-menu");
   };
   return b;
@@ -2283,7 +2285,7 @@ function renderSessions() {
   const byFolder = (x) => !sessFolder || x.cwd === sessFolder;
   const spent = (list, key) => {
     const m = new Map();
-    for (const r of list) if (r[key]) m.set(r[key], (m.get(r[key]) || 0) + r.input + r.output);
+    for (const r of list) if (r[key]) m.set(r[key], (m.get(r[key]) || 0) + usageTokens(r));
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   };
   const models = spent(rows.filter((r) => byAgent(r) && byFolder(r)), "model").map(([v, n]) => ({ v, name: v, note: t("{n} tokens", { n: fmtN(n) }) }));
@@ -2381,7 +2383,11 @@ function renderSessions() {
     // how many sessions, and what the middle one and the one in ten spent
     tile(ov.count == null ? "—" : fmtN(ov.count), t("sessions"), ov.count ? t("median {m} · p90 {p}", { m: fmtN(ov.median), p: fmtN(ov.p90) }) : "",
       t("Tokens in and out per session: the middle session's, and what nine in ten stay under"), stale ? "stale" : "");
-    tile(fmtN(tot.input + tot.output), t("tokens"), t("{a} in · {b} out", { a: fmtN(tot.input), b: fmtN(tot.output) }));
+    // the range's tokens, counted the page's way: the cache's read and
+    // written tokens in them when the reader asked for that (#2378), the
+    // picker on the tile being the same one the Overview's carries
+    tile(fmtN(usageTokens(tot)), usageTokensPick(renderSessions), [t("{a} in · {b} out", { a: fmtN(tot.input), b: fmtN(tot.output) }),
+      ...(usageWithCache && cacheOf(tot) ? [t("{a} cache", { a: fmtN(cacheOf(tot)) })] : [])]);
     tile(c ? "≈" + c : "—", t("cost"), unpricedModels || t("at effective prices"), unpricedNote);
     // input leaves out what was read from the cache and written to it
     const prompt = tot.input + tot.cache_read + tot.cache_write;
@@ -2439,13 +2445,15 @@ function renderSessions() {
   $("#sessNote").textContent = parts.join(" · ");
 }
 
-// sessSums adds up usage rows by one of their fields, the most tokens first
+// sessSums adds up usage rows by one of their fields, the most tokens first:
+// the tokens are the page's (usageTokens), so a folder's or a model's bar
+// counts the cache when the reader asked the totals to (#2378)
 function sessSums(list, key) {
   const m = new Map();
   for (const r of list) {
     if (!r[key]) continue;
     const s = m.get(r[key]) || { v: r[key], n: 0, cost: 0, unpriced: 0 };
-    s.n += r.input + r.output;
+    s.n += usageTokens(r);
     s.cost += r.cost;
     if (!r.priced) s.unpriced++;
     m.set(r[key], s);
@@ -2499,8 +2507,9 @@ function sessSegs(opts, cur, choose) {
 
 // renderSessChart draws the range's activity: day by day as bars up to a
 // hundred days, as a calendar up to a year, week by week past that. It counts
-// tokens (output on top of input, as on the Overview), output tokens alone,
-// messages, sessions at work, cost or active time.
+// tokens (output on top of input, the cache's in the prompt's part when the
+// totals count it, as on the Overview), output tokens alone, messages,
+// sessions at work, cost or active time.
 function renderSessChart(chart, st, used, ov, acts) {
   const perDay = ov.days, msgs = ov.messages;
   const first = sessDate(st.from), last = sessDate(st.to);
@@ -2509,7 +2518,7 @@ function renderSessChart(chart, st, used, ov, acts) {
   if (chart.hidden) { chart.dataset.drawn = ""; return; }
   const days = [], at = new Map();
   for (let i = 0, d = new Date(first); i < n; i++, d.setDate(d.getDate() + 1)) {
-    const x = { day: new Date(d), input: 0, output: 0, cost: 0, unpriced: 0, sessions: perDay?.length === n ? perDay[i] : 0,
+    const x = { day: new Date(d), input: 0, output: 0, cache_read: 0, cache_write: 0, cost: 0, unpriced: 0, sessions: perDay?.length === n ? perDay[i] : 0,
       messages: msgs?.length === n ? msgs[i] : 0, active: 0 };
     days.push(x);
     at.set(sessISO(d), x);
@@ -2517,14 +2526,14 @@ function renderSessChart(chart, st, used, ov, acts) {
   for (const r of used) {
     const x = at.get(r.date);
     if (!x) continue;
-    x.input += r.input; x.output += r.output; x.cost += r.cost;
+    x.input += r.input; x.output += r.output; x.cache_read += r.cache_read || 0; x.cache_write += r.cache_write || 0; x.cost += r.cost;
     if (!r.priced) x.unpriced++;
   }
   for (const a of acts || []) { const x = at.get(a.date); if (x) x.active += a.seconds; }
   const off = { sessions: perDay?.length === n ? "" : t("Still counting"), messages: msgs?.length === n ? "" : t("Still counting"), active: acts ? "" : t("not kept by model") };
   const metric = off[sessMetric] ? "tokens" : sessMetric;
   const value = (x) => metric === "cost" ? x.cost : metric === "sessions" ? x.sessions : metric === "messages" ? x.messages :
-    metric === "active" ? x.active : metric === "output" ? x.output : x.input + x.output;
+    metric === "active" ? x.active : metric === "output" ? x.output : usageTokens(x);
   const show = (v) => metric === "cost" ? "≈" + fmtCost({ cost: v }) : metric === "active" ? fmtDur(v) : fmtN(v);
   // The tooltip says the one thing the cell is drawn by, the metric the
   // reader picked: a day's whole story on every hover left the number under
@@ -2581,16 +2590,18 @@ function renderSessChart(chart, st, used, ov, acts) {
   const step = shape === "week" ? 7 : 1;
   const buckets = [];
   for (let i = 0; i < n; i += step) {
-    const b = { day: days[i].day, input: 0, output: 0, cost: 0, unpriced: 0, sessions: 0, messages: 0, active: 0 };
-    for (const x of days.slice(i, i + step)) for (const k of ["input", "output", "cost", "unpriced", "sessions", "messages", "active"]) b[k] += x[k];
+    const b = { day: days[i].day, input: 0, output: 0, cache_read: 0, cache_write: 0, cost: 0, unpriced: 0, sessions: 0, messages: 0, active: 0 };
+    for (const x of days.slice(i, i + step)) for (const k of ["input", "output", "cache_read", "cache_write", "cost", "unpriced", "sessions", "messages", "active"]) b[k] += x[k];
     buckets.push(b);
   }
   const peak = Math.max(metric === "cost" ? 0.001 : 1, ...buckets.map(value));
   const fill = (bar, b) => {
     const [top, low] = bar.children;
     if (metric === "tokens") {
+      // counted with the cache, its tokens are in the prompt's part, as the
+      // Overview's chart has them
       top.style.height = (100 * b.output / peak).toFixed(1) + "%";
-      low.style.height = (100 * b.input / peak).toFixed(1) + "%";
+      low.style.height = (100 * (usageTokens(b) - b.output) / peak).toFixed(1) + "%";
     } else top.style.height = (100 * value(b) / peak).toFixed(1) + "%";
     const label = sessDay(b.day);
     bar.title = tip(b, step === 7 ? t("week of {label}", { label }) : label);

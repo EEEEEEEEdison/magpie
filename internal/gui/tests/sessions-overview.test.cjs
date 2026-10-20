@@ -101,17 +101,19 @@ function serve(lang, seen, ctl = {}) {
 const want = {
   en: { median: "median 120K · p90 880K", share: /\d+% in alpha/, busiest: /^Busiest at \S+ 09:00$/, detail: "Time", idLine: "Session ID", none: "Active time isn't kept by model.",
     gwName: "(prompt not recorded)", gwSub: /^Gateway session · pi · deepseek-v4-pro · /, gwTip: /Record gateway conversations/,
+    tokens: "tokens", withCache: "tokens with cache", head: "Token totals",
     // each metric's tooltip: what it says, and what it must not say
-    tokens: [/tokens$/, /≈|message|session|active|output/],
-    sessions: [/2 sessions/, /≈|message|active|output|token/],
-    messages: [/30 messages$/, /≈|session|active|output|token/],
-    output: [/output tokens$/, /≈|message|session|active/] },
+    tipTokens: [/tokens$/, /≈|message|session|active|output/],
+    tipSessions: [/2 sessions/, /≈|message|active|output|token/],
+    tipMessages: [/30 messages$/, /≈|session|active|output|token/],
+    tipOutput: [/output tokens$/, /≈|message|session|active/] },
   zh: { median: "中位 120K · p90 880K", share: /alpha 占 \d+%/, busiest: /^最忙：\S+ 09:00$/, detail: "时间", idLine: "会话 ID", none: "活跃时长不按模型统计。",
     gwName: "（未记录提示词）", gwSub: /^网关会话 · pi · deepseek-v4-pro · /, gwTip: /记录网关对话/,
-    tokens: [/token$/, /≈|条消息|个会话|活跃|输出/],
-    sessions: [/2 个会话/, /≈|条消息|活跃|输出|token/],
-    messages: [/30 条消息$/, /≈|个会话|活跃|输出|token/],
-    output: [/个输出 token$/, /≈|条消息|个会话|活跃/] },
+    tokens: "token", withCache: "token（含缓存）", head: "token 汇总",
+    tipTokens: [/token$/, /≈|条消息|个会话|活跃|输出/],
+    tipSessions: [/2 个会话/, /≈|条消息|活跃|输出|token/],
+    tipMessages: [/30 条消息$/, /≈|个会话|活跃|输出|token/],
+    tipOutput: [/个输出 token$/, /≈|条消息|个会话|活跃/] },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -146,6 +148,37 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.match(kpis[5], want[lang].share);
       });
 
+      await t.test("the tokens tile and the bars count the cache, the page's way", async () => {
+        const sum = (k, cwd) => allDays.reduce((n, d) => n + d.usage.reduce((m, u) => m + (cwd && u.cwd !== cwd ? 0 : u[k] || 0), 0), 0);
+        const fmt = (n) => page.evaluate((x) => fmtN(x), n);
+        const io = sum("input") + sum("output"), cache = sum("cache_read") + sum("cache_write");
+        const alpha = sum("input", "/work/alpha") + sum("output", "/work/alpha");
+        const alphaCache = sum("cache_read", "/work/alpha") + sum("cache_write", "/work/alpha");
+        const tile = page.locator("#sessStats .kpi").nth(1);
+        const bar = page.locator("#sessProjects .sess-bar").first();
+        // as the page has always counted them: in and out
+        assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
+        assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].tokens);
+        assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha));
+        // the picker the Overview's tile carries is on this one too, and
+        // tells the Sessions tab, not the Overview, to draw again
+        await tile.locator(".kpi-pick").click();
+        const menu = page.locator(".proto-menu:visible");
+        await menu.waitFor();
+        assert.equal((await menu.locator(".pm-head").textContent()).trim(), want[lang].head);
+        await menu.locator(".pm-item").nth(1).click();
+        await page.waitForTimeout(200);
+        assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io + cache));
+        assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].withCache);
+        assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha + alphaCache));
+        // and the reader can have it back
+        await tile.locator(".kpi-pick").click();
+        await page.locator(".proto-menu:visible .pm-item").nth(0).click();
+        await page.waitForTimeout(200);
+        assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
+        assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha));
+      });
+
       await t.test("the calendar, and the metric", async () => {
         assert.equal(await page.locator("#sessChart .sess-cal i").count(), 200);
         assert(await page.locator("#sessChart .sess-cal .mo").count() >= 6);
@@ -157,18 +190,18 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // number under the pointer to be found among four others
         const busy = () => page.locator("#sessChart .sess-cal i.l4").first().getAttribute("title");
         const only = async ([one, none], what) => { const s = await busy(); assert.match(s, one, what); assert.doesNotMatch(s, none, what + ": " + s); };
-        await only(want[lang].tokens, "the tokens tooltip");
+        await only(want[lang].tipTokens, "the tokens tooltip");
         await page.locator("#sessChart .segs .opt").nth(3).click();
         assert.equal(await page.evaluate(() => localStorage.getItem("magpie.sessMetric")), "sessions");
-        await only(want[lang].sessions, "the sessions tooltip");
+        await only(want[lang].tipSessions, "the sessions tooltip");
         // messages and output tokens, the heatmap's other ways
         assert.deepEqual((await page.locator("#sessChart .segs .opt").allInnerTexts()).slice(0, 3), lang === "en" ? ["Tokens", "Output tokens", "Messages"] : ["Token", "输出 Token", "消息"]);
         await page.locator("#sessChart .segs .opt").nth(2).click();
         assert.equal(await page.evaluate(() => localStorage.getItem("magpie.sessMetric")), "messages");
-        await only(want[lang].messages, "the messages tooltip");
+        await only(want[lang].tipMessages, "the messages tooltip");
         await page.locator("#sessChart .segs .opt").nth(1).click();
         assert.equal(await page.evaluate(() => localStorage.getItem("magpie.sessMetric")), "output");
-        await only(want[lang].output, "the output tooltip");
+        await only(want[lang].tipOutput, "the output tooltip");
         await page.locator("#sessChart .segs .opt").nth(0).click();
       });
 
