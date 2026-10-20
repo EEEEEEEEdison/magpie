@@ -393,7 +393,7 @@ func burstChunks(proto provider.Protocol, words, per, out int) [][]string {
 // takes to pass it on (138 ms on a busy macOS runner at 8db24fd6) reads
 // faster than any real stream (MaxDecodeSpeed), as a real burst does;
 // 1,000 read 7,246 tok/s. One that streamed steadily keeps its speed, over
-// nearly all of its time from its first word.
+// its whole turn, the wait for its first word in that time (usage.DecodeOf).
 func TestBurstTellsNoSpeed(t *testing.T) {
 	const gap = 600 * time.Millisecond
 	for _, c := range []struct {
@@ -445,8 +445,8 @@ func TestBurstTellsNoSpeed(t *testing.T) {
 					}
 					return
 				}
-				if n != 200 || w < span*7/10 || w > span {
-					t.Errorf("steady: %d tokens in %d ms (flow %d); want 200 over most of the %d ms from the first word", n, w, u.Flow, span)
+				if n != 200 || w != u.Millis {
+					t.Errorf("steady: %d tokens in %d ms (flow %d); want 200 over the whole turn of %d ms", n, w, u.Flow, u.Millis)
 				}
 			})
 		}

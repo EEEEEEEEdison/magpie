@@ -344,11 +344,13 @@ func TestUsageIngestConcurrent(t *testing.T) {
 }
 
 // #2637 (tsy0716): a reported call carries first_text_ms and flow_ms, and
-// its speed is told as a gateway call's is. The reporter's own record, a
-// grok-4.7 reply that reasoned, tells its answer's speed from its first
-// text; without first_text_ms it told none. A reply let go in a burst
-// tells none, whether its flow_ms says so (HeldShare) or its answer came
-// over 20 times faster than its reasoning before it (ThinkPace).
+// its speed is told as a gateway call's is. A reply's speed is its whole
+// turn's tokens over its whole turn, the wait for its first token in that
+// time (usage.DecodeOf): the reporter's own record, a grok-4.7 reply that
+// reasoned, tells all 307 of its tokens over its 5,035 ms, where
+// first_text_ms once took its reasoning off and began the window at its
+// first text. A reply let go in a burst still tells none, and its flow_ms
+// is what says so (HeldShare).
 func TestUsageIngestTellsSpeed(t *testing.T) {
 	do := ingestServer(t)
 	repro := `{
@@ -360,9 +362,10 @@ func TestUsageIngestTellsSpeed(t *testing.T) {
 	burst := `{"t":"` + at + `","agent":"my-app","provider":"xai","model":"grok-4.7","rid":"burst-1","in":1000,"out":601,"ms":5035,"ttft_ms":1000,"flow_ms":136,"status":200}`
 	// the same reply, streamed as it was written
 	even := strings.Replace(strings.Replace(burst, `"flow_ms":136`, `"flow_ms":4000`, 1), "burst-1", "even-1", 1)
-	// 22 reasoning tokens over 4.4 s, then 528 answer tokens in 335 ms
-	held := `{"t":"` + at + `","agent":"my-app","provider":"xai","model":"grok-4.7","rid":"held-1","in":1000,"out":550,"reasoning":22,"ms":5035,"ttft_ms":300,"first_text_ms":4700,"status":200}`
-	c, out, b := do("127.0.0.1:5000", "["+repro+","+burst+","+even+","+held+"]")
+	// its 22 reasoning tokens over 4.4 s, then its answer: one turn either
+	// way, so the reasoning and the wait before it are counted in it
+	reasoned := `{"t":"` + at + `","agent":"my-app","provider":"xai","model":"grok-4.7","rid":"reasoned-1","in":1000,"out":550,"reasoning":22,"ms":5035,"ttft_ms":300,"first_text_ms":4700,"status":200}`
+	c, out, b := do("127.0.0.1:5000", "["+repro+","+burst+","+even+","+reasoned+"]")
 	if c != 200 || out.Accepted != 4 {
 		t.Fatal(c, b)
 	}
@@ -382,18 +385,18 @@ func TestUsageIngestTellsSpeed(t *testing.T) {
 		speed[row.RequestID] = [2]int64{int64(n), w}
 	}
 	want := map[string][2]int64{
-		"repro-1": {307 - 129, 5035 - 4700}, // its answer, from its first text
-		"burst-1": {0, 0},                   // held: its content came in under a quarter of its window
-		"even-1":  {601, 5035 - 1000},
-		"held-1":  {0, 0}, // held: its answer came over 20 times its reasoning's pace
+		"repro-1":    {307, 5035}, // every token it wrote, over its whole turn
+		"burst-1":    {0, 0},      // held: its content came in under a quarter of its window
+		"even-1":     {601, 5035}, // streamed as it was written: the same whole turn
+		"reasoned-1": {550, 5035}, // its reasoning came first: still the whole turn
 	}
 	for rid, w := range want {
 		if speed[rid] != w {
 			t.Errorf("%s: told %d tokens over %d ms, want %d over %d", rid, speed[rid][0], speed[rid][1], w[0], w[1])
 		}
 	}
-	// the page's totals count the two that tell a speed
-	if got := l.Reported; got.DecodeN != 2 || got.DecodeOut != 178+601 || got.DecodeMs != 335+4035 {
+	// the page's totals count the three that tell a speed
+	if got := l.Reported; got.DecodeN != 3 || got.DecodeOut != 307+601+550 || got.DecodeMs != 5035*3 {
 		t.Errorf("reported totals: %d timed, %d tokens over %d ms", got.DecodeN, got.DecodeOut, got.DecodeMs)
 	}
 }
