@@ -2526,12 +2526,22 @@ function renderSessChart(chart, st, used, ov, acts) {
   const value = (x) => metric === "cost" ? x.cost : metric === "sessions" ? x.sessions : metric === "messages" ? x.messages :
     metric === "active" ? x.active : metric === "output" ? x.output : x.input + x.output;
   const show = (v) => metric === "cost" ? "≈" + fmtCost({ cost: v }) : metric === "active" ? fmtDur(v) : fmtN(v);
-  const tip = (x, when) => {
-    const parts = [x.input + x.output ? t("{n} tokens", { n: fmtN(x.input + x.output) }) : "", x.cost && fmtCost(x) ? "≈" + fmtCost(x) : "",
-      x.messages ? t(x.messages === 1 ? "{n} message" : "{n} messages", { n: fmtN(x.messages) }) : "",
-      x.sessions ? t(x.sessions === 1 ? "{n} session" : "{n} sessions", { n: x.sessions }) : "", x.active ? t("{d} active", { d: fmtDur(x.active) }) : ""].filter(Boolean);
-    return parts.length ? when + " · " + parts.join(" · ") : t("{when} · nothing", { when });
+  // The tooltip says the one thing the cell is drawn by, the metric the
+  // reader picked: a day's whole story on every hover left the number under
+  // the pointer to be picked out of four others, and read the same however
+  // the calendar was told to count (yetone: 不论选什么活跃度，悬停展示的
+  // 信息都是全部的).
+  const said = (x) => {
+    const v = value(x);
+    if (!v) return "";
+    if (metric === "cost") return "≈" + fmtCost({ cost: v });
+    if (metric === "active") return t("{d} active", { d: fmtDur(v) });
+    if (metric === "sessions") return t(v === 1 ? "{n} session" : "{n} sessions", { n: v });
+    if (metric === "messages") return t(v === 1 ? "{n} message" : "{n} messages", { n: fmtN(v) });
+    if (metric === "output") return t("{n} output tokens", { n: fmtN(v) });
+    return t("{n} tokens", { n: fmtN(v) });
   };
+  const tip = (x, when) => { const one = said(x); return one ? when + " · " + one : t("{when} · nothing", { when }); };
   const shape = n <= 100 ? "day" : n <= 371 ? "calendar" : "week";
   // the page reads the sessions again every few seconds, and while an agent
   // is at work today's numbers change each time: the same days by the same

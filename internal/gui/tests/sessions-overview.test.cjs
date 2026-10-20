@@ -100,9 +100,18 @@ function serve(lang, seen, ctl = {}) {
 
 const want = {
   en: { median: "median 120K · p90 880K", share: /\d+% in alpha/, busiest: /^Busiest at \S+ 09:00$/, detail: "Time", idLine: "Session ID", none: "Active time isn't kept by model.",
-    gwName: "(prompt not recorded)", gwSub: /^Gateway session · pi · deepseek-v4-pro · /, gwTip: /Record gateway conversations/ },
+    gwName: "(prompt not recorded)", gwSub: /^Gateway session · pi · deepseek-v4-pro · /, gwTip: /Record gateway conversations/,
+    // each metric's tooltip: what it says, and what it must not say
+    tokens: [/tokens$/, /≈|message|session|active|output/],
+    sessions: [/2 sessions/, /≈|message|active|output|token/],
+    messages: [/30 messages$/, /≈|session|active|output|token/],
+    output: [/output tokens$/, /≈|message|session|active/] },
   zh: { median: "中位 120K · p90 880K", share: /alpha 占 \d+%/, busiest: /^最忙：\S+ 09:00$/, detail: "时间", idLine: "会话 ID", none: "活跃时长不按模型统计。",
-    gwName: "（未记录提示词）", gwSub: /^网关会话 · pi · deepseek-v4-pro · /, gwTip: /记录网关对话/ },
+    gwName: "（未记录提示词）", gwSub: /^网关会话 · pi · deepseek-v4-pro · /, gwTip: /记录网关对话/,
+    tokens: [/token$/, /≈|条消息|个会话|活跃|输出/],
+    sessions: [/2 个会话/, /≈|条消息|活跃|输出|token/],
+    messages: [/30 条消息$/, /≈|个会话|活跃|输出|token/],
+    output: [/个输出 token$/, /≈|条消息|个会话|活跃/] },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -143,17 +152,23 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await page.locator("#sessChart .sess-cal-side .fact").count(), 3);
         const levels = await page.locator("#sessChart .sess-cal i").evaluateAll((es) => es.map((e) => e.className));
         assert(levels.includes("l0") && levels.includes("l4"), levels.join());
+        // the tooltip says the one thing the picked metric counts and
+        // nothing else: the day's whole story on every hover left the
+        // number under the pointer to be found among four others
+        const busy = () => page.locator("#sessChart .sess-cal i.l4").first().getAttribute("title");
+        const only = async ([one, none], what) => { const s = await busy(); assert.match(s, one, what); assert.doesNotMatch(s, none, what + ": " + s); };
+        await only(want[lang].tokens, "the tokens tooltip");
         await page.locator("#sessChart .segs .opt").nth(3).click();
         assert.equal(await page.evaluate(() => localStorage.getItem("magpie.sessMetric")), "sessions");
-        const title = await page.locator("#sessChart .sess-cal i.l4").first().getAttribute("title");
-        assert.match(title, lang === "en" ? /2 sessions/ : /2 个会话/);
+        await only(want[lang].sessions, "the sessions tooltip");
         // messages and output tokens, the heatmap's other ways
         assert.deepEqual((await page.locator("#sessChart .segs .opt").allInnerTexts()).slice(0, 3), lang === "en" ? ["Tokens", "Output tokens", "Messages"] : ["Token", "输出 Token", "消息"]);
         await page.locator("#sessChart .segs .opt").nth(2).click();
         assert.equal(await page.evaluate(() => localStorage.getItem("magpie.sessMetric")), "messages");
-        assert.match(await page.locator("#sessChart .sess-cal i.l4").first().getAttribute("title"), lang === "en" ? /30 messages/ : /30 条消息/);
+        await only(want[lang].messages, "the messages tooltip");
         await page.locator("#sessChart .segs .opt").nth(1).click();
         assert.equal(await page.evaluate(() => localStorage.getItem("magpie.sessMetric")), "output");
+        await only(want[lang].output, "the output tooltip");
         await page.locator("#sessChart .segs .opt").nth(0).click();
       });
 
