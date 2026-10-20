@@ -841,5 +841,25 @@ func (p Price) sane() bool {
 			return false
 		}
 	}
+	if p.TimeZone != "" && p.TimeZone != "Local" {
+		if _, err := time.LoadLocation(p.TimeZone); err != nil {
+			return false
+		}
+	}
+	for _, t := range p.TimeTiers {
+		from, fromOK := parseClock(t.From)
+		to, toOK := parseClock(t.To)
+		if !fromOK || !toOK || from == to || !ok(t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h) {
+			return false
+		}
+		if _, daysOK := clockDays(t.Days); !daysOK {
+			return false
+		}
+	}
+	for _, day := range p.OffDates {
+		if _, err := time.Parse("2006-01-02", day); err != nil {
+			return false
+		}
+	}
 	return true
 }

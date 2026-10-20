@@ -202,6 +202,9 @@ type state struct {
 	MsgModel string `json:"msg_model,omitempty"`
 	MsgUse   Tokens `json:"msg_use"`
 	MsgDay   string `json:"msg_day,omitempty"`
+	// MsgAt is the time of the message last counted, as MsgDay is its date:
+	// what takes back its hour when the same message is counted again
+	MsgAt time.Time `json:"msg_at,omitzero"`
 	// Codex: the model in use, and its running total (input with cache) last seen
 	Model string  `json:"model,omitempty"`
 	Total *Tokens `json:"total,omitempty"`
@@ -238,6 +241,12 @@ type day struct {
 	// Hours is Active again, by the local hour of the day it was put on
 	// (24 of them, or none)
 	Hours []int64 `json:"h,omitempty"`
+	// Hourly is Models again, by the hour each message was written in, as
+	// "2006-01-02T15" in UTC: what pricing a vendor that bills its hours
+	// differently needs (DeepSeek's peak hours), since a day's tokens alone
+	// can't say which hour they were spent in. Tokens a reader counts with
+	// no time of theirs are in Models and in no hour.
+	Hourly map[string]map[string]Tokens `json:"hm,omitempty"`
 	// Prompts are the messages typed in the session's own file, Replies
 	// the agent's messages back (Claude Code's, Codex's, Pi's and omp's)
 	Prompts int `json:"u,omitempty"`
@@ -326,6 +335,107 @@ func (s *state) unuse(date, model string, t Tokens) {
 	}
 }
 
+// useAt is use for a reader that knows the time of the message, not only its
+// date: its tokens count in that date's hour too, which is what a vendor
+// billing its hours differently is priced by.
+func (s *state) useAt(at time.Time, model string, t Tokens) {
+	s.use(dateOf(at), model, t)
+	s.hourly(at, model, t, 1)
+}
+
+// hoursOf is each model's tokens by the hour they were spent in, over every
+// day the state counts.
+func (s *state) hoursOf() map[string]map[string]Tokens {
+	hours := map[string]map[string]Tokens{}
+	for _, d := range s.Days {
+		for key, byModel := range d.Hourly {
+			for name, t := range byModel {
+				m := hours[name]
+				if m == nil {
+					m = map[string]Tokens{}
+					hours[name] = m
+				}
+				u := m[key]
+				u.add(t)
+				m[key] = u
+			}
+		}
+	}
+	return hours
+}
+
+// unuseAt takes back what useAt counted.
+func (s *state) unuseAt(at time.Time, model string, t Tokens) {
+	s.unuse(dateOf(at), model, t)
+	s.hourly(at, model, t, -1)
+}
+
+// hourly adds tokens in the hour of at, or takes them back when sign is
+// below 0, and forgets an hour once its last model is back to nothing.
+func (s *state) hourly(at time.Time, model string, t Tokens, sign int) {
+	if at.IsZero() || t.zero() {
+		return
+	}
+	d := s.day(dateOf(at))
+	if d.Hourly == nil {
+		if sign < 0 {
+			return
+		}
+		d.Hourly = map[string]map[string]Tokens{}
+	}
+	key := hourOf(at)
+	m := d.Hourly[key]
+	if m == nil {
+		if sign < 0 {
+			return
+		}
+		m = map[string]Tokens{}
+		d.Hourly[key] = m
+	}
+	u := m[model]
+	if sign < 0 {
+		u.sub(t)
+	} else {
+		u.add(t)
+	}
+	if u.zero() {
+		delete(m, model)
+		if len(m) == 0 {
+			delete(d.Hourly, key)
+		}
+		return
+	}
+	m[model] = u
+}
+
+// hourOf is the hour a time is in, as a day's Hourly keys it: in UTC, so
+// that no change of the clocks makes two hours the same key.
+func hourOf(t time.Time) string { return t.UTC().Format("2006-01-02T15") }
+
+// hourAt is that hour again, and a time no hour of: one that no window
+// holds, so that it is billed at the base price.
+func hourAt(key string) time.Time {
+	at, err := time.Parse("2006-01-02T15", key)
+	if err != nil {
+		return time.Time{}
+	}
+	return at
+}
+
+// hourCost is what tokens cost at a price, each hour's at the price of the
+// window that hour is in, and whatever no hour holds at the price itself.
+func hourCost(hours map[string]Tokens, total Tokens, p catalog.Price) float64 {
+	cost, rest := 0.0, total
+	for key, t := range hours {
+		cost += p.CostSplitAt(hourAt(key), t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h)
+		rest.sub(t)
+	}
+	if !rest.zero() {
+		cost += p.CostSplitAt(time.Time{}, rest.Input, rest.Output, rest.CacheRead, rest.CacheWrite, rest.CacheWrite1h)
+	}
+	return cost
+}
+
 // saw notes the time of a line and, in a session's own file, the work
 // since the line before.
 func (s *state) saw(t time.Time, main bool) {
@@ -369,6 +479,16 @@ func (s *state) clone() *state {
 		d := &day{Active: v.Active, Models: make(map[string]Tokens, len(v.Models)), Prompts: v.Prompts, Replies: v.Replies}
 		if v.Hours != nil {
 			d.Hours = append([]int64(nil), v.Hours...)
+		}
+		if v.Hourly != nil {
+			d.Hourly = make(map[string]map[string]Tokens, len(v.Hourly))
+			for key, byModel := range v.Hourly {
+				m := make(map[string]Tokens, len(byModel))
+				for name, t := range byModel {
+					m[name] = t
+				}
+				d.Hourly[key] = m
+			}
 		}
 		if v.Tools != nil {
 			d.Tools = maps.Clone(v.Tools)
@@ -656,7 +776,9 @@ func CachePath() string { return filepath.Join(filepath.Dir(catalog.CachePath())
 // 19: the names the user gave Claude Code's and WorkBuddy's (custom-title).
 // 20: Codex's source and direct parent thread identity.
 // 21: Codex subagent nicknames and parent spawn task names.
-const cacheVersion = 21
+// 22: each day's tokens by the hour they were spent in, which a vendor
+// billing its hours differently is priced by.
+const cacheVersion = 22
 
 type cacheFile struct {
 	Version int               `json:"version"`
@@ -1152,6 +1274,10 @@ func assemble(fs []file, price func(string) *catalog.Price) (Session, bool) {
 	s.ID = sessionID(fs)
 	var custom, named, first string
 	models := map[string]*Model{}
+	// hours is each model's tokens by the hour they were spent in, which a
+	// vendor billing its hours differently (DeepSeek's peak hours) is priced
+	// by
+	hours := map[string]map[string]Tokens{}
 	for _, f := range fs {
 		st := cache[f.path]
 		if st == nil {
@@ -1191,6 +1317,18 @@ func assemble(fs []file, price func(string) *catalog.Price) (Session, bool) {
 			}
 			m.add(t)
 		}
+		for name, byHour := range st.hoursOf() {
+			m := hours[name]
+			if m == nil {
+				m = map[string]Tokens{}
+				hours[name] = m
+			}
+			for key, t := range byHour {
+				u := m[key]
+				u.add(t)
+				m[key] = u
+			}
+		}
 	}
 	// the name the session goes by in its agent: one the user gave it, else
 	// Codex's thread name (session_index.jsonl), else the title the agent
@@ -1204,9 +1342,11 @@ func assemble(fs []file, price func(string) *catalog.Price) (Session, bool) {
 	s.Title = cmp.Or(custom, named, s.Title, first)
 	for _, m := range models {
 		if p := price(m.Model); p != nil {
-			// a sum of the session's calls of the model, at its base price:
-			// which call went over a long-context tier isn't known here
-			m.Cost, m.Priced = p.At(0).CostSplit(m.Input, m.Output, m.CacheRead, m.CacheWrite, m.CacheWrite1h), true
+			// a sum of the session's calls of the model, each hour at the
+			// price of the window it was made in (a vendor billing its hours
+			// differently), and what no hour holds at the base price: which
+			// call went over a long-context tier isn't known here
+			m.Cost, m.Priced = hourCost(hours[m.Model], m.Tokens, *p), true
 			s.Cost += m.Cost
 		} else {
 			s.Unpriced++

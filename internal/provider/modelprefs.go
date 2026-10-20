@@ -146,6 +146,13 @@ func SetModelPrice(id string, p *catalog.Price) error {
 	}
 	s := settings.Load()
 	m := settings.StatedPrice(*p)
+	// a CLI price names the parts of a day's price only, so a model's
+	// windows, its zone and its off days stay as the file has them
+	if p.TimeZone == "" && len(p.TimeTiers) == 0 && len(p.OffDates) == 0 {
+		if old, ok := s.ModelPrices[key]; ok {
+			m.TimeZone, m.TimeTiers, m.OffDates = old.TimeZone, old.TimeTiers, old.OffDates
+		}
+	}
 	if err := settings.CheckModelPrice(key, m); err != nil {
 		return err
 	}

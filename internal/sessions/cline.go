@@ -183,7 +183,7 @@ func parseCline(f file, old *state) *state {
 		}
 		s.saw(at, f.main)
 		if u := m.Metrics; m.Role == "assistant" && u != nil && m.ModelInfo != nil && m.ModelInfo.ID != "" {
-			s.use(dateOf(at), m.ModelInfo.ID, Tokens{Input: max(0, u.Input-u.CacheRead-u.CacheWrite), Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite})
+			s.useAt(at, m.ModelInfo.ID, Tokens{Input: max(0, u.Input-u.CacheRead-u.CacheWrite), Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite})
 		}
 	}
 	s.Cline = c

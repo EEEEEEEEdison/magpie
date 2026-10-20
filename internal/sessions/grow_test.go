@@ -207,8 +207,16 @@ func TestDroidReadsOnlyWhatWasAppended(t *testing.T) {
 	if d := g.old.Days["2026-09-27"]; d == nil || len(d.Models) != 0 {
 		t.Fatalf("the total is still on the day before: %+v", d)
 	}
+	// the total's hour moves with it, as its tokens do: the day before keeps
+	// none, and the new day is priced at the hour it was counted in
+	if d := g.old.Days["2026-09-27"]; d != nil && len(d.Hourly) != 0 {
+		t.Fatalf("the total's hour is still on the day before: %+v", d.Hourly)
+	}
 	if m := g.old.Days["2026-09-28"].Models["claude-opus-4-5"]; m.Input != 300 {
 		t.Fatalf("the total on its day: %+v", g.old.Days["2026-09-28"])
+	}
+	if h := g.old.Days["2026-09-28"].Hourly; len(h) == 0 {
+		t.Fatalf("the total's hour is not on its day: %+v", g.old.Days["2026-09-28"])
 	}
 	// only the settings changed: nothing of the transcript read
 	os.WriteFile(filepath.Join(dir, droidMain+".settings.json"), []byte(`{"model":"claude-opus-4-5","tokenUsage":{"inputTokens":400,"outputTokens":90}}`), 0o644)

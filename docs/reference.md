@@ -1115,6 +1115,35 @@ price; the ledger and each request are counted at the tier they reached. In
 the app, a model's price row has a quiet **Long-context price** row under it,
 shown with the list's tier greyed in, or behind a link where there is none.
 
+A **time-of-day price** is what a call costs in the window of the week it was
+made in, as DeepSeek bills off-peak hours at half its peak ones. It is set
+beside the numbers above, under the model's price in settings.json, and a part
+left out of a window is the base price's:
+
+```json
+"deepseek/deepseek-v4-flash": {
+  "input": 0.1493951, "output": 0.5975803, "cache_read": 0.0029879, "cache_write": 0,
+  "time_zone": "Asia/Shanghai",
+  "time_tiers": [
+    {"days": [1, 2, 3, 4, 5], "from": "09:00", "to": "12:00",
+     "input": 0.2987902, "output": 1.1951606, "cache_read": 0.0059758},
+    {"days": [1, 2, 3, 4, 5], "from": "14:00", "to": "18:00",
+     "input": 0.2987902, "output": 1.1951606, "cache_read": 0.0059758}
+  ],
+  "off_dates": ["2026-01-01"]
+}
+```
+
+`days` is 1 Monday to 7 Sunday, empty every day; `from` is in and `to` out, and
+a `to` before its `from` runs past midnight. `time_zone` is the IANA zone the
+windows and the off days are in, this computer's when absent. `off_dates` are
+days billed at the base price whatever the windows say, as a holiday whose
+weekday hours are on-peak. Each call is counted at the price of its own hour
+(`catalog.Price.AtTime`): the ledger, the Requests page, the session totals,
+Sessions' hours and the OTLP export all price a call at its time, so a day's
+total is the sum of its hours. `magpie model price` writes the base numbers
+only and leaves the windows as the file has them.
+
 The order a price is looked for in is: **the price for this model → the price
 for `<provider id>/*`, which covers every model of that provider → what the
 provider's own catalogue lists → what models.dev lists for the maker →

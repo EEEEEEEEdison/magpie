@@ -180,8 +180,9 @@ func (e *otelExporter) traces(items []otelItem) any {
 		generation := sp == nil || !sp.Root && (!sp.Session || sp.Type == "generation")
 		if generation && !r.IsRejected() {
 			if pr := priceOf(r); pr != nil {
-				// the call's tier, by its whole input, for both halves
-				f := pr.At(r.Input + r.CacheRead + r.CacheWrite)
+				// the call's tier, by its whole input, for both halves, at the
+				// price of the window the call was made in
+				f := pr.AtTime(r.Time).At(r.Input + r.CacheRead + r.CacheWrite)
 				cost, err := json.Marshal(map[string]float64{
 					"input":  f.CostSplit(r.Input, 0, r.CacheRead, r.CacheWrite, r.CacheWrite1h),
 					"output": f.Cost(0, r.Output, 0, 0),

@@ -359,7 +359,7 @@ func parseAlma(f file) *state {
 			if t.After(s.Last) {
 				s.Last = t
 			}
-			s.use(dateOf(t), almaModel(model, provider), Tokens{Input: max(0, in-cached-written), Output: out, CacheRead: cached, CacheWrite: written})
+			s.useAt(t, almaModel(model, provider), Tokens{Input: max(0, in-cached-written), Output: out, CacheRead: cached, CacheWrite: written})
 		}
 		rows.Close()
 		if rows.Err() != nil {

@@ -211,9 +211,9 @@ func ccCount(s *state, m *claudeContribution, at time.Time, model string, tokens
 	old, changed := m.accept(at, model, tokens)
 	if changed {
 		if old != nil {
-			s.unuse(dateOf(old.At), old.Model, old.Tokens)
+			s.unuseAt(old.At, old.Model, old.Tokens)
 		}
-		s.use(dateOf(at), model, tokens)
+		s.useAt(at, model, tokens)
 	}
 	if main && !m.Replied {
 		m.Replied, m.ReplyDay = true, dateOf(at)

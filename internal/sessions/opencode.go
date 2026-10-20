@@ -514,7 +514,7 @@ func parseOpenCode(f file) *state {
 					// the AI SDK's counts: input with the cache, output with the reasoning
 					u.Input, u.Output = max(0, t.Input-t.Cache.Read-t.Cache.Write), t.Output
 				}
-				s.use(dateOf(at), m.ModelID, u)
+				s.useAt(at, m.ModelID, u)
 			}
 		}
 	}

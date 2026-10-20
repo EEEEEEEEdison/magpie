@@ -150,6 +150,19 @@ type Price struct {
 	// output above 272K), lowest first. models.dev lists them as "tiers" of
 	// type "context".
 	Tiers []Tier `json:"tiers,omitempty"`
+	// TimeZone is the zone TimeTiers' days and hours and OffDates' days are
+	// in, an IANA name ("Asia/Shanghai"); "" is this computer's.
+	TimeZone string `json:"time_zone,omitempty"`
+	// TimeTiers are the prices a request is billed at, whole, when it is
+	// made in a window of the week (DeepSeek's peak hours, twice its
+	// others); the rest of the week is billed at the price above. The first
+	// window that holds it bills it. A request at a time no window holds,
+	// or on a day of OffDates, is billed at the price above.
+	TimeTiers []TimeTier `json:"time_tiers,omitempty"`
+	// OffDates are days billed at the price above whatever TimeTiers say,
+	// "2006-01-02" in TimeZone: a holiday on which a window holds but the
+	// vendor charges its other price.
+	OffDates []string `json:"off_dates,omitempty"`
 }
 
 // Tier is a price from a request's input size on: what the whole request
@@ -162,6 +175,81 @@ type Tier struct {
 	CacheRead    float64 `json:"cache_read"`
 	CacheWrite   float64 `json:"cache_write"`
 	CacheWrite1h float64 `json:"cache_write_1h,omitempty"`
+}
+
+// TimeTier is a price in effect during a window of the week: what a request
+// made then costs, whole, as a Tier's price is once its input is over a
+// size. A part left out is the base price's.
+type TimeTier struct {
+	// Days are the days of the week it holds on, 1 Monday to 7 Sunday;
+	// empty is every day.
+	Days []int `json:"days,omitempty"`
+	// From and To are the window's ends in the day, "HH:MM", From in and
+	// To out: "09:00" to "12:00" is 9:00 up to 12:00. A To before From
+	// wraps past midnight ("22:00" to "02:00").
+	From         string  `json:"from"`
+	To           string  `json:"to"`
+	Input        float64 `json:"input"`
+	Output       float64 `json:"output"`
+	CacheRead    float64 `json:"cache_read"`
+	CacheWrite   float64 `json:"cache_write"`
+	CacheWrite1h float64 `json:"cache_write_1h,omitempty"`
+}
+
+// same is whether two time tiers bill the same, in every part and window.
+func (t TimeTier) same(o TimeTier) bool {
+	return slices.Equal(t.Days, o.Days) && t.From == o.From && t.To == o.To &&
+		t.Input == o.Input && t.Output == o.Output && t.CacheRead == o.CacheRead &&
+		t.CacheWrite == o.CacheWrite && t.CacheWrite1h == o.CacheWrite1h
+}
+
+// Window is whether the tier's From and To are the ends of a window: "HH:MM"
+// each, and not the same time of day (a window that holds nothing).
+func (t TimeTier) Window() bool {
+	from, fromOK := parseClock(t.From)
+	to, toOK := parseClock(t.To)
+	return fromOK && toOK && from != to
+}
+
+// DaysOK is whether the tier's Days are days of the week, 1 Monday to 7
+// Sunday, or none at all (every day).
+func (t TimeTier) DaysOK() bool {
+	_, ok := clockDays(t.Days)
+	return ok
+}
+
+// Days are the days of the week a time tier holds on, 1 Monday to 7 Sunday,
+// sorted and without a repeat: ok is false for one that isn't a day, which
+// leaves the tier out.
+func clockDays(days []int) (out []int, ok bool) {
+	for _, d := range days {
+		if d < 1 || d > 7 {
+			return nil, false
+		}
+		if !slices.Contains(out, d) {
+			out = append(out, d)
+		}
+	}
+	slices.Sort(out)
+	return out, true
+}
+
+// parseClock is "HH:MM" as minutes from midnight, 9:00 as 540: ok is false
+// for a time that isn't one, which leaves the window out.
+func parseClock(s string) (int, bool) {
+	h, m, found := strings.Cut(strings.TrimSpace(s), ":")
+	if !found {
+		return 0, false
+	}
+	hh, err := strconv.Atoi(strings.TrimSpace(h))
+	if err != nil || hh < 0 || hh > 24 {
+		return 0, false
+	}
+	mm, err := strconv.Atoi(strings.TrimSpace(m))
+	if err != nil || mm < 0 || mm > 59 || hh == 24 && mm != 0 {
+		return 0, false
+	}
+	return hh*60 + mm, true
 }
 
 // UnmarshalJSON reads a price as magpie writes it, and as models.dev does,
@@ -184,6 +272,16 @@ func (p *Price) UnmarshalJSON(b []byte) error {
 				Size int    `json:"size"`
 			} `json:"tier"`
 		} `json:"tiers"`
+		TimeTiers []struct {
+			Days         []int    `json:"days"`
+			From         string   `json:"from"`
+			To           string   `json:"to"`
+			Input        *float64 `json:"input"`
+			Output       *float64 `json:"output"`
+			CacheRead    *float64 `json:"cache_read"`
+			CacheWrite   *float64 `json:"cache_write"`
+			CacheWrite1h *float64 `json:"cache_write_1h"`
+		} `json:"time_tiers"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
@@ -211,6 +309,18 @@ func (p *Price) UnmarshalJSON(b []byte) error {
 			CacheRead: or(t.CacheRead, p.CacheRead), CacheWrite: or(t.CacheWrite, p.CacheWrite), CacheWrite1h: or(t.CacheWrite1h, 0)})
 	}
 	slices.SortFunc(p.Tiers, func(a, b Tier) int { return a.Above - b.Above })
+	p.TimeTiers = nil
+	for _, t := range raw.TimeTiers {
+		days, daysOK := clockDays(t.Days)
+		from, fromOK := parseClock(t.From)
+		to, toOK := parseClock(t.To)
+		if !daysOK || !fromOK || !toOK || from == to {
+			continue
+		}
+		p.TimeTiers = append(p.TimeTiers, TimeTier{Days: days, From: t.From, To: t.To,
+			Input: or(t.Input, p.Input), Output: or(t.Output, p.Output), CacheRead: or(t.CacheRead, p.CacheRead),
+			CacheWrite: or(t.CacheWrite, p.CacheWrite), CacheWrite1h: or(t.CacheWrite1h, p.CacheWrite1h)})
+	}
 	return nil
 }
 
@@ -234,17 +344,31 @@ func OneHourFor(id string, p *Price) {
 
 // Times is the price at r times each of its parts.
 func (p Price) Times(r float64) Price {
-	out := Price{Input: p.Input * r, Output: p.Output * r, CacheRead: p.CacheRead * r, CacheWrite: p.CacheWrite * r, CacheWrite1h: p.CacheWrite1h * r}
+	out := Price{Input: p.Input * r, Output: p.Output * r, CacheRead: p.CacheRead * r, CacheWrite: p.CacheWrite * r, CacheWrite1h: p.CacheWrite1h * r,
+		TimeZone: p.TimeZone, OffDates: slices.Clone(p.OffDates)}
 	for _, t := range p.Tiers {
 		out.Tiers = append(out.Tiers, Tier{Above: t.Above, Input: t.Input * r, Output: t.Output * r, CacheRead: t.CacheRead * r, CacheWrite: t.CacheWrite * r, CacheWrite1h: t.CacheWrite1h * r})
+	}
+	for _, t := range p.TimeTiers {
+		out.TimeTiers = append(out.TimeTiers, TimeTier{Days: slices.Clone(t.Days), From: t.From, To: t.To,
+			Input: t.Input * r, Output: t.Output * r, CacheRead: t.CacheRead * r, CacheWrite: t.CacheWrite * r, CacheWrite1h: t.CacheWrite1h * r})
 	}
 	return out
 }
 
-// Same is whether two prices are the same in every part and tier.
+// Same is whether two prices are the same in every part, tier and window.
 func (p Price) Same(q Price) bool {
-	return p.Input == q.Input && p.Output == q.Output && p.CacheRead == q.CacheRead && p.CacheWrite == q.CacheWrite &&
-		p.CacheWrite1h == q.CacheWrite1h && slices.Equal(p.Tiers, q.Tiers)
+	if p.Input != q.Input || p.Output != q.Output || p.CacheRead != q.CacheRead || p.CacheWrite != q.CacheWrite ||
+		p.CacheWrite1h != q.CacheWrite1h || !slices.Equal(p.Tiers, q.Tiers) || p.TimeZone != q.TimeZone ||
+		!slices.Equal(p.OffDates, q.OffDates) || len(p.TimeTiers) != len(q.TimeTiers) {
+		return false
+	}
+	for i := range p.TimeTiers {
+		if !p.TimeTiers[i].same(q.TimeTiers[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // At is the flat price a request whose input, cached and cache-written
@@ -259,6 +383,93 @@ func (p Price) At(prompt int) Price {
 		}
 	}
 	return flat
+}
+
+// AtTime is p with the parts of the window t is in, its day of the week and
+// hour of the day in TimeZone, and its size tiers still cutting the request:
+// what one made then is billed at. A day in OffDates, or a time no TimeTier
+// holds, keeps the base price, and so does a zero t, or a price of no
+// windows, which is p itself.
+func (p Price) AtTime(t time.Time) Price {
+	tier, ok := p.timeTierAt(t)
+	if !ok {
+		return p
+	}
+	out := p
+	out.Input, out.Output, out.CacheRead, out.CacheWrite, out.CacheWrite1h =
+		tier.Input, tier.Output, tier.CacheRead, tier.CacheWrite, tier.CacheWrite1h
+	return out
+}
+
+// InTimeTier is whether t is billed at a window's price rather than the base
+// price's, which is what a caller that can't tell the time of a request has
+// to know: its cost is only the base one's.
+func (p Price) InTimeTier(t time.Time) bool {
+	_, ok := p.timeTierAt(t)
+	return ok
+}
+
+// timeTierAt is the time tier t is in, if one holds it.
+func (p Price) timeTierAt(t time.Time) (TimeTier, bool) {
+	if t.IsZero() || len(p.TimeTiers) == 0 {
+		return TimeTier{}, false
+	}
+	at := t.In(p.zone())
+	if day := at.Format("2006-01-02"); slices.Contains(p.OffDates, day) {
+		return TimeTier{}, false
+	}
+	weekday := int(at.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	minutes := at.Hour()*60 + at.Minute()
+	for _, tier := range p.TimeTiers {
+		if len(tier.Days) > 0 && !slices.Contains(tier.Days, weekday) {
+			continue
+		}
+		from, fromOK := parseClock(tier.From)
+		to, toOK := parseClock(tier.To)
+		if !fromOK || !toOK {
+			continue
+		}
+		// from < to is a window in the day; from > to wraps past midnight
+		if from < to && minutes >= from && minutes < to || from > to && (minutes >= from || minutes < to) {
+			return tier, true
+		}
+	}
+	return TimeTier{}, false
+}
+
+// zones holds the locations prices name, read once: a ledger pages through
+// thousands of requests, each of which asks for one.
+var zones sync.Map // zone name to *time.Location
+
+// zone is where p's windows and off days are: TimeZone, this computer's when
+// it names none or names one that can't be read (catalog/price_test.go).
+func (p Price) zone() *time.Location {
+	if p.TimeZone == "" || p.TimeZone == "Local" {
+		return time.Local
+	}
+	if known, ok := zones.Load(p.TimeZone); ok {
+		return known.(*time.Location)
+	}
+	where := time.Local
+	if loaded, err := time.LoadLocation(p.TimeZone); err == nil {
+		where = loaded
+	}
+	zones.Store(p.TimeZone, where)
+	return where
+}
+
+// CostSplitAt is CostSplit for a call made at t: billed at the price of the
+// window it falls in, its size tier still cutting it.
+func (p Price) CostSplitAt(t time.Time, input, output, cacheRead, cacheWrite, cacheWrite1h int) float64 {
+	return p.AtTime(t).CostSplit(input, output, cacheRead, cacheWrite, cacheWrite1h)
+}
+
+// CostAt is Cost for a call made at t, every cache write a 5-minute one.
+func (p Price) CostAt(t time.Time, input, output, cacheRead, cacheWrite int) float64 {
+	return p.CostSplitAt(t, input, output, cacheRead, cacheWrite, 0)
 }
 
 // OneHour is what a 1-hour cache write costs at this flat price: the price

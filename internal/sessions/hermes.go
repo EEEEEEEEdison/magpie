@@ -607,7 +607,7 @@ func parseHermes(f file) *state {
 		if at.IsZero() {
 			at = s.Last
 		}
-		s.use(dateOf(at), u.model, u.Tokens)
+		s.useAt(at, u.model, u.Tokens)
 		if at.After(s.Last) {
 			s.Last = at
 		}

@@ -177,11 +177,16 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 		hours []int64
 	}
 	use := map[uk]Tokens{}
+	// hours is use by the hour each message was written in: the tokens a
+	// vendor billing its hours differently (DeepSeek's peak hours) is priced
+	// by
+	hours := map[uk]map[string]Tokens{}
 	act := map[ak]*act0{}
 	dates := map[string]bool{}
 	// each session's share: its files' models and dates in range
 	type share struct {
 		models           map[string]Tokens
+		hours            map[string]map[string]Tokens
 		active           int64
 		dates            map[string]bool
 		prompts, replies int
@@ -213,6 +218,22 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 				use[k] = u
 				dates[date] = true
 			}
+			for key, byModel := range d.Hourly {
+				for model, t := range byModel {
+					if t.zero() {
+						continue
+					}
+					k := uk{date, f.agent, cwd, model}
+					h := hours[k]
+					if h == nil {
+						h = map[string]Tokens{}
+						hours[k] = h
+					}
+					u := h[key]
+					u.add(t)
+					h[key] = u
+				}
+			}
 			if d.Active > 0 {
 				k := ak{date, f.agent, cwd}
 				a := act[k]
@@ -233,7 +254,7 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 			}
 			sh := shares[f.key]
 			if sh == nil {
-				sh = &share{models: map[string]Tokens{}, dates: map[string]bool{}, tools: map[string]int{},
+				sh = &share{models: map[string]Tokens{}, hours: map[string]map[string]Tokens{}, dates: map[string]bool{}, tools: map[string]int{},
 					skills: map[string]int{}, skillLast: map[string]string{}, perDate: map[string]*summaryDay{}}
 				shares[f.key] = sh
 			}
@@ -249,6 +270,21 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 					sh.models[model] = u
 					sh.dates[date] = true
 					pd.output += t.Output
+				}
+			}
+			for key, byModel := range d.Hourly {
+				for model, t := range byModel {
+					if t.zero() {
+						continue
+					}
+					h := sh.hours[model]
+					if h == nil {
+						h = map[string]Tokens{}
+						sh.hours[model] = h
+					}
+					u := h[key]
+					u.add(t)
+					h[key] = u
 				}
 			}
 			sh.prompts += d.Prompts
@@ -283,7 +319,7 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 	for k, t := range use {
 		u := Usage{Agent: k.agent, Cwd: k.cwd, Model: k.model, Tokens: t}
 		if p := price(k.model); p != nil {
-			u.Cost, u.Priced = p.At(0).CostSplit(t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h), true
+			u.Cost, u.Priced = hourCost(hours[k], t, *p), true
 		}
 		byDate[k.date].Usage = append(byDate[k.date].Usage, u)
 	}
@@ -359,7 +395,7 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 			sum.Tokens.add(t)
 			sum.Models = append(sum.Models, model)
 			if p := price(model); p != nil {
-				sum.Cost += p.At(0).CostSplit(t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h)
+				sum.Cost += hourCost(sh.hours[model], t, *p)
 			} else {
 				sum.Priced = false
 			}

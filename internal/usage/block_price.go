@@ -149,7 +149,9 @@ func (b *blockPricer) block(packed *rowChunk) *rowChunk {
 		p.Cost = 0
 		if got.price != nil && p.Tokens[0]+p.Tokens[1] > 0 {
 			p.Flags |= 1
-			p.Cost = got.price.CostSplit(int(p.Tokens[0]), int(p.Tokens[1]), int(p.Tokens[2]), int(p.Tokens[3]), int(p.Tokens[5]))
+			// at the price of the window the call was made in, a vendor
+			// billing its hours differently (DeepSeek's peak hours)
+			p.Cost = got.price.CostSplitAt(p.Time, int(p.Tokens[0]), int(p.Tokens[1]), int(p.Tokens[2]), int(p.Tokens[3]), int(p.Tokens[5]))
 		}
 	}
 	return &c

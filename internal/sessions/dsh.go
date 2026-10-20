@@ -349,7 +349,7 @@ func dshCount(s *state, h *dshHead, b []byte, main bool) {
 	at := ms(e.Time)
 	s.saw(at, main)
 	if u := e.Data.Usage; e.Type == "assistant/message" && u != nil && e.Data.Message.Source.Model != "" {
-		s.use(dateOf(at), e.Data.Message.Source.Model, Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite})
+		s.useAt(at, e.Data.Message.Source.Model, Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite})
 	}
 }
 

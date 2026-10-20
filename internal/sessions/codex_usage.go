@@ -657,8 +657,8 @@ func codexApply(s *state, change *codexChange) {
 		return
 	}
 	if old := change.Old; old != nil {
-		s.unuse(dateOf(old.At), old.Model, spent(old.Usage.raw()))
+		s.unuseAt(old.At, old.Model, spent(old.Usage.raw()))
 	}
 	v := change.Value
-	s.use(dateOf(v.At), v.Model, spent(v.Usage.raw()))
+	s.useAt(v.At, v.Model, spent(v.Usage.raw()))
 }

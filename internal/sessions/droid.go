@@ -174,10 +174,13 @@ type droidCarry struct {
 	Started bool   `json:"started,omitempty"`
 	Upto    string `json:"upto,omitempty"`
 	Copied  bool   `json:"copied,omitempty"`
-	// the settings' total, as counted
-	Date   string `json:"date,omitempty"`
-	Model  string `json:"model,omitempty"`
-	Tokens Tokens `json:"tokens,omitzero"`
+	// the settings' total, as counted, with the time it was counted at, so
+	// a read on takes back its hour too (a total from before this has none,
+	// and takes back no hour)
+	Date   string    `json:"date,omitempty"`
+	At     time.Time `json:"at,omitzero"`
+	Model  string    `json:"model,omitempty"`
+	Tokens Tokens    `json:"tokens,omitzero"`
 }
 
 // parseDroid reads a session's transcript, with its settings. Droid only
@@ -191,7 +194,7 @@ func parseDroid(f file, old *state) *state {
 	var off int64
 	if old != nil && old.Droid != nil && old.Droid.Tail.holds(f.path) {
 		s, c, off = old.clone(), *old.Droid, old.Droid.Tail.Off
-		s.dropUse(c.Date, c.Model, c.Tokens)
+		s.dropUse(c.At, c.Date, c.Model, c.Tokens)
 	} else {
 		s = &state{}
 	}
@@ -204,7 +207,7 @@ func parseDroid(f file, old *state) *state {
 	if err == nil {
 		c.Tail = markTail(f.path, end, 0, end)
 	}
-	c.Date, c.Model, c.Tokens = "", "", Tokens{}
+	c.Date, c.At, c.Model, c.Tokens = "", time.Time{}, "", Tokens{}
 	if f.manifest != "" {
 		var st droidSettings
 		if b, err := os.ReadFile(f.manifest); err == nil && json.Unmarshal(b, &st) == nil && st.Usage != nil {
@@ -213,9 +216,9 @@ func parseDroid(f file, old *state) *state {
 				when = time.Unix(0, s.Mod)
 			}
 			u := st.Usage
-			c.Date, c.Model = dateOf(when), droidModelName(st.Model)
+			c.Date, c.At, c.Model = dateOf(when), when, droidModelName(st.Model)
 			c.Tokens = Tokens{Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}
-			s.use(c.Date, c.Model, c.Tokens)
+			s.useAt(when, c.Model, c.Tokens)
 		}
 	}
 	s.Droid = &c

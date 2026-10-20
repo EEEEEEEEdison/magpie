@@ -199,11 +199,11 @@ func piParse(s *state, b []byte, main bool) {
 		}
 	case "usage", "model_usage":
 		if !copied && l.Model != "" {
-			s.use(dateOf(at), l.Model, l.Usage.tokens())
+			s.useAt(at, l.Model, l.Usage.tokens())
 		}
 	case "compaction", "branch_summary":
 		if !copied && s.Model != "" {
-			s.use(dateOf(at), s.Model, l.Usage.tokens())
+			s.useAt(at, s.Model, l.Usage.tokens())
 		}
 	case "message":
 		m := l.Message
@@ -244,7 +244,7 @@ func piParse(s *state, b []byte, main bool) {
 				}
 			}
 			if m.Model != "" {
-				s.use(dateOf(at), m.Model, m.Usage.tokens())
+				s.useAt(at, m.Model, m.Usage.tokens())
 			}
 		default:
 			if !copied && m.NestedCalls != nil {
@@ -254,7 +254,7 @@ func piParse(s *state, b []byte, main bool) {
 			}
 			// a tool that did model work of its own, on the model in use
 			if !copied && m.Usage != nil && s.Model != "" {
-				s.use(dateOf(at), s.Model, m.Usage.tokens())
+				s.useAt(at, s.Model, m.Usage.tokens())
 			}
 		}
 	}

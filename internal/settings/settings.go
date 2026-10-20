@@ -705,7 +705,49 @@ type ModelPrice struct {
 	// Tiers are the prices of a request whose input is over a size, each
 	// whole: "magpie model price … --tier 272k …" (PAMI on Discord).
 	Tiers []catalog.Tier `json:"tiers,omitempty"`
+	// TimeZone is the zone the days and hours of TimeTiers and the days of
+	// OffDates are in, an IANA name such as Asia/Shanghai: where a vendor
+	// bills a request at the price of the hour it was made in (DeepSeek's
+	// peak hours). Absent is this computer's.
+	TimeZone *string `json:"time_zone,omitempty"`
+	// TimeTiers are the prices of a request made in a window of the week,
+	// each whole, that window's taken over the parts above; the rest of the
+	// week is billed at the parts above (DeepSeek: off-peak and on-peak).
+	TimeTiers []TimeTier `json:"time_tiers,omitempty"`
+	// OffDates are the days billed at the parts above whatever TimeTiers
+	// say, "2006-01-02" in TimeZone: a holiday the vendor bills off-peak
+	// though its weekday's hours are on-peak.
+	OffDates []string `json:"off_dates,omitempty"`
 }
+
+// TimeTier is a time tier as the user states one: a part left out is the
+// base price's, the way a Tier's is, so a peak price names the parts it
+// raises.
+type TimeTier struct {
+	// Days are the days of the week it holds on, 1 Monday to 7 Sunday;
+	// empty is every day.
+	Days []int `json:"days,omitempty"`
+	// From and To are the window's ends in the day, "HH:MM", From in and
+	// To out: "09:00" to "12:00" is 9:00 up to 12:00. A To before From
+	// wraps past midnight.
+	From         string   `json:"from"`
+	To           string   `json:"to"`
+	Input        *float64 `json:"input,omitempty"`
+	Output       *float64 `json:"output,omitempty"`
+	CacheRead    *float64 `json:"cache_read,omitempty"`
+	CacheWrite   *float64 `json:"cache_write,omitempty"`
+	CacheWrite1h *float64 `json:"cache_write_1h,omitempty"`
+}
+
+// Window is whether its From and To are the ends of a window, as a
+// catalog.TimeTier's are (“HH:MM” each, and not the same time).
+func (t TimeTier) Window() bool {
+	return catalog.TimeTier{From: t.From, To: t.To}.Window()
+}
+
+// DaysOK is whether its Days are days of the week, 1 Monday to 7 Sunday, or
+// none at all (every day).
+func (t TimeTier) DaysOK() bool { return catalog.TimeTier{Days: t.Days}.DaysOK() }
 
 // priceParts are the parts of a price, in the order they are asked for and
 // in the order ModelPrice holds them, named as a message about one says
@@ -734,23 +776,77 @@ func (m ModelPrice) Price() (catalog.Price, string) {
 			return catalog.Price{}, fmt.Sprintf("tier %d", i+1)
 		}
 	}
+	for i, t := range m.TimeTiers {
+		ok := t.Window() && t.DaysOK()
+		for _, v := range []*float64{t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h} {
+			if v != nil && bad(*v) {
+				ok = false
+			}
+		}
+		if !ok {
+			return catalog.Price{}, fmt.Sprintf("time tier %d", i+1)
+		}
+	}
+	for _, day := range m.OffDates {
+		if _, err := time.Parse("2006-01-02", day); err != nil {
+			return catalog.Price{}, "off date"
+		}
+	}
+	if m.TimeZone != nil && *m.TimeZone != "" && *m.TimeZone != "Local" {
+		if _, err := time.LoadLocation(*m.TimeZone); err != nil {
+			return catalog.Price{}, "time zone"
+		}
+	}
 	p := catalog.Price{
 		Input: *m.Input, Output: *m.Output,
 		CacheRead: *m.CacheRead, CacheWrite: *m.CacheWrite,
-		Tiers: slices.Clone(m.Tiers),
+		Tiers: slices.Clone(m.Tiers), OffDates: slices.Clone(m.OffDates),
 	}
 	if m.CacheWrite1h != nil {
 		p.CacheWrite1h = *m.CacheWrite1h
 	}
+	if m.TimeZone != nil {
+		p.TimeZone = *m.TimeZone
+	}
+	for _, t := range m.TimeTiers {
+		p.TimeTiers = append(p.TimeTiers, catalog.TimeTier{Days: slices.Clone(t.Days), From: t.From, To: t.To,
+			Input: or(t.Input, p.Input), Output: or(t.Output, p.Output), CacheRead: or(t.CacheRead, p.CacheRead),
+			CacheWrite: or(t.CacheWrite, p.CacheWrite), CacheWrite1h: or(t.CacheWrite1h, p.CacheWrite1h)})
+	}
 	return p, ""
 }
 
+// or is v when it is given and base when it isn't.
+func or(v *float64, base float64) float64 {
+	if v != nil {
+		return *v
+	}
+	return base
+}
+
 // StatedPrice is a price as ModelPrices keeps it: every part given, the
-// 1-hour cache write only when it is.
+// 1-hour cache write only when it is, and a time tier's only where it differs
+// from the price it overrides.
 func StatedPrice(p catalog.Price) ModelPrice {
-	m := ModelPrice{Input: new(p.Input), Output: new(p.Output), CacheRead: new(p.CacheRead), CacheWrite: new(p.CacheWrite), Tiers: slices.Clone(p.Tiers)}
+	m := ModelPrice{Input: new(p.Input), Output: new(p.Output), CacheRead: new(p.CacheRead), CacheWrite: new(p.CacheWrite), Tiers: slices.Clone(p.Tiers), OffDates: slices.Clone(p.OffDates)}
 	if p.CacheWrite1h > 0 {
 		m.CacheWrite1h = new(p.CacheWrite1h)
+	}
+	if p.TimeZone != "" {
+		m.TimeZone = new(p.TimeZone)
+	}
+	// a part a window bills as the base price does is left out, as JSON
+	// read leaves it to that price
+	apart := func(v, base float64) *float64 {
+		if v == base {
+			return nil
+		}
+		return new(v)
+	}
+	for _, t := range p.TimeTiers {
+		m.TimeTiers = append(m.TimeTiers, TimeTier{Days: slices.Clone(t.Days), From: t.From, To: t.To,
+			Input: apart(t.Input, p.Input), Output: apart(t.Output, p.Output), CacheRead: apart(t.CacheRead, p.CacheRead),
+			CacheWrite: apart(t.CacheWrite, p.CacheWrite), CacheWrite1h: apart(t.CacheWrite1h, p.CacheWrite1h)})
 	}
 	return m
 }
@@ -774,6 +870,12 @@ func CheckModelPrice(key string, m ModelPrice) error {
 	}
 	if _, bad := m.Price(); strings.HasPrefix(bad, "tier ") {
 		return fmt.Errorf("the price of %q has a %s that is not over a size above 0 and above the tier before it, with every part finite and not negative", key, bad)
+	} else if strings.HasPrefix(bad, "time tier ") {
+		return fmt.Errorf("the price of %q has a %s whose \"from\" and \"to\" are not \"HH:MM\" times that differ, or whose days are not 1 (Monday) to 7 (Sunday), or whose parts are not finite and not negative", key, bad)
+	} else if bad == "off date" {
+		return fmt.Errorf("the price of %q has an off_dates day that is not YYYY-MM-DD such as 2026-10-01", key)
+	} else if bad == "time zone" {
+		return fmt.Errorf("the price of %q has a time_zone that is not a zone this computer knows, such as Asia/Shanghai", key)
 	} else if bad != "" {
 		return fmt.Errorf("the price of %q needs %s %s price that is present, finite and not negative", key, anArticle(bad), bad)
 	}

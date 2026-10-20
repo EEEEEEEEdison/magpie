@@ -1,6 +1,9 @@
 package sessions
 
-import "os"
+import (
+	"os"
+	"time"
+)
 
 // tail is where a reader of a file another agent appends to left off: the
 // offset after the last whole line it handled, and enough of the file as it
@@ -49,14 +52,16 @@ func (t *tail) holds(path string) bool {
 	return sameHead(headOf(path), t.Head, t.HeadSize) && prefixHash(path, t.Size) == t.Hash
 }
 
-// dropUse takes back what use counted, leaving no model or day it made
-// with nothing in it: a summary read on from where it was is then the one
-// a whole read makes.
-func (s *state) dropUse(date, model string, t Tokens) {
+// dropUse takes back what useAt counted at at, leaving no model or day it
+// made with nothing in it: a summary read on from where it was is then the
+// one a whole read makes. at is the time useAt was given, so its hour is
+// taken back too; a zero one takes back no hour, as useAt counted none.
+func (s *state) dropUse(at time.Time, date, model string, t Tokens) {
 	if t.zero() {
 		return
 	}
 	s.unuse(date, model, t)
+	s.hourly(at, model, t, -1)
 	if m, ok := s.Models[model]; ok && m.zero() {
 		delete(s.Models, model)
 		if len(s.Models) == 0 {
@@ -70,7 +75,7 @@ func (s *state) dropUse(date, model string, t Tokens) {
 				d.Models = nil
 			}
 		}
-		if len(d.Models) == 0 && d.Active == 0 && d.Hours == nil && d.Prompts == 0 && d.Replies == 0 && d.Tools == nil && d.Skills == nil {
+		if len(d.Models) == 0 && d.Active == 0 && d.Hours == nil && len(d.Hourly) == 0 && d.Prompts == 0 && d.Replies == 0 && d.Tools == nil && d.Skills == nil {
 			delete(s.Days, date)
 		}
 	}

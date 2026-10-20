@@ -260,13 +260,12 @@ func grokUpdate(s *state, c *grokCarry, b []byte, main bool) {
 		if u.Usage == nil {
 			return
 		}
-		date := dateOf(at)
 		if len(u.Usage.ModelUsage) == 0 {
-			s.use(date, cmp.Or(c.Model, "grok"), u.Usage.tokens())
+			s.useAt(at, cmp.Or(c.Model, "grok"), u.Usage.tokens())
 			return
 		}
 		for name, mu := range u.Usage.ModelUsage {
-			s.use(date, name, mu.tokens())
+			s.useAt(at, name, mu.tokens())
 		}
 	}
 }

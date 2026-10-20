@@ -298,7 +298,7 @@ func kimiCount(s *state, b []byte, since time.Time, main bool) {
 	case "usage.record":
 		if u := r.Usage; u != nil && u.InputOther >= 0 && u.Output >= 0 && u.InputCacheRead >= 0 && u.InputCacheCreation >= 0 {
 			model := cmp.Or(strings.TrimPrefix(r.Model, kimiGateway), "kimi")
-			s.use(dateOf(at), model, Tokens{Input: u.InputOther, Output: u.Output, CacheRead: u.InputCacheRead, CacheWrite: u.InputCacheCreation})
+			s.useAt(at, model, Tokens{Input: u.InputOther, Output: u.Output, CacheRead: u.InputCacheRead, CacheWrite: u.InputCacheCreation})
 		}
 	case "turn.prompt":
 		if !main || r.Origin.Kind != "user" {
