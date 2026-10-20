@@ -2281,14 +2281,17 @@ function renderSessions() {
 
   // the model and folder filters offer what the range has, under the other filters
   const byAgent = (x) => sessAgent === "all" || x.agent === sessAgent;
-  const byModel = (x) => !sessModel || x.model === sessModel;
+  // a model's own name, not the one it was sold under: the picker and the
+  // model bars offer that, so one model's calls at every provider are one
+  // row and one filter (yetone: 模型肯定是合并过的，不能出现前缀的)
+  const byModel = (x) => !sessModel || x.bare === sessModel;
   const byFolder = (x) => !sessFolder || x.cwd === sessFolder;
   const spent = (list, key) => {
     const m = new Map();
     for (const r of list) if (r[key]) m.set(r[key], (m.get(r[key]) || 0) + usageTokens(r));
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   };
-  const models = spent(rows.filter((r) => byAgent(r) && byFolder(r)), "model").map(([v, n]) => ({ v, name: v, note: t("{n} tokens", { n: fmtN(n) }) }));
+  const models = spent(rows.filter((r) => byAgent(r) && byFolder(r)), "bare").map(([v, n]) => ({ v, name: v, note: t("{n} tokens", { n: fmtN(n) }) }));
   const folders = spent(rows.filter((r) => byAgent(r) && byModel(r)), "cwd").map(([v, n]) => ({ v, name: baseName(v), note: v + " · " + t("{n} tokens", { n: fmtN(n) }) }));
   sessPick($("#sessModel"), "All models", sessModel, models, "Model", (v) => { sessModel = v; renderSessions(); });
   sessPick($("#sessFolder"), "All folders", sessFolder, folders, "Folder", (v) => { sessFolder = v; renderSessions(); });
@@ -2303,7 +2306,7 @@ function renderSessions() {
   const from = !inRange && sessDays() && st.from ? sessDate(st.from) : null;
   const q = sessQuery.trim().toLowerCase();
   const list = all.filter((s) => byAgent(s) && (!sessFolder || s.cwd === sessFolder) &&
-    (!sessModel || s.models.some((m) => m.model === sessModel)) &&
+    (!sessModel || s.models.some((m) => m.bare === sessModel)) &&
     (inRange ? inRange.has(s.agent + ":" + s.id) : !from || new Date(s.last) >= from) &&
     (!q || [s.title, s.cwd, s.id, s.name, ...s.models.map((m) => m.model)].some((x) => (x || "").toLowerCase().includes(q))));
 
@@ -2313,7 +2316,7 @@ function renderSessions() {
   const unpriced = new Set();
   for (const r of used) {
     for (const k of ["input", "output", "cache_read", "cache_write", "cost"]) tot[k] += r[k];
-    if (!r.priced) unpriced.add(r.model);
+    if (!r.priced) unpriced.add(r.bare);
   }
   tot.unpriced = unpriced.size;
   // active time isn't told apart by model
@@ -2344,7 +2347,7 @@ function renderSessions() {
     const filtered = sessAgent !== "all" || sessModel || sessFolder || q;
     stats.append(el("div", "none", !all.length && !rows.length ? t("No sessions yet. Claude Code's, Codex's, OpenCode's and Pi's sessions on this computer show up here, with what each cost and the command that resumes it.") : filtered ? t("No session matches.") : t("Nothing in this range.")));
     if (from && all.some((s) => byAgent(s) && byFolder(s) &&
-      (!sessModel || s.models.some((m) => m.model === sessModel)) &&
+      (!sessModel || s.models.some((m) => m.bare === sessModel)) &&
       (!q || [s.title, s.cwd, s.id, s.name, ...s.models.map((m) => m.model)].some((x) => (x || "").toLowerCase().includes(q))))) {
       stats.firstChild.textContent = t("No sessions in this range");
       const history = el("button", "text sess-show-history", t("All sessions"));
@@ -2404,7 +2407,7 @@ function renderSessions() {
     grid.hidden = false;
     // the folders and models to pick from, as the pickers offer them
     sessBars($("#sessProjects"), "Projects", sessSums(rows.filter((r) => byAgent(r) && byModel(r)), "cwd"), sessFolder, (v) => { sessFolder = v; renderSessions(); }, baseName);
-    sessBars($("#sessModels"), "Models", sessSums(rows.filter((r) => byAgent(r) && byFolder(r)), "model"), sessModel, (v) => { sessModel = v; renderSessions(); }, (v) => v);
+    sessBars($("#sessModels"), "Models", sessSums(rows.filter((r) => byAgent(r) && byFolder(r)), "bare"), sessModel, (v) => { sessModel = v; renderSessions(); }, (v) => v);
     renderSessHours($("#sessHours"), actsIn);
     renderSessTop();
     renderSessShape();

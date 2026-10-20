@@ -518,6 +518,16 @@ aggregation and meaning.
 These are fields on the existing API responses; no endpoint or statistics
 structure is added.
 
+A session's `models` entries and a day's `usage` rows also carry `bare`: the
+model's own name (`provider.BareModel`) beside the one the call was made under.
+The Usage page's Sessions tab offers that name in its model picker and its
+model bars and filters by it, so one model sold as `workbuddy2api/glm-5.3-flash`
+by one provider and as `glm-5.3-flash` by another is one row and one filter
+there. `Stats.Overview`'s `model` matches a session's models either way round,
+as `usage.Filter.keepsRecord` matches a request. What is aggregated does not
+change: each name a call was made under keeps its own row, and a session's own
+line still names the models it called.
+
 In the Usage request APIs, `session_role` classifies the canonical Codex actor as
 `main`, `subagent` or `unknown`. For a confirmed identity, `session` is its root
 thread ID; when the actor is known but its root is not, `session` is empty. An

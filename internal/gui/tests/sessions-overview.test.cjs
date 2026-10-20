@@ -25,8 +25,8 @@ const allDays = Array.from({ length: 200 }, (_, i) => back(199 - i)).map((d, i) 
   return {
     date,
     usage: [
-      { agent: "claude", cwd: "/work/alpha", model: "claude-opus-4", input: 30000 * n, output: 4000 * n, cache_read: 90000 * n, cache_write: 1000, cost: 1.5 * n, priced: true },
-      { agent: "codex", cwd: "/work/beta", model: "gpt-5", input: 10000 * n, output: 2000 * n, cache_read: 0, cache_write: 0, cost: 0.4 * n, priced: true },
+      { agent: "claude", cwd: "/work/alpha", model: "claude-opus-4", bare: "claude-opus-4", input: 30000 * n, output: 4000 * n, cache_read: 90000 * n, cache_write: 1000, cost: 1.5 * n, priced: true },
+      { agent: "codex", cwd: "/work/beta", model: "gpt-5", bare: "gpt-5", input: 10000 * n, output: 2000 * n, cache_read: 0, cache_write: 0, cost: 0.4 * n, priced: true },
     ],
     active: [
       { agent: "claude", cwd: "/work/alpha", seconds: hours.reduce((a, b) => a + b, 0), hours },
@@ -40,7 +40,7 @@ const top = (i, cwd) => ({
 });
 const full = (key) => ({
   key, agent: "claude", name: "Claude Code", icon: "claude", id: key.split(":")[1], cwd: "/work/alpha", title: "Top session", start: back(1).toISOString(), last: to.toISOString(),
-  input: 900000, output: 5000, cache_read: 0, cache_write: 0, cost: 12, priced: true, models: [{ model: "claude-opus-4", input: 900000, output: 5000, cost: 12, priced: true }],
+  input: 900000, output: 5000, cache_read: 0, cache_write: 0, cost: 12, priced: true, models: [{ model: "claude-opus-4", bare: "claude-opus-4", input: 900000, output: 5000, cost: 12, priced: true }],
   resume: "claude --resume " + key.split(":")[1],
 });
 const sessions = [0, 1, 2].map((i) => ({ ...full("claude:s" + i), title: "Latest " + i }));

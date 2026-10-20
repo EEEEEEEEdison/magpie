@@ -24,7 +24,7 @@ const WIDE = { width: 1600, height: 800 };
 
 const sess = (agent, name, k) => ({
   agent, id: `${agent}-${k}`, cwd: `/work/${agent}/part${k}`, title: `task ${k} on ${name}`, start: at(20), last: at(10),
-  models: [{ model: k ? "m-two" : "m-one", input: 1000, output: 100, cache_read: 500, cache_write: 0, cost: 0.5, priced: true }],
+  models: [{ model: k ? "m-two" : "m-one", bare: k ? "m-two" : "m-one", input: 1000, output: 100, cache_read: 500, cache_write: 0, cost: 0.5, priced: true }],
   input: 1000, output: 100, cache_read: 500, cache_write: 0, cost: 0.5, unpriced: 0,
   resume: "x", path: `~/.${agent}/x/${k}.jsonl`, name, icon: "generic",
 });
@@ -42,7 +42,7 @@ function serve(lang, names) {
     if (url.pathname === "/api/sessions") return json({ sessions, terminal: true, dirs: [] });
     if (url.pathname === "/api/sessions/stats") {
       const today = new Date().toISOString().slice(0, 10);
-      const usage = sessions.map((s) => ({ agent: s.agent, cwd: s.cwd, model: s.models[0].model, input: s.input, output: s.output, cache_read: s.cache_read, cache_write: 0, cost: s.cost, priced: true }));
+      const usage = sessions.map((s) => ({ agent: s.agent, cwd: s.cwd, model: s.models[0].model, bare: s.models[0].bare, input: s.input, output: s.output, cache_read: s.cache_read, cache_write: 0, cost: s.cost, priced: true }));
       return json({ from: today, to: today, days: [{ date: today, usage, active: [] }], agents });
     }
     if (url.pathname === "/api/sessions/overview") return json({ count: sessions.length, median: 5000, p90: 15000, days: [1], top: { tokens: [], cost: [], active: [] } });

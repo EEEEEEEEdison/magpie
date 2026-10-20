@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // Stats is what every session spent, day by day: all of them, not only the
@@ -82,6 +84,11 @@ type Usage struct {
 	Agent string `json:"agent"`
 	Cwd   string `json:"cwd"`
 	Model string `json:"model"`
+	// Bare is the model's own name (provider.BareModel), which the Usage
+	// page's model filter and its model bars are by: a model sold under
+	// several names, its seller's in front of it, is one row there
+	// (yetone: 模型肯定是合并过的，不能出现前缀的).
+	Bare string `json:"bare"`
 	Tokens
 	Cost   float64 `json:"cost"` // USD at the effective price, when priced
 	Priced bool    `json:"priced"`
@@ -317,7 +324,7 @@ func statsIn(days int, now time.Time, native map[string]bool) Stats {
 	}
 	price := pricer()
 	for k, t := range use {
-		u := Usage{Agent: k.agent, Cwd: k.cwd, Model: k.model, Tokens: t}
+		u := Usage{Agent: k.agent, Cwd: k.cwd, Model: k.model, Bare: provider.BareModel(k.model), Tokens: t}
 		if p := price(k.model); p != nil {
 			u.Cost, u.Priced = hourCost(hours[k], t, *p), true
 		}
@@ -516,6 +523,14 @@ type Skill struct {
 	Projects []ToolStat     `json:"projects"` // the folders that called it most, by name
 }
 
+// modelCalled says a session used the model under one of its names: the
+// page's model filter offers a model's own name (bare), a session records
+// what it was sold as (workbuddy2api/glm-5.3-flash), and the two spell one
+// model — usage.Filter.keepsRecord matches a request the same way.
+func modelCalled(names []string, model string) bool {
+	return slices.Contains(names, model) || slices.ContainsFunc(names, func(n string) bool { return provider.BareModel(n) == model })
+}
+
 // Overview sums up st's sessions of agent, with model and in folder cwd
 // ("" for any), with the n that spent the most each way.
 func (st Stats) Overview(agent, model, cwd string, n int) Overview {
@@ -529,7 +544,7 @@ func (st Stats) Overview(agent, model, cwd string, n int) Overview {
 	var in []Summary
 	var spent []int
 	for _, s := range st.Sessions {
-		if agent != "" && s.Agent != agent || cwd != "" && s.Cwd != cwd || model != "" && !slices.Contains(s.Models, model) {
+		if agent != "" && s.Agent != agent || cwd != "" && s.Cwd != cwd || model != "" && !modelCalled(s.Models, model) {
 			continue
 		}
 		in = append(in, s)

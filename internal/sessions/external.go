@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sort"
 	"time"
+
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // ExternalModel and ExternalSession are read-only session projections from a
@@ -45,7 +47,7 @@ func MergeExternal(native []Session, external []ExternalSession) []Session {
 		}
 		s := Session{ReadOnly: true, Gateway: true, Transcript: true, Agent: e.Agent, ID: e.ID, Title: cmp.Or(names[e.Agent+"|"+e.ID], e.Title, e.ID), Start: e.Start, Last: e.Last, Models: []Model{}, Unpriced: e.Unpriced}
 		for _, m := range e.Models {
-			s.Models = append(s.Models, Model{Model: m.Model, Tokens: m.Tokens, Cost: m.Cost, Priced: m.Priced})
+			s.Models = append(s.Models, Model{Model: m.Model, Bare: provider.BareModel(m.Model), Tokens: m.Tokens, Cost: m.Cost, Priced: m.Priced})
 			s.Tokens.add(m.Tokens)
 		}
 		s.Cost = e.Cost
@@ -143,7 +145,7 @@ func MergeExternalStats(st Stats, days []ExternalDayUsage, external []ExternalSe
 			}
 		}
 		if !found {
-			d.Usage = append(d.Usage, Usage{Agent: u.Agent, Cwd: u.Cwd, Model: u.Model, Tokens: u.Tokens, Cost: u.Cost, Priced: u.Priced})
+			d.Usage = append(d.Usage, Usage{Agent: u.Agent, Cwd: u.Cwd, Model: u.Model, Bare: provider.BareModel(u.Model), Tokens: u.Tokens, Cost: u.Cost, Priced: u.Priced})
 		}
 	}
 	names := desktopExternalTitles(external)

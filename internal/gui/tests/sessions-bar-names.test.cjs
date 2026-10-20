@@ -22,8 +22,8 @@ const LONG_SKILL = "document-skills:frontend-design";
 const allDays = Array.from({ length: 20 }, (_, i) => back(19 - i)).map((d, i) => ({
   date: iso(d),
   usage: [
-    { agent: "claude", cwd: LONG_DIR, model: LONG_MODEL, input: 30000 * (i + 1), output: 4000, cache_read: 0, cache_write: 0, cost: 1.5, priced: true },
-    { agent: "codex", cwd: "/work/b", model: "gpt-5", input: 10000, output: 2000, cache_read: 0, cache_write: 0, cost: 0.4, priced: true },
+    { agent: "claude", cwd: LONG_DIR, model: LONG_MODEL, bare: LONG_MODEL, input: 30000 * (i + 1), output: 4000, cache_read: 0, cache_write: 0, cost: 1.5, priced: true },
+    { agent: "codex", cwd: "/work/b", model: "gpt-5", bare: "gpt-5", input: 10000, output: 2000, cache_read: 0, cache_write: 0, cost: 0.4, priced: true },
   ],
   active: [],
 }));

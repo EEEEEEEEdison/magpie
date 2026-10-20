@@ -89,6 +89,10 @@ func (t Tokens) zero() bool { return t == Tokens{} }
 // Model is one model's share of a session.
 type Model struct {
 	Model string `json:"model"`
+	// Bare is the model's own name (provider.BareModel), which the Usage
+	// page's model filter and its model bars are by: a model sold under
+	// several names is one row there.
+	Bare string `json:"bare"`
 	Tokens
 	Cost   float64 `json:"cost"`
 	Priced bool    `json:"priced"`
@@ -1312,7 +1316,7 @@ func assemble(fs []file, price func(string) *catalog.Price) (Session, bool) {
 		for name, t := range st.Models {
 			m := models[name]
 			if m == nil {
-				m = &Model{Model: name}
+				m = &Model{Model: name, Bare: provider.BareModel(name)}
 				models[name] = m
 			}
 			m.add(t)
