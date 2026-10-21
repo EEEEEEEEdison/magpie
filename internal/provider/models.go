@@ -2191,6 +2191,22 @@ func sameModelPrice(prices map[string]settings.ModelPrice, model string) (catalo
 	return catalog.Price{}, false
 }
 
+// AnyModelPriceIn reads an explicit all-provider price under this model's
+// own name or another spelling of it, never a provider-specific tariff.
+func AnyModelPriceIn(s settings.Settings, model string) (catalog.Price, bool) {
+	if p, ok := s.ModelPrices[AnyPriceKey(model)]; ok {
+		if pr, bad := p.Price(); bad == "" {
+			catalog.OneHourFor(model, &pr)
+			return pr, true
+		}
+	}
+	pr, ok := sameModelPrice(s.ModelPrices, model)
+	if ok {
+		catalog.OneHourFor(model, &pr)
+	}
+	return pr, ok
+}
+
 // EntryPriceIn is what a call to an entry of the catalog costs the user,
 // as the usage pages count it: its model's EffectivePriceIn, or a group's
 // when every member costs the same, none in a fast mode, since which of

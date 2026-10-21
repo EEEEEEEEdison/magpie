@@ -350,6 +350,20 @@ from a file did before. A name Pi made up for a relay magpie doesn't know
 is not one of the user's providers, so nothing is claimed for it.
 Verification: `TestASessionFilesProviderPricesItsCalls`.
 
+Native session summaries without a provider use only an explicit
+all-provider model price or their maker's API list, not another relay's
+tariff (`sessions.priceOf`). All-provider aliases use the same
+`provider.AnyModelPriceIn` lookup as the model's other spellings, preserving
+zero prices and the full context/time-tier schedule. Known maker catalogs
+include Xiaomi's MiMo, Meta's Muse Spark Contributor and Stepfun's Step
+models. Gemini ids with a reasoning-level suffix fall back to the family's
+Google price only after a directly priced variant was tried. Unrecognized
+aliases, free-looking ids and undisclosed models stay unpriced without an
+explicit user price; a `*/<model>` price of zero makes the model free. No
+bill or supplier is inferred from a bare name. Verification:
+`TestSessionPricesUseKnownModelNamesAndWildcardAliases` and
+`TestExplicitZeroPricesMakeModelsFree`.
+
 A read of every call decodes each file's cached shard, and over a long
 history that is tens of thousands of files (#2278: 68k shards, 415 MB).
 Asks for the same calls while one read is under way wait for it and get

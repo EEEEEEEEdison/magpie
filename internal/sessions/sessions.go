@@ -1671,18 +1671,38 @@ func priceOf(s settings.Settings, model string) (catalog.Price, bool) {
 	// what the user said the model costs from any provider (*/model): the
 	// only price a bare id, or one models.dev has stopped listing, can take
 	// from them
-	if p, ok := s.ModelPrices[provider.AnyPriceKey(bare)]; ok {
-		if pr, bad := p.Price(); bad == "" {
-			catalog.OneHourFor(bare, &pr)
+	if pr, ok := provider.AnyModelPriceIn(s, bare); ok {
+		return pr, true
+	}
+	// These ids are the same model under another name. Read a price stated
+	// for the canonical name too, before falling back to its maker's list.
+	canonical := bare
+	switch bare {
+	case "hy4-preview-f":
+		canonical = "hy4-preview"
+	case "k3":
+		canonical = "kimi-k3"
+	}
+	if canonical != bare {
+		if pr, ok := provider.AnyModelPriceIn(s, canonical); ok {
 			return pr, true
 		}
 	}
 	// a Grok id at an effort (grok-4.7-high) at its model's price, and a
 	// version spelled with a dot (Copilot's claude-opus-4.6) at its maker's
 	// claude-opus-4-6
-	for _, id := range []string{bare, dated.ReplaceAllString(bare, ""), provider.PricedName(bare)} {
+	for _, id := range []string{bare, canonical, dated.ReplaceAllString(canonical, ""), provider.PricedName(canonical)} {
 		if pr, ok := catalog.PricedBy(makers(id), id); ok {
 			return pr, true
+		}
+	}
+	// Antigravity encodes Gemini's reasoning level in its model id.
+	// Prefer an explicitly priced variant before its family's API price.
+	if strings.HasPrefix(bare, "gemini-") {
+		if family := provider.EffortFamily(bare); family != bare {
+			if pr, ok := catalog.PricedBy(makers(family), family); ok {
+				return pr, true
+			}
 		}
 	}
 	// Grok Build's fast variant (grok-4.7-build-fast), which only the Grok
@@ -1702,7 +1722,8 @@ func makers(id string) []string {
 		{"claude", "anthropic"}, {"gpt", "openai"}, {"o1", "openai"}, {"o3", "openai"}, {"o4", "openai"},
 		{"codex", "openai"}, {"gemini", "google"}, {"deepseek", "deepseek"}, {"grok", "xai"},
 		{"glm", "zai"}, {"kimi", "moonshotai"}, {"qwen", "alibaba"}, {"mistral", "mistral"},
-		{"devstral", "mistral"}, {"minimax", "minimax"},
+		{"devstral", "mistral"}, {"hy4", "tencent-tokenhub"}, {"minimax", "minimax"},
+		{"mimo-", "xiaomi"}, {"muse-spark", "meta"}, {"step-", "stepfun-ai"},
 	} {
 		if strings.HasPrefix(id, m.prefix) {
 			return []string{m.provider}
