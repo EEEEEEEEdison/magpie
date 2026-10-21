@@ -36,7 +36,7 @@ const allDays = Array.from({ length: 200 }, (_, i) => back(199 - i)).map((d, i) 
 });
 const top = (i, cwd) => ({
   key: "claude:s" + i, agent: "claude", id: "s" + i, cwd, title: "Top session " + i, last: to.toISOString(),
-  input: 900000 - i * 1000, output: 5000, cache_read: 0, cache_write: 0, cost: 12 - i, priced: true, active: 3600 - i * 60, models: ["claude-opus-4"], days: [iso(to)],
+  input: 900000 - i * 1000, output: 5000, cache_read: i === 1 ? 2000000 : 0, cache_write: i === 1 ? 100000 : 0, cache_write_1h: i === 1 ? 100000 : 0, cost: 12 - i, priced: true, active: 3600 - i * 60, models: ["claude-opus-4"], days: [iso(to)],
 });
 const full = (key) => ({
   key, agent: "claude", name: "Claude Code", icon: "claude", id: key.split(":")[1], cwd: "/work/alpha", title: "Top session", start: back(1).toISOString(), last: to.toISOString(),
@@ -67,7 +67,7 @@ function serve(lang, seen, ctl = {}) {
       return json({ count: cwd ? 7 : 42, median: 120000, p90: 880000, days: days.map((d) => d.usage.length ? 2 : 0),
         // the last by cost: a Pi subagent's session seen only through the
         // gateway, with no folder and no prompt recorded (#2285)
-        top: { tokens: tops, cost: [...tops].reverse().concat({ ...top(9, ""), key: "pi:sub-9", agent: "pi", id: "sub-9", title: "", gateway: true, cost: 0.5, models: ["deepseek-v4-pro"] }), active: tops.slice(0, 2) },
+        top: { tokens: tops, tokens_with_cache: [tops[1], tops[0], tops[2]], cost: [...tops].reverse().concat({ ...top(9, ""), key: "pi:sub-9", agent: "pi", id: "sub-9", title: "", gateway: true, cost: 0.5, models: ["deepseek-v4-pro"] }), active: tops.slice(0, 2) },
         messages: days.map((d) => d.usage.length ? 30 : 0), output: days.map(() => 0),
         shape: {
           messages: { edges: [1, 6, 16, 31, 61, 121], counts: [3, 10, 14, 9, 4, 2], total: 42 },
@@ -160,6 +160,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io + cache));
         assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].withCache);
         assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha + alphaCache));
+        assert.deepEqual(await page.locator("#sessTop .sess-top .name").allInnerTexts(), ["Top session 1", "Top session 0", "Top session 2"]);
+        assert.equal(await page.locator("#sessTop .sess-top .v").first().innerText(), await fmt(3004000));
         // the picker the Overview's tile carries is on this one too, and
         // tells the Sessions tab, not the Overview, to draw again
         await tile.locator(".kpi-pick").click();
@@ -171,12 +173,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
         assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].tokens);
         assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha));
+        assert.deepEqual(await page.locator("#sessTop .sess-top .name").allInnerTexts(), ["Top session 0", "Top session 1", "Top session 2"]);
+        assert.equal(await page.locator("#sessTop .sess-top .v").first().innerText(), await fmt(905000));
         // and the reader can have the cache back
         await tile.locator(".kpi-pick").click();
         await page.locator(".proto-menu:visible .pm-item").nth(1).click();
         await page.waitForTimeout(200);
         assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io + cache));
         assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha + alphaCache));
+        assert.equal(await page.locator("#sessTop .sess-top .name").first().innerText(), "Top session 1");
+        assert.equal(await page.locator("#sessTop .sess-top .v").first().innerText(), await fmt(3004000));
       });
 
       await t.test("the calendar, and the metric", async () => {
@@ -286,13 +292,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
       await t.test("top sessions open in place", async () => {
         const first = page.locator("#sessTop .sess-top").first();
-        assert.equal(await first.locator(".name").innerText(), "Top session 0");
+        assert.equal(await first.locator(".name").innerText(), "Top session 1");
         // in sight first: a click's own scroll to reach it isn't the page's
         await first.scrollIntoViewIfNeeded();
         const y = (await first.boundingBox()).y;
         await first.click();
         await page.locator("#sessTop .sess-detail .sess-line").first().waitFor();
-        assert(seen.includes("one claude:s0"));
+        assert(seen.includes("one claude:s1"));
         assert.equal(await page.locator("#sessTop .sess-detail .sess-line .k").first().innerText(), want[lang].detail);
         assert((await page.locator("#sessTop .sess-detail .sess-line .k").allInnerTexts()).includes(want[lang].idLine), "the id's line is named for it (#465)");
         assert.equal((await page.locator("#sessTop .sess-top").first().boundingBox()).y, y);

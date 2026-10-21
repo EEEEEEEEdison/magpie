@@ -453,8 +453,9 @@ type Overview struct {
 	Median int   `json:"median"` // tokens (in and out) of the middle session
 	P90    int   `json:"p90"`    // … of the one nine in ten spent no more than
 	Days   []int `json:"days"`   // sessions at work each day, from Stats.From to To
-	// Top are the sessions that spent the most, by tokens, cost and
-	// active time, n of each
+	// Top are the sessions that spent the most, by tokens (input and
+	// output), tokens_with_cache (also cache read and written), cost and
+	// active time, n of each.
 	Top map[string][]Summary `json:"top"`
 	// Messages and Output are the messages and output tokens each day,
 	// as Days
@@ -573,6 +574,9 @@ func (st Stats) Overview(agent, model, cwd string, n int) Overview {
 	}
 	for by, v := range map[string]func(Summary) float64{
 		"tokens": func(s Summary) float64 { return float64(s.Input + s.Output) },
+		"tokens_with_cache": func(s Summary) float64 {
+			return float64(s.Input + s.Output + s.CacheRead + s.CacheWrite)
+		},
 		"cost":   func(s Summary) float64 { return s.Cost },
 		"active": func(s Summary) float64 { return float64(s.Active) },
 	} {

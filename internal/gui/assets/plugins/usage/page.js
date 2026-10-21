@@ -1876,7 +1876,7 @@ let sessStats = null; // { from, to, days: [{ date, usage, active }], agents } f
 let sessModel = ""; // "" for every model
 let sessFolder = ""; // "" for every folder
 // the sessions of the range summed up under the filters, by the server:
-// { count, median, p90, days, top: { tokens, cost, active } }, and the
+// { count, median, p90, days, top: { tokens, tokens_with_cache, cost, active } }, and the
 // query it answers
 let sessOver = null;
 let sessOverAt = "";
@@ -2800,7 +2800,8 @@ function renderSessTop() {
   head.append(el("span", "grow"), seg);
   box.append(head);
   slide(seg, "sessTop");
-  const list = ov.top?.[sessTopBy] || [];
+  const by = sessTopBy === "tokens" && usageWithCache ? "tokens_with_cache" : sessTopBy;
+  const list = ov.top?.[by] || [];
   const body = el("div", "sess-tops");
   if (!list.length) body.append(el("div", "sess-none", ov.top ? t("Nothing in this range.") : "…"));
   const icons = new Map((sessions?.sessions || []).map((s) => [s.agent, s.icon]));
@@ -2820,7 +2821,7 @@ function renderSessTop() {
     who.append(sub);
     r.append(who);
     const fc = fmtCost({ cost: s.cost, unpriced: !s.priced });
-    const v = sessTopBy === "cost" ? (fc ? "≈" + fc : "—") : sessTopBy === "active" ? fmtDur(s.active) : fmtN(s.input + s.output);
+    const v = sessTopBy === "cost" ? (fc ? "≈" + fc : "—") : sessTopBy === "active" ? fmtDur(s.active) : fmtN(usageTokens(s));
     r.append(el("div", "v", v));
     r.onclick = () => {
       if (window.getSelection()?.toString()) return;
