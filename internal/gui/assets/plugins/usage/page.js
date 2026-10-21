@@ -872,7 +872,6 @@ function ledDetail(r, cols) {
     dl.lastChild.classList.add("lc-opt");
     dl.lastChild.previousSibling.classList.add("lc-opt");
   };
-  opt("Sent", r.model);
   opt("Effort", r.effort);
   // its tokens at every width, the cache's beside in and out: a prompt read
   // from the cache is told from one that missed it, whose input is the
@@ -924,6 +923,8 @@ function ledDetail(r, cols) {
   // it was on, or not through the gateway
   if (!r.archive && !r.computer && (providers?.gateway?.archive?.on ?? state.settings?.requestArchive)) add("Request archive", t("Not archived"), "muted");
   if (r.source === "log") add("Data source", t("Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred."), "muted");
+  add("Requested", r.req);
+  add("Sent", r.model);
   const tr = el("tr", "led-detail");
   const td = el("td");
   td.colSpan = cols;
@@ -1366,7 +1367,7 @@ new ResizeObserver(() => {
   });
 }).observe($("#ledWrap"));
 // a table that grows past the window when its width didn't change (a font
-// arriving, a redraw while out of sight) leaves its columns out then too;
+// arriving, a redraw while out of sight) rechecks the compact rules too;
 // and its scrollbar goes once a table left without them has come to fit,
 // rather than staying under a table with nothing to scroll
 let ledGrowFrame = 0;
@@ -1389,7 +1390,7 @@ new ResizeObserver(() => {
 // details (#860), 2 for one left out only when that isn't enough; the
 // fourth, the header's tooltip
 const LED_COLS = [
-  ["Time"], ["Agent"], ["Requested"], ["Provider · account"], ["Sent", "", true], ["Served"], ["Effort", "", true],
+  ["Time"], ["Agent"], ["Provider · account"], ["Served"], ["Effort", "", true],
   ["In", "n"], ["Out", "n"], ["Cache write", "n", true], ["Cache read", "n", true], ["Cost", "n"], ["TTFT", "n", 2, "Time to first token"], ["Duration", "n"], ["Speed", "n"], ["Status"],
 ];
 
@@ -1451,15 +1452,15 @@ const ledFloor_ = (r) => {
 };
 const ledFloorSpeed = (r) => { const f = ledFloor_(r); return f ? f.n / (f.w / 1000) : 0; };
 
-// the table as wide as the window, when leaving out what the row's details
-// say anyway makes it so: else it scrolls sideways (#799)
+// Desktop keeps every column, scrolling inside the table. Only a narrow
+// viewport folds secondary columns into each row's details.
 function ledFit() {
   const wrap = $("#ledWrap"), table = wrap.querySelector("table.led");
   let hint = $("#ledTight");
   if (!table) { if (hint) hint.hidden = true; return; }
   table.classList.remove("tight", "tight2", "tighter");
   const over = () => wrap.scrollWidth > wrap.clientWidth + 1;
-  const tight = over();
+  const tight = window.innerWidth < 768 && over();
   table.classList.toggle("tight", tight);
   // still too wide (#860: a Windows window at 175%, its wider fonts): the
   // price reference line goes too, in the cost's tooltip and the details
@@ -1670,7 +1671,6 @@ function renderLedger() {
     // a request magpie made by itself, apart from the agents' own (#1839)
     if (r.agent === "magpie") who.append(ownBadge());
     td(who, "", [r.kind, r.session && t("session {id}", { id: r.session })].filter(Boolean).join(" · "));
-    td(r.req || "—", "model" + (r.req ? "" : " faint"), r.req || t("Not kept for requests before this version"));
     const local = r.source === "log";
     // A session file names the provider it was set up to call, which is
     // where a call that went straight to a vendor went: nothing stood
@@ -1713,9 +1713,6 @@ function renderLedger() {
       badges.append(k);
     }
     if (badges.childElementCount) wc.append(badges);
-    // the model sent is what the gateway sent the vendor: a session file has none
-    // The log names a model, but does not capture the outbound HTTP request.
-    td(r.model || "—", "model " + (r.model ? "model-value" : "faint"), r.source === "log" && r.model ? t("Model recorded in the local session log; the outbound HTTP request was not captured.") : r.model);
     td(ledServed(r), "model");
     td(r.effort || "—", r.effort ? "" : "faint");
     td(ledNum(r.in), "n");

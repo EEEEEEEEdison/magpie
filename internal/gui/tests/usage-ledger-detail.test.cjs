@@ -65,6 +65,7 @@ function server(lang, refreshed) {
 
 const L = {
   en: {
+    models: ["Requested", "Sent"],
     statuses: ["429 · rate_limit_error", "200", "Succeeded", "rate_limit", "200 · 2 tries"], badge: "Local session",
     split: [["In magpie", "180 ms"], ["Tries that failed first", "103 s"], ["Connecting and sending", "820 ms"], ["Vendor's first token", "37 s"]],
     speed: "24 tok/s", tokens: "300 in · 40 out · 0 cache read · 0 cache creation", labels: { fail: ["Status", "Error type", "Upstream said", "Duration", "Request ID", "Endpoint", "Protocol", "Session ID"], ok: ["Status", "Duration", "Tokens", "Speed", "Request ID", "Endpoint", "Protocol", "Called for", "First token", "In magpie", "Vendor's first token"], log: ["Request ID", "Session ID", "Data source"], logFail: ["Status", "Error type", "Error", "Request ID", "Session ID", "Data source"] },
@@ -72,6 +73,7 @@ const L = {
     noStatus: "Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred.",
   },
   zh: {
+    models: ["请求模型", "发送模型"],
     statuses: ["429 · rate_limit_error", "200", "成功", "rate_limit", "200 · 2 次尝试"], badge: "本地会话",
     split: [["magpie 内耗时", "180 毫秒"], ["之前失败的尝试", "103 秒"], ["连接并发送请求", "820 毫秒"], ["厂商首字等待", "37 秒"]],
     speed: "24 token/秒", tokens: "输入 300 · 输出 40 · 缓存读取 0 · 缓存创建 0", labels: { fail: ["状态", "错误类型", "上游返回", "耗时", "请求 ID", "终结点", "协议", "会话 ID"], ok: ["状态", "耗时", "Token", "速度", "请求 ID", "终结点", "协议", "用途", "首响", "magpie 内耗时", "厂商首字等待"], log: ["请求 ID", "会话 ID", "数据来源"], logFail: ["状态", "错误类型", "错误", "请求 ID", "会话 ID", "数据来源"] },
@@ -116,8 +118,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // "sent", and says the thinking effort; the gateway's row has its own
         const cells = async (n) => rows.nth(n).locator("td").evaluateAll((tds) => tds.map((td) => td.textContent.trim()));
         const logged = await cells(2), gateway = await cells(0);
-        assert.deepEqual([logged[2], logged[4], logged[5], logged[6]], ["claude-opus-5[1m]", "claude-opus-5", "claude-opus-5", "xhigh"], "a session file's models and effort");
-        assert.deepEqual([gateway[2], gateway[4]], ["sol", "gpt-6-sol"], "the gateway's model asked for and sent");
+        assert.deepEqual([logged[3], logged[4]], ["claude-opus-5", "xhigh"], "only the served model and effort are table columns");
+        assert.equal(gateway[3], "—", "an unknown served model is not inferred from requested or sent");
         // only the session file's rows are marked as such; the gateway's say
         // the protocol they were sent upstream in (a session file keeps no path)
         const badge = (sel) => rows.evaluateAll((trs, sel) => trs.map((tr) => tr.querySelector(sel)?.textContent || ""), sel);
@@ -142,7 +144,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // a failure the gateway logged: what the vendor said, in the details
         await reader.click(p, rows.nth(0));
-        assert.deepEqual(await labels(), w.labels.fail);
+        assert.deepEqual(await labels(), [...w.labels.fail, ...w.models]);
         const v = await values();
         assert.equal(v[0], "429");
         assert.equal(v[1], "rate_limit_error");
@@ -162,21 +164,25 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await p.locator(".led tbody tr.led-detail").count(), 0, "a second click closes it");
         assert.equal(await top(), before);
         await reader.click(p, rows.nth(1));
-        assert.deepEqual(await labels(), w.labels.ok);
+        assert.deepEqual(await labels(), [...w.labels.ok, ...w.models]);
         // how it went and how long, which the row says only in its last columns (#799)
         assert.deepEqual((await values()).slice(0, 2).map((v) => v.replace(/[^\d.]/g, "")), ["200", "2.4"]);
         // how fast it wrote (#860)
         // its tokens, the cache's beside in and out, though none was read (#1839)
         assert.equal((await values())[2], w.tokens);
-        assert.equal((await values())[3], w.speed);
+        assert.equal((await values())[3], lang === "en" ? "17 tok/s" : "17 token/秒");
         assert.deepEqual((await values()).slice(4, 8), ["chatcmpl-77", "/v1/messages → /v1/chat/completions", "Anthropic → Chat", w.subagent]);
         // the first token split: magpie's own 40 ms, the vendor's 660 ms
         assert.deepEqual((await values()).slice(9, 11).map((v) => v.match(/^\d+/)?.[0]), ["40", "660"]);
         await reader.click(p, rows.nth(2));
         assert.deepEqual(await p.locator(".led tbody tr.led-detail").count(), 2);
         assert(!(await p.locator(".led-detail").nth(1).locator("dd.bad").count()), "a session file's success has nothing in red");
-        assert.equal((await p.locator(".led-detail").nth(1).locator("dd").last().textContent()), w.noStatus);
-        await reader.click(p, rows.nth(3));
+        const logDetail = p.locator(".led-detail").nth(1);
+        const logValues = await logDetail.locator("dd").allTextContents();
+        assert(logValues.includes(w.noStatus));
+        assert.deepEqual(logValues.slice(-2), ["claude-opus-5[1m]", "claude-opus-5"], "original requested and sent names remain in details");
+        await reader.reach(p, rows.nth(3));
+        await rows.nth(3).click();
         assert.deepEqual(await p.locator(".led-detail").nth(2).locator("dt:not(.lc-opt)").allTextContents(), w.labels.logFail);
         assert.equal(await p.locator(".led-detail").nth(2).locator("dd").nth(2).textContent(), "You've hit your limit · resets 3am");
 
@@ -207,8 +213,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(await rows.nth(1).getAttribute("aria-expanded"), "true");
 
         // text selected in the details is the reader copying: not a click
-        await reader.inView(p,p.locator(".led-detail").first().locator("dd").first());
-        await p.locator(".led-detail").first().locator("dd").first().dblclick();
+        const firstValue = p.locator(".led-detail").first().locator("dd").first();
+        await reader.reach(p, firstValue);
+        await firstValue.dblclick();
         assert.equal(await p.locator(".led tbody tr.led-detail").count(), 3, "selecting text closed a row");
 
         // no left-border stripe on a failed row

@@ -72,9 +72,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         p.setDefaultTimeout(5000);
         p.on("pageerror", (e) => errors.push(e.message));
         await p.route("**/*", server(lang));
-        await p.goto("http://magpie.test/");
-        await p.locator('[data-view="usage"]').first().click();
-        await p.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();
+        await p.goto("http://magpie.test/?view=usage&tab=requests");
         await p.locator("#ledWrap .led tbody tr").first().waitFor();
         await p.waitForTimeout(200);
 
@@ -106,8 +104,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(await cell(0).evaluate((c) => getComputedStyle(c).textAlign), await rows.nth(0).locator("td.duration").evaluate((c) => getComputedStyle(c).textAlign));
 
         // a narrow window: the column goes, the details keep it, the hint says so
-        await p.setViewportSize({ width: 760, height: 800 });
-        await p.waitForTimeout(300);
+        await p.setViewportSize({ width: 560, height: 800 });
+        await p.waitForFunction(() => getComputedStyle(document.querySelector(".led tr.led-row td.ttft")).display === "none");
         assert.equal(await cell(0).isVisible(), false, "a narrow window leaves it out");
         assert.equal((await p.locator("#ledTight").textContent()).trim(), w.hint);
         await reader.click(p, rows.nth(0).locator("td").nth(2));

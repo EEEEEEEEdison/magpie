@@ -1,13 +1,8 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
-// The Usage page's Requests table fits a narrow window with the reporter's
-// own rows (#860, huoranxuanyuan, a second round: at 1569px on Windows at
-// 175%, about 900 CSS px, the hint said columns were left out and Speed and
-// Status were still cut off). Their rows are Codex's through openai ·
-// chatgpt.com with a Responses badge, one priced from another model, whose
-// "Price reference" line widened the Cost column. Where leaving out Sent,
-// Effort and the cache isn't enough, that line goes too (it is in the cost's
-// tooltip and the row's details) and names are cut shorter; a window wide
-// enough keeps it. Chromium and WebKit, English and Chinese; the API is faked.
+// Desktop Requests keep all columns and scroll inside the table. Narrow
+// viewports fold secondary fields into details. Fixtures include long model
+// names and a price-reference line; enlarged text and resizing cannot hide
+// desktop columns. All five languages; no backend or live configuration.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -79,7 +74,7 @@ function server(lang) {
 }
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
-  for (const lang of ["en", "zh"]) {
+  for (const lang of ["en", "zh", "zh-TW", "ja", "de"]) {
     test(`${engine} ${lang}: the reporter's rows fit a narrow window`, async (t) => {
       const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
       t.after(() => browser.close());
@@ -89,9 +84,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         p.setDefaultTimeout(5000);
         p.on("pageerror", (e) => errors.push(e.message));
         await p.route("**/*", server(lang));
-        await p.goto("http://magpie.test/");
-        await p.locator('[data-view="usage"]').first().click();
-        await p.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();
+        await p.goto("http://magpie.test/?view=usage&tab=requests");
         await p.locator("#ledWrap .led tbody tr").first().waitFor();
         await p.waitForTimeout(300);
         return p;
@@ -102,8 +95,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       });
 
       // narrower than the table is with Sent, Effort and the cache left out
-      const p = await open(820);
-      assert.deepEqual(await fits(p), { scroll: true, status: true }, "the table fits, Status in sight");
+      const p = await open(560);
       assert(await p.locator("#ledTight").isVisible(), "the hint says where the columns went");
       const ref = p.locator(".led tbody tr.led-row").nth(2).locator("td.cost");
       assert.equal(await ref.locator(".price-reference").isVisible(), false, "the price reference line is left out");
@@ -111,11 +103,47 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await reader.click(p, p.locator(".led tbody tr.led-row").nth(2).locator("td").nth(2));
       assert((await p.locator(".led tbody tr.led-detail").textContent()).includes("gpt-5.6-luna"), "and in the row's details");
 
-      // wide enough: the line is there (the window wider by the sidebar
-      // beside the page)
-      const q = await open(1320);
-      assert.deepEqual(await fits(q), { scroll: true, status: true });
+      const q = await open(820);
+      const fullColumns = async () => {
+        const modelHeads = await q.evaluate(() => ({ shown: [...document.querySelectorAll(".led thead th")].map((e) => e.textContent), removed: [t("Requested"), t("Sent")], kept: t("Served") }));
+        assert(modelHeads.shown.includes(modelHeads.kept), "the actual model remains");
+        for (const name of modelHeads.removed) assert(!modelHeads.shown.includes(name), name + " is detail-only");
+        assert.equal(await q.locator(".led thead th:visible").count(), 14, "all desktop headers remain visible");
+        assert.equal(await q.locator(".led tr.led-row").first().locator("td:visible").count(), 14, "all desktop values remain visible");
+        assert.equal(await q.locator("#ledTight").isVisible(), false, "desktop never says columns were folded");
+        assert(await q.locator("#view-usage").evaluate((e) => e.scrollWidth <= e.clientWidth + 1), "only the table may scroll sideways");
+        assert(await q.locator("#ledHScroll").isVisible(), "the overflow scrollbar is available");
+      };
+      await fullColumns();
+      await q.locator("#ledHScroll").evaluate((e) => { e.scrollLeft = e.scrollWidth; });
+      await q.waitForFunction(() => document.querySelector("#ledWrap").scrollLeft > 0);
+      assert.equal((await fits(q)).status, true, "Status is reachable by scrolling");
+      await q.locator("#ledWrap").evaluate((e) => { e.scrollLeft = 0; });
+      await q.waitForFunction(() => document.querySelector("#ledHScroll").scrollLeft === 0);
+      // Enlarged table text must not silently remove columns either.
+      await q.addStyleTag({ content: ".led { font-size: 17px; } .led th { font-size: 16px; }" });
+      await q.waitForTimeout(200);
+      await fullColumns();
+      // Resizing across the exact compact boundary restores every column.
+      await q.setViewportSize({ width: 767, height: 760 });
+      await q.waitForFunction(() => document.querySelector(".led").classList.contains("tight"));
+      await q.setViewportSize({ width: 768, height: 760 });
+      await q.waitForFunction(() => !document.querySelector(".led").classList.contains("tight"));
+      await fullColumns();
+      await q.setViewportSize({ width: 1320, height: 760 });
+      await q.waitForFunction(() => !document.querySelector(".led").classList.contains("tight"));
+      await fullColumns();
       assert(await q.locator(".led tbody tr.led-row").nth(2).locator(".price-reference").isVisible(), "the price reference line at a wider window");
+      await reader.click(q, q.locator(".led tr.led-row").first().locator("td.where"));
+      const models = await q.locator(".led-detail").evaluate((d) => Object.fromEntries([...d.querySelectorAll("dt")].map((e) => [e.textContent, e.nextElementSibling.textContent])));
+      const names = await q.evaluate(() => [t("Requested"), t("Sent")]);
+      assert.equal(models[names[0]], "gpt-6.1-sol");
+      assert.equal(models[names[1]], "gpt-6.1-sol");
+      assert.equal(await q.locator(".led-detail > td").getAttribute("colspan"), "14");
+      if (process.env.ARTIFACT_DIR) {
+        await fs.mkdir(process.env.ARTIFACT_DIR, { recursive: true });
+        await q.screenshot({ path: path.join(process.env.ARTIFACT_DIR, `${engine}-${lang}-ledger-full.png`), fullPage: true });
+      }
       assert.deepEqual(errors, []);
     });
   }

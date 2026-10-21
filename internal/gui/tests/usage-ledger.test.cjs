@@ -101,14 +101,14 @@ function server(lang, theme, asked) {
 const L = {
   en: {
     tabs: ["Overview", "Requests", "Sessions", "Context"],
-    cols: ["Time", "Agent", "Requested", "Provider · account", "Sent", "Served", "Effort", "In", "Out", "Cache write", "Cache read", "Cost", "TTFT", "Duration", "Speed", "Status"],
+    cols: ["Time", "Agent", "Provider · account", "Served", "Effort", "In", "Out", "Cache write", "Cache read", "Cost", "TTFT", "Duration", "Speed", "Status"],
     sum: "130 requests", pager: "1–100 of 130", older: "Older", newer: "Newer", failed: "Failed", export: "Export CSV",
     why: "The vendor was asked for gpt-6-sol, but its reply says gpt-6-luna answered",saved: "Saved 130 requests to ~/Downloads/magpie-requests-30d-2026-09-29.csv",
     none: "No requests match these filters.", bad: "Failed: the agent was answered 429", via: "Codex · via office-mac",
   },
   zh: {
     tabs: ["概览", "请求", "会话", "上下文"],
-    cols: ["时间", "Agent", "请求模型", "供应商 · 账号", "发送模型", "实际模型", "推理强度", "输入", "输出", "缓存写入", "缓存读取", "费用", "首响", "耗时", "速度", "状态"],
+    cols: ["时间", "Agent", "供应商 · 账号", "实际模型", "推理强度", "输入", "输出", "缓存写入", "缓存读取", "费用", "首响", "耗时", "速度", "状态"],
     sum: "130 个请求", pager: "第 1–100 条，共 130 条", older: "较早", newer: "较新", failed: "失败", export: "导出 CSV",
     why: null, saved: "已将 130 个请求保存到 ~/Downloads/magpie-requests-30d-2026-09-29.csv",
     none: "没有符合这些筛选条件的请求。", bad: "失败：Agent 收到的是 429", via: "Codex · 来自 office-mac",
@@ -229,10 +229,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // the first row: asked for sol, sent gpt-6-sol, served gpt-6-luna, amber
         const first = page.locator(".led tbody tr").first().locator("td");
-        assert.equal(await first.nth(2).textContent(), "sol");
-        assert.equal(await first.nth(3).textContent(), "Relay · team");
-        assert.equal(await first.nth(4).textContent(), "gpt-6-sol");
-        assert.equal(await first.nth(6).textContent(), "high");
+        assert.equal(await first.nth(3).textContent(), "gpt-6-luna");
+        assert.equal(await first.nth(2).textContent(), "Relay · team");
+        assert.equal(await first.nth(4).textContent(), "high");
         assert.equal(await page.locator(".led .swap").count(), 1, "only the swapped row is marked");
         const swap = page.locator(".led tbody tr").first().locator(".swap");
         assert.equal(await swap.textContent(), "gpt-6-luna");
@@ -240,9 +239,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         else assert(/gpt-6-luna/.test(await swap.getAttribute("title")));
         // the dated name: plain, not marked
         const second = page.locator(".led tbody tr").nth(1).locator("td");
-        assert.equal(await second.nth(5).locator(".swap").count(), 0);
-        assert.equal(await second.nth(5).textContent(), "claude-sonnet-5-20260801");
-        assert.equal(await second.nth(3).textContent(), "Claude · ann@example.com");
+        assert.equal(await second.nth(3).locator(".swap").count(), 0);
+        assert.equal(await second.nth(3).textContent(), "claude-sonnet-5-20260801");
+        assert.equal(await second.nth(2).textContent(), "Claude · ann@example.com");
         // the failure: its row, a red dot and code
         assert.equal(await page.locator(".led tr.bad").count(), 1);
         const bad = page.locator(".led tr.bad td").last();
@@ -256,7 +255,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         ]);
         assert.notEqual(dotBad, dotOk, "a failure's dot is another colour");
         // a request from before Requested was kept
-        assert.equal(await page.locator(".led tbody tr").nth(3).locator("td").nth(2).textContent(), "—");
+        assert.equal(await page.locator(".led tbody tr").nth(3).locator("td").nth(3).textContent(), "—");
         // no coloured stripe down the box's, a row's or a cell's left side
         const stripes = await page.evaluate(() => [...document.querySelectorAll("#ledWrap, #ledWrap tr, #ledWrap td")]
           .filter((e) => { const c = getComputedStyle(e); return parseFloat(c.borderLeftWidth) > 0 && (c.borderLeftWidth !== c.borderRightWidth || c.borderLeftColor !== c.borderRightColor); }).length);

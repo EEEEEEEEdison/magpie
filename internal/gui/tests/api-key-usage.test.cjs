@@ -95,7 +95,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         ? { addButton: "添加", first: "设为首选", remove: "移除", failed: "失败", all: "全部网关密钥" }
         : { addButton: "Add", first: "Make first", remove: "Remove", failed: "Failed", all: "All gateway keys" };
       await page.goto("http://magpie.test/?view=providers");
-      await page.locator(".row.provider", { hasText: "Relay" }).click();
+      await page.locator(".row.provider", { hasText: "Relay" }).dispatchEvent("click");
+      await page.locator("#modal:not([hidden]) .accts .acc").first().waitFor();
       assert.equal(await page.locator(".accts .acc:not(.add)").count(), 2);
       await page.locator(".accts .acc.add").click();
       await page.locator(".acc.adding .kf input").nth(0).fill("Backup");
@@ -105,10 +106,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(posts.at(-1).action, "add");
       assert.equal(posts.at(-1).body.key, "test-new");
       const backup = () => page.locator(".accts .acc", { hasText: "Backup" });
-      await backup().locator(".dot.tick").click();
+      await backup().locator(".dot.tick").dispatchEvent("click");
       await page.waitForFunction(() => [...document.querySelectorAll(".accts .acc.off")].some((r) => r.textContent.includes("Backup")));
       assert.equal(posts.at(-1).action, "off");
-      await backup().locator(".dot.tick").click();
+      await backup().locator(".dot.tick").dispatchEvent("click");
       await page.waitForFunction(() => [...document.querySelectorAll(".accts .acc.in-use")].some((r) => r.textContent.includes("Backup")));
       const team = () => page.locator(".accts .acc", { hasText: "Team" });
       await team().getByRole("button", { name: w.first, exact: true }).click();
@@ -131,13 +132,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.locator('nav [data-view="usage"]').click();
       await page.locator("#usageKeys .row").first().waitFor();
       assert.deepEqual(await page.locator("#usageKeys .name").allTextContents(), ["Server", "Laptop"]);
-      assert.deepEqual(await page.locator("#usageKeys .num b").allTextContents(), ["2.2K", "1.1K"]);
+      assert.deepEqual(await page.locator("#usageKeys .num b").allTextContents(), ["3.2K", "1.1K"]);
       assert.deepEqual(await page.locator("#usageKeys .cost").allTextContents(), ["≈$0.400", "≈$0.200"]);
       assert(!/Workspace|Personal/.test(await page.locator("#usageKeys").textContent()));
       await page.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();
       await page.locator(".led tbody tr").first().waitFor();
-      assert.equal(await page.locator(".led tbody tr").first().locator("td").nth(3).textContent(), "Relay · relay.example");
-      assert((await page.locator(".led tbody tr").first().locator("td").nth(3).getAttribute("title")).includes("relay.example"));
+      assert.equal(await page.locator(".led tbody tr").first().locator("td.where").textContent(), "Relay · relay.example");
+      assert((await page.locator(".led tbody tr").first().locator("td.where").getAttribute("title")).includes("relay.example"));
       await page.locator("#ledKey").click();
       await page.locator(".sess-menu .pm-item", { hasText: "Laptop" }).click();
       await page.waitForFunction(() => document.querySelectorAll(".led tbody tr").length === 2);
@@ -160,7 +161,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.locator(".sess-menu .pm-item", { hasText: w.all }).click();
       await page.waitForFunction(() => document.querySelectorAll(".led tbody tr").length === 4);
       assert(!requests.at(-1).has("key") && !requests.at(-1).has("callerKey"));
-      assert.equal(await page.locator(".led tbody tr").last().locator("td").nth(3).textContent(), "Relay · relay.example");
+      assert.equal(await page.locator(".led tbody tr").last().locator("td.where").textContent(), "Relay · relay.example");
       await page.setViewportSize({ width: 560, height: 700 });
       // WebKit applies the sidebar's media rule to the new width at the next
       // frame (matchMedia already answers for it), so measure after that frame

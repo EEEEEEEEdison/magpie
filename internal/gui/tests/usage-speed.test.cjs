@@ -3,8 +3,8 @@
 // #860): each row's speed in tokens a second over its whole turn, a KPI of the
 // period's with its first-token time, a Speed trend that sets each model's
 // beside the others', and the ranking's tok/s. At the reporter's own window
-// (975px, 125%) the table fits without scrolling sideways, the columns it
-// leaves out in each row's details; and a wide window keeps the Agents and
+// (975px, 125%) the table keeps all columns and scrolls sideways; a wide
+// window keeps the Agents and
 // Settings rows a readable width rather than stretched across it. English
 // and Chinese; no backend, the API is faked.
 const assert = require("node:assert/strict");
@@ -116,10 +116,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         p.setDefaultTimeout(5000);
         p.on("pageerror", (e) => errors.push(e.message));
         await p.route("**/*", server(lang));
-        await p.goto("http://magpie.test/");
+        await p.goto("http://magpie.test/?view=usage&tab=requests");
         assert(await p.evaluate(() => document.body.classList.contains("window")), "the app's window");
-        await p.locator('[data-view="usage"]').first().click();
-        await p.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();
         await p.locator("#ledWrap .led tbody tr").first().waitFor();
         await p.waitForTimeout(300);
 
@@ -138,13 +136,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal((await cell(6).textContent()).trim(), "—");
         assert.equal((await cell(7).textContent()).trim(), lang === "en" ? "35 tok/s" : "35 token/秒");
 
-        // the table fits the window; what it leaves out is in the details,
-        // the first token's column (#2522) among them at this width
+        // Desktop keeps all fields and scrolls within the table.
         const wrap = p.locator("#ledWrap");
-        assert(await wrap.evaluate((e) => e.scrollWidth <= e.clientWidth + 1), "the table fits: " + JSON.stringify(await wrap.evaluate((e) => [e.scrollWidth, e.clientWidth])));
-        assert.equal(await p.locator("#ledHScroll").isVisible(), false, "no sideways scrollbar");
-        assert.equal((await p.locator("#ledTight").textContent()).trim(), w.hint);
-        assert(await p.locator("#ledTight").isVisible(), "says where the columns went");
+        assert(await wrap.evaluate((e) => e.scrollWidth > e.clientWidth + 1), "the full table scrolls");
+        assert.equal(await p.locator("#ledHScroll").isVisible(), true, "sideways scrollbar stays available");
+        assert.equal(await p.locator("#ledTight").isVisible(), false, "desktop folds no columns");
+        assert.equal(await p.locator(".led thead th:visible").count(), 14);
         await reader.click(p, p.locator(".led tbody tr.led-row").nth(0).locator("td").nth(2));
         const d = p.locator(".led tbody tr.led-detail");
         const shown = await d.locator("dt").evaluateAll((dts) => dts.filter((x) => x.offsetParent).map((x) => x.textContent));
