@@ -112,7 +112,9 @@ async function rest(p, western, what) {
   await p.locator(":is(#usageTab .opt, .nav-s):visible").nth(0).click();
   await p.locator("#stats .kpi b").first().waitFor();
   const tiles = await p.locator("#stats .kpi").allInnerTexts();
-  assert.equal(tiles[0].split("\n")[0], western ? "1.54B" : "15.4 亿", what + ": the Overview's tokens");
+  // in and out, and the cache read and written, which is how the page
+  // counts them: 1B + 540M + 2B + 30M
+  assert.equal(tiles[0].split("\n")[0], western ? "3.57B" : "35.7 亿", what + ": the Overview's tokens");
   for (const x of tiles) if (/\d/.test(x)) assert(has(x, western) || !/[万亿KMB]/.test(x), `${what}: Overview tile "${x}"`);
   // the hit rate is of the whole prompt, what was written to the cache in
   // it too: 2B read of 1B + 2B + 30M written, not of 1B + 2B (67%)
@@ -128,7 +130,8 @@ async function rest(p, western, what) {
   await p.locator(":is(#usageTab .opt, .nav-s):visible").nth(2).click();
   await p.waitForFunction(() => !document.querySelector("#sessStats .kpi.stale") && /\d/.test(document.querySelectorAll("#sessStats .kpi b")[1]?.textContent || ""));
   const st = await p.locator("#sessStats .kpi").allInnerTexts();
-  assert.equal(st[1].split("\n")[0], western ? "1.54B" : "15.4 亿", what + ": the Sessions tokens");
+  // the same, of the day's sessions: 1B + 540M + 2B
+  assert.equal(st[1].split("\n")[0], western ? "3.54B" : "35.4 亿", what + ": the Sessions tokens");
   assert(st[0].includes(western ? "500M" : "5 亿"), `${what}: the Sessions median "${st[0]}"`);
   assert(has(st[3], western), `${what}: the Sessions cache "${st[3]}"`);
   await p.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();

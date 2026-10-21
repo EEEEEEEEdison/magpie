@@ -156,27 +156,27 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const alphaCache = sum("cache_read", "/work/alpha") + sum("cache_write", "/work/alpha");
         const tile = page.locator("#sessStats .kpi").nth(1);
         const bar = page.locator("#sessProjects .sess-bar").first();
-        // as the page has always counted them: in and out
-        assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
-        assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].tokens);
-        assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha));
+        // with the cache in, which is how the page counts them
+        assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io + cache));
+        assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].withCache);
+        assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha + alphaCache));
         // the picker the Overview's tile carries is on this one too, and
         // tells the Sessions tab, not the Overview, to draw again
         await tile.locator(".kpi-pick").click();
         const menu = page.locator(".proto-menu:visible");
         await menu.waitFor();
         assert.equal((await menu.locator(".pm-head").textContent()).trim(), want[lang].head);
-        await menu.locator(".pm-item").nth(1).click();
-        await page.waitForTimeout(200);
-        assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io + cache));
-        assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].withCache);
-        assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha + alphaCache));
-        // and the reader can have it back
-        await tile.locator(".kpi-pick").click();
-        await page.locator(".proto-menu:visible .pm-item").nth(0).click();
+        await menu.locator(".pm-item").nth(0).click();
         await page.waitForTimeout(200);
         assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
+        assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].tokens);
         assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha));
+        // and the reader can have the cache back
+        await tile.locator(".kpi-pick").click();
+        await page.locator(".proto-menu:visible .pm-item").nth(1).click();
+        await page.waitForTimeout(200);
+        assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io + cache));
+        assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha + alphaCache));
       });
 
       await t.test("the calendar, and the metric", async () => {

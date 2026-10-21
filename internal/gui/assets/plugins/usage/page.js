@@ -339,12 +339,13 @@ function usageParts(texts) {
   return out;
 }
 
-// The Overview's token totals count what went in and out; the cache's
-// tokens, read and written, can be counted in them too (#2378), as the
-// Requests tab's total always has them. Kept as the reader left it
+// The token totals count what went in and out, and the cache's tokens, read
+// and written, in them too: that is most of what a session spent, and the
+// Requests tab's total has always had them. The reader can leave the cache
+// out instead (#2378), and the pick is kept as they left it
 // (magpie.usageWithCache).
-let usageWithCache = false;
-try { usageWithCache = localStorage.getItem("magpie.usageWithCache") === "1"; } catch {}
+let usageWithCache = true;
+try { usageWithCache = localStorage.getItem("magpie.usageWithCache") !== "0"; } catch {}
 const cacheOf = (x) => (x.cache_read || 0) + (x.cache_write || 0);
 const usageTokens = (x) => tokensOf(x) + (usageWithCache ? cacheOf(x) : 0);
 // the tokens tile's label: a pop-up of the two ways to count. Two tabs draw
