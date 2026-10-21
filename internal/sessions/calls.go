@@ -297,7 +297,7 @@ func callFiles() []file {
 			}
 		}
 	}
-	add(ccFiles("claude", ClaudeDir()))
+	add(desktopCodeFiles(ccFiles("claude", ClaudeDir())))
 	for _, d := range callDesktopDirs() {
 		// Cowork keeps a Claude Code folder of its own for each session
 		homes, _ := SessionGlob(filepath.Join(d, "local-agent-mode-sessions", "*", "*", "local_*", ".claude"))

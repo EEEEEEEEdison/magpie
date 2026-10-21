@@ -234,6 +234,9 @@ func readCalls(f file) *callFile {
 	if old == nil {
 		old = restoreCallContinuation(loadCalls(f))
 	}
+	if old != nil && old.Agent != f.agent {
+		old = nil // Desktop ownership can change without a transcript write.
+	}
 	if old != nil && old.Size == f.size && old.Mod == f.mod.UnixNano() {
 		callsMu.Lock()
 		if generation == callGeneration {

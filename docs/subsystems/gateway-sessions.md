@@ -45,6 +45,22 @@ counts as in its list, and on `/api/sessions/delete`, a native session is any
 session file the agent keeps, one nothing was said in too, with no limit
 (`sessions.NativeIDs`); one pass over the agents' files (`sessions.Manage`)
 reads only the agent shown and the agents with gateway sessions (#2776).
+Desktop's Code tab can store its native transcripts in the shared
+`~/.claude/projects` folder. `desktopCodeFiles` in
+[`desktop_titles.go`](../../internal/sessions/desktop_titles.go) assigns those
+files and their subagents to `claude-desktop` only when Desktop's own local
+metadata explicitly names their CLI id (including live and prior handles).
+An empty or conflicting title does not remove that ownership. This gives
+listing, native exclusions, stats, management and request-log readers the
+same identity, rather than adding a second Desktop gateway projection to a
+native file counted as Claude Code. Unowned local CLI sessions and WSL
+files keep their original identities; matching names or cross-agent ids
+alone never establish ownership. Parser continuations and packed request
+chunks invalidate an old source identity even when the transcript has not
+changed. Existing transcripts and usage records are not rewritten.
+Verification: `TestDesktopCodeNativeIdentity` and
+`TestDesktopNativeStatsExcludeGatewayDuplicate` (all-time and date windows,
+local-only calls, gateway deduplication, subagents and independent CLI files).
 Gateway projections have no path,
 resume command or terminal action: the agent's own files of them are not on
 this computer. Their rows carry `gateway: true`; the Sessions page groups them

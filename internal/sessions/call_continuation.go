@@ -22,7 +22,7 @@ func keepCallContinuation(st *callFile) {
 		return
 	}
 	old, exists := callContinuations[st.Path]
-	if exists && old.state.Off == st.Off && old.state.ContentHash == st.ContentHash {
+	if exists && old.state.Agent == st.Agent && old.state.Off == st.Off && old.state.ContentHash == st.ContentHash {
 		return
 	}
 	delete(callContinuations, st.Path)
@@ -64,7 +64,7 @@ func restoreCallContinuation(st *callFile) *callFile {
 	entry, ok := callContinuations[st.Path]
 	callsMu.Unlock()
 	previous := entry.state
-	if !ok || previous.Off != st.Off || previous.Size != st.Size || previous.Mod != st.Mod || previous.ContentHash != st.ContentHash {
+	if !ok || previous.Agent != st.Agent || previous.Off != st.Off || previous.Size != st.Size || previous.Mod != st.Mod || previous.ContentHash != st.ContentHash {
 		return st
 	}
 	previous.Calls, previous.Msgs, previous.Began, previous.Strs = st.Calls, st.Msgs, st.Began, st.Strs

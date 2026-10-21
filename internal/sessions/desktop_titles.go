@@ -63,6 +63,27 @@ func DesktopTitles(ids []string) map[string]string {
 	return out
 }
 
+// desktopCodeFiles assigns local Code-tab transcripts (and their subagents)
+// to Desktop only when its own metadata explicitly owns their CLI id.
+func desktopCodeFiles(files []file) []file {
+	if len(files) == 0 {
+		return files
+	}
+	desktopTitles.Lock()
+	defer desktopTitles.Unlock()
+	if desktopTitles.names == nil || time.Since(desktopTitles.at) >= desktopTitlesHeld {
+		scanDesktopTitles()
+	}
+	for i := range files {
+		f := &files[i]
+		id := strings.TrimPrefix(f.key, "claude:")
+		if _, owned := desktopTitles.names[id]; owned {
+			f.agent, f.key = "claude-desktop", "claude-desktop:"+id
+		}
+	}
+	return files
+}
+
 // scanDesktopTitles rebuilds the names; the caller holds desktopTitles.
 // A file that is there but can't be read or parsed (Desktop midway through
 // writing it) is unknown, not unnamed: its last parse stands. A file gone

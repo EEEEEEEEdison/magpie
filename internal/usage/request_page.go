@@ -387,7 +387,7 @@ func readRequestState(now time.Time) requestState {
 	snapshot := readLogSnapshot()
 	fmt.Fprint(h, meta, snapshot.version, now.Format("2006-01-02 MST"))
 	for _, s := range sources {
-		fmt.Fprintf(h, "%s:%d:%d;", s.Path, s.Size, s.Modified.UnixNano())
+		fmt.Fprintf(h, "%s:%s:%s:%d:%d;", s.Path, s.Agent, s.Key, s.Size, s.Modified.UnixNano())
 	}
 	days, someShared := sharedSources(time.Time{})
 	for _, s := range days {
@@ -502,7 +502,7 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 			return false
 		}
 		c := idx.chunks[s.Path]
-		return c == nil || c.Source.Size != s.Size || !c.Source.Modified.Equal(s.Modified)
+		return c == nil || c.Source.Agent != s.Agent || c.Source.Key != s.Key || c.Source.Size != s.Size || !c.Source.Modified.Equal(s.Modified)
 	}, readSource)
 	for i, s := range sources {
 		on[s.Path] = true
@@ -511,7 +511,7 @@ func queryPage(p Period, f Filter, offset, limit int, readSource func(sessions.C
 		}
 		cached := idx.chunks[s.Path]
 		c := cached.unpack()
-		reused := c != nil && c.Source.Size == s.Size && c.Source.Modified.Equal(s.Modified)
+		reused := c != nil && c.Source.Agent == s.Agent && c.Source.Key == s.Key && c.Source.Size == s.Size && c.Source.Modified.Equal(s.Modified)
 		if !reused {
 			if resolver == nil {
 				resolver = newSessionResolver([]sessions.Call{{}})
