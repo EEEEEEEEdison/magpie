@@ -20,6 +20,12 @@ func TestBareModelIsTheModelItself(t *testing.T) {
 		{"us.anthropic.claude-sonnet-4-5-20250929", "claude-sonnet-4-5"},
 		{"grok-4.7@500k", "grok-4.7"},
 		{"claude-opus-5[1m]", "claude-opus-5"},
+		// a relay that lists its display name as the id: the model whose id
+		// spells the space as a dash
+		{"wangwang/GPT-6 Astra", "gpt-6-astra"},
+		{"kedaya/GPT-6 Astra", "gpt-6-astra"},
+		{"玩具/GPT-6 Astra", "gpt-6-astra"},
+		{"GPT-6  Sol", "gpt-6-sol"},
 		// v3 is another model than v2, so it is not a version tail
 		{"deepseek-v3", "deepseek-v3"},
 	} {
@@ -63,5 +69,20 @@ func TestAnyPriceCoversTheModelUnderItsOtherNames(t *testing.T) {
 	}
 	if pr, ok := EffectivePrice("cpa", "workbuddy2api/deepseek-v4.1-flash"); !ok || pr.Input != 7 {
 		t.Errorf("cpa: %+v %v; want its own $7", pr, ok)
+	}
+
+	// the same for a relay that lists its display name as the id: the space
+	// in it is the dash the model's own id spells, so one price covers both
+	if err := SetModelPrice("*/gpt-6-astra", &catalog.Price{Input: 10, Output: 50, CacheRead: 1, CacheWrite: 12.5}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []struct{ provider, model string }{
+		{"wanju", "wangwang/GPT-6 Astra"},
+		{"wanju", "kedaya/GPT-6 Astra"},
+		{"wanju", "gpt-6-astra"},
+	} {
+		if pr, ok := EffectivePrice(q.provider, q.model); !ok || pr.Input != 10 || pr.Output != 50 {
+			t.Errorf("%s/%s: %+v %v; want the $10/$50 set for gpt-6-astra from any provider", q.provider, q.model, pr, ok)
+		}
 	}
 }

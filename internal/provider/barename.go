@@ -27,6 +27,13 @@ var vendorDot = regexp.MustCompile(`^(?:(?:global|us-gov|[a-z]{2,4})\.)?(?:anthr
 // its context: claude-opus-5[1m].
 var ContextTail = regexp.MustCompile(`\[[^\]]*\]$`)
 
+// spaceRun is a run of whitespace inside a model's name. A relay that lists
+// its display name as the id spells it "GPT-6 Astra" where the model's own id
+// is "gpt-6-astra": the same model, and it has to be one name for a price set
+// under either and one row (sameModel, which folds a run of spaces, "_" and
+// "-" into one "-" for a routing group's members, is the same judgement).
+var spaceRun = regexp.MustCompile(`\s+`)
+
 // windowTail is the window magpie offers a model at beside its default
 // (grok-4.7@500k, Cursor's grok-4.7@256k): the vendor answers under the
 // plain name, which is the same model (#1645).
@@ -35,9 +42,11 @@ var windowTail = regexp.MustCompile(`@\d+[km]?$`)
 // BareModel is a model's name without its maker or path, its version, the
 // size of its context or its case: workbuddy2api/deepseek-v4.1-flash and
 // 9router/workbuddy/deepseek-v4.1-flash are both deepseek-v4.1-flash, the
-// one model they are sold as.
+// one model they are sold as. A space in it is a "-": a relay that lists its
+// display name as the id spells GPT-6 Astra's id "GPT-6-Astra" elsewhere.
 func BareModel(m string) string {
 	m = ContextTail.ReplaceAllString(strings.ToLower(strings.TrimSpace(m)), "")
+	m = spaceRun.ReplaceAllString(m, "-")
 	m = windowTail.ReplaceAllString(m, "")
 	if i := strings.LastIndexByte(m, '/'); i >= 0 {
 		m = m[i+1:]
