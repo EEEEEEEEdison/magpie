@@ -1148,10 +1148,15 @@ still in force; reset that one by name to take it away too.
 A price set for a model without a provider (`*/<model>`) is matched on the
 model's own name (`provider.BareModel`): the id without the maker or path a
 provider sells it under, without a snapshot or context-size tail, in lower
-case, and with a run of spaces as `-`. So a `*/gpt-6-astra` price is spent on
-a relay that lists the model as `GPT-6 Astra` as well as on the model's own
-id (`TestAnyPriceCoversTheModelUnderItsOtherNames`,
-`TestBareModelIsTheModelItself`).
+case, and with a run of spaces — and the dashes or underscores beside it —
+as one `-`. So a `*/gpt-6-astra` price is spent on a relay that lists the
+model as `GPT-6 Astra`, and a `*/gpt-6-sol` price on one that lists it as
+`gpt-6- sol`, as well as on the model's own id. What models.dev lists for
+the maker is read with a space in the id as a dash too, so a relay's
+`gpt-6- sol` is priced at the maker's gpt-6-sol when the user set no price
+for it; its other tails are not read there, so `gpt-6-astra@500k` stays as
+the ids name it (`TestAnyPriceCoversTheModelUnderItsOtherNames`,
+`TestBareModelIsTheModelItself`, `TestMakerPriceReadsTheModelsOwnName`).
 
 A price is **one provider's tariff for one model**, not the model's own: the
 same model through two providers is two prices, and each keeps its own.

@@ -2060,7 +2060,9 @@ var kimiCodeAPI = map[string]string{
 
 // MakerPrice is a model's list price as the first vendor among the presets
 // that makes the models it serves lists it; for a call whose provider has
-// gone since.
+// gone since. It is read as any vendor spells it, with its prefix or not,
+// and with a space in the id read as a dash, as BareModel reads it: a
+// relay's "gpt-6- sol" is the maker's gpt-6-sol.
 func MakerPrice(model string) (catalog.Price, bool) {
 	for _, m := range pricedNames(model) {
 		if pr, ok := catalog.PricedBy(makerPriceCatalogs(), m); ok {
@@ -2281,6 +2283,13 @@ var grokWindow = regexp.MustCompile(`^((?:.*/)?grok-[0-9][^/@]*)@[0-9]+k?$`)
 // grok-4.7-build-fast at twice grok-4.7's (Provider.grokFastPrice).
 func pricedNames(model string) []string {
 	out := []string{model}
+	// a space in the id read as a dash, as BareModel reads it: a relay that
+	// lists its display name as the id spells "gpt-6- sol" where its maker
+	// lists gpt-6-sol. BareModel's tails are not read here: an @window or a
+	// version is Grok's or a list's to strip, not the maker list's.
+	if b := strings.TrimSpace(sepRun.ReplaceAllString(strings.TrimSpace(model), "-")); b != model {
+		out = append(out, b)
+	}
 	if model == "codex-auto-review" {
 		out = append(out, "gpt-5.6-luna")
 	}

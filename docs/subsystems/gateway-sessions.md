@@ -555,9 +555,11 @@ The Usage page's Sessions tab offers that name in its model picker and its
 model bars and filters by it, so one model sold as `workbuddy2api/glm-5.3-flash`
 by one provider and as `glm-5.3-flash` by another is one row and one filter
 there. A run of spaces in a model's name is a `-` there, as it is where a
-price is looked up (`provider.BareModel` is one judgement for both): a relay
-that lists its display name as the id spells `GPT-6 Astra` where the model's
-own id is `gpt-6-astra`, and that is one model, one row and one price.
+price is looked up (`provider.BareModel` is one judgement for both), and the
+dashes or underscores beside the space go with it: a relay that lists its
+display name as the id spells `GPT-6 Astra` where the model's own id is
+`gpt-6-astra` and `gpt-6- sol` where it is `gpt-6-sol`, and each is one
+model, one row and one price.
 `Stats.Overview`'s `model` matches a session's models either way round,
 as `usage.Filter.keepsRecord` matches a request. What is aggregated does not
 change: each name a call was made under keeps its own row, and a session's own

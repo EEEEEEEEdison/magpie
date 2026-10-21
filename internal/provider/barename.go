@@ -27,12 +27,14 @@ var vendorDot = regexp.MustCompile(`^(?:(?:global|us-gov|[a-z]{2,4})\.)?(?:anthr
 // its context: claude-opus-5[1m].
 var ContextTail = regexp.MustCompile(`\[[^\]]*\]$`)
 
-// spaceRun is a run of whitespace inside a model's name. A relay that lists
-// its display name as the id spells it "GPT-6 Astra" where the model's own id
-// is "gpt-6-astra": the same model, and it has to be one name for a price set
-// under either and one row (sameModel, which folds a run of spaces, "_" and
-// "-" into one "-" for a routing group's members, is the same judgement).
-var spaceRun = regexp.MustCompile(`\s+`)
+// sepRun is a run of separators with a space in it. A relay that lists its
+// display name as the id spells it "GPT-6 Astra" where the model's own id is
+// "gpt-6-astra", and "gpt-6- sol" where it is "gpt-6-sol": the same model,
+// and it has to be one name for a price set under either and one row. The
+// dashes and underscores beside the space go with it, as sameModel folds a
+// run of spaces, "_" and "-" into one "-" for a routing group's members. A
+// name with no space in it is left as it is.
+var sepRun = regexp.MustCompile(`[-_]*\s+[-_\s]*`)
 
 // windowTail is the window magpie offers a model at beside its default
 // (grok-4.7@500k, Cursor's grok-4.7@256k): the vendor answers under the
@@ -42,11 +44,11 @@ var windowTail = regexp.MustCompile(`@\d+[km]?$`)
 // BareModel is a model's name without its maker or path, its version, the
 // size of its context or its case: workbuddy2api/deepseek-v4.1-flash and
 // 9router/workbuddy/deepseek-v4.1-flash are both deepseek-v4.1-flash, the
-// one model they are sold as. A space in it is a "-": a relay that lists its
-// display name as the id spells GPT-6 Astra's id "GPT-6-Astra" elsewhere.
+// one model they are sold as. A space in it is a "-", with the dashes or
+// underscores beside it: a relay that lists its display name as the id spells
+// GPT-6 Astra's id "GPT-6-Astra" elsewhere, and GPT-6 Sol's "gpt-6- sol".
 func BareModel(m string) string {
 	m = ContextTail.ReplaceAllString(strings.ToLower(strings.TrimSpace(m)), "")
-	m = spaceRun.ReplaceAllString(m, "-")
 	m = windowTail.ReplaceAllString(m, "")
 	if i := strings.LastIndexByte(m, '/'); i >= 0 {
 		m = m[i+1:]
@@ -55,5 +57,8 @@ func BareModel(m string) string {
 	if loc := versionTail.FindStringIndex(m); loc != nil && loc[0] > 0 {
 		m = m[:loc[0]]
 	}
-	return m
+	// what a tail left behind, before a space becomes a "-": "opus [1m]" is
+	// opus, not "opus-"
+	m = strings.TrimSpace(m)
+	return sepRun.ReplaceAllString(m, "-")
 }

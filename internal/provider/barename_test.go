@@ -1,6 +1,8 @@
 package provider
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/yetone/magpie/internal/catalog"
@@ -26,11 +28,37 @@ func TestBareModelIsTheModelItself(t *testing.T) {
 		{"kedaya/GPT-6 Astra", "gpt-6-astra"},
 		{"玩具/GPT-6 Astra", "gpt-6-astra"},
 		{"GPT-6  Sol", "gpt-6-sol"},
+		// a dash beside the space is the same dash, not a second one
+		{"浮生云算/gpt-6- sol", "gpt-6-sol"},
+		{"gpt-6 - sol", "gpt-6-sol"},
+		// a space a tail left behind is not a dash
+		{"claude-opus-5 [1m]", "claude-opus-5"},
 		// v3 is another model than v2, so it is not a version tail
 		{"deepseek-v3", "deepseek-v3"},
 	} {
 		if got := BareModel(tc.in); got != tc.want {
 			t.Errorf("BareModel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A maker's list is read by the model's own name too: a relay that lists
+// its display name as the id sells the maker's gpt-6-sol as
+// "浮生云算/gpt-6- sol", and that is the model the list prices.
+func TestMakerPriceReadsTheModelsOwnName(t *testing.T) {
+	priceHome(t)
+	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{"openai":{"models":{"gpt-6-sol":{"id":"gpt-6-sol","name":"GPT-6 Sol",` +
+		`"cost":{"input":2,"output":10,"cache_read":0.25,"cache_write":2.5}}}}}`
+	if err := os.WriteFile(catalog.CachePath(), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	for _, model := range []string{"浮生云算/gpt-6- sol", "gpt-6- sol", "gpt-6-sol"} {
+		if pr, ok := MakerPrice(model); !ok || pr.Input != 2 || pr.Output != 10 {
+			t.Errorf("MakerPrice(%q) = %+v %v; want the $2/$10 listed for gpt-6-sol", model, pr, ok)
 		}
 	}
 }
@@ -83,6 +111,19 @@ func TestAnyPriceCoversTheModelUnderItsOtherNames(t *testing.T) {
 	} {
 		if pr, ok := EffectivePrice(q.provider, q.model); !ok || pr.Input != 10 || pr.Output != 50 {
 			t.Errorf("%s/%s: %+v %v; want the $10/$50 set for gpt-6-astra from any provider", q.provider, q.model, pr, ok)
+		}
+	}
+
+	// and a dash beside the space: "gpt-6- sol" is gpt-6-sol, not gpt-6--sol
+	if err := SetModelPrice("*/gpt-6-sol", &catalog.Price{Input: 4, Output: 16}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []struct{ provider, model string }{
+		{"wanju", "浮生云算/gpt-6- sol"},
+		{"wanju", "gpt-6-sol"},
+	} {
+		if pr, ok := EffectivePrice(q.provider, q.model); !ok || pr.Input != 4 || pr.Output != 16 {
+			t.Errorf("%s/%s: %+v %v; want the $4/$16 set for gpt-6-sol from any provider", q.provider, q.model, pr, ok)
 		}
 	}
 }
