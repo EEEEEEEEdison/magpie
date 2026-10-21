@@ -3,8 +3,6 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"hash/fnv"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -123,11 +121,7 @@ var (
 	desktopDated  = regexp.MustCompile(`-\d{8}$`)
 )
 
-func aliasNumber(id string) string {
-	h := fnv.New64a()
-	h.Write([]byte(id))
-	return fmt.Sprintf("%010d", h.Sum64()%1e10)
-}
+func aliasNumber(id string) string { return provider.DesktopAliasNumber(id) }
 
 func aliasFor(id string) string { return desktopAlias + aliasNumber(id) }
 
@@ -400,29 +394,7 @@ func desktopNames(entries []provider.Entry) []string {
 // or without Claude Code's "[1m]"; or Claude Science's,
 // claude-magpie-<number>.
 func aliased(id string) (string, bool) {
-	id = strings.TrimSuffix(id, "[1m]")
-	var number string
-	if n, ok := strings.CutPrefix(id, desktopAlias); ok {
-		number = n
-	} else if n, ok := strings.CutPrefix(id, desktopEffortAlias); ok {
-		number = n
-	} else if n, ok := strings.CutPrefix(id, scienceAlias); ok {
-		// Claude Science's (science.go)
-		number = n
-	} else if rest, ok := strings.CutPrefix(id, "magpie-"); ok {
-		if i := strings.Index(rest, desktopClaudeInfix); i > 0 {
-			number = rest[:i]
-		}
-	}
-	if len(number) != 10 {
-		return "", false
-	}
-	for _, e := range provider.Catalog() {
-		if aliasNumber(e.ID) == number {
-			return e.ID, true
-		}
-	}
-	return "", false
+	return provider.DesktopAlias(id)
 }
 
 // isClaudeDesktop is a request from Claude Desktop's own gateway client: its
