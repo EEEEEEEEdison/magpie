@@ -335,6 +335,21 @@ reporter's real wire files), `TestCodeBuddyCalls`, `TestWorkBuddyCalls*`,
 `TestPiCalls*` (Pi 1.1.0's and omp 18.9.1's own files) and
 `TestWSLSessionsListed`.
 
+Where such a file names the provider it was set up to call and that name is
+one of the user's providers, the call is that provider's
+(`usage.logRecord`, `provider.ByID`: an id, or one the provider was renamed
+from — never a display name). Pi's and omp's files name it on every reply,
+Codex's names its `model_provider`, and a name that is the user's own
+provider is where the call went: its tariff prices the call (the row keeps
+no `OwnCost`), and the row carries its id, so the provider filter, the
+`provider` and `modelAt` splits and the CLI's and TUI's rows count it with
+that provider's gateway calls instead of under "Local session". A name no
+provider has is left as the file recorded it (`Record.SessionProvider`) and
+the row claims no supplier (`usage.UnknownProvider`), as every call read
+from a file did before. A name Pi made up for a relay magpie doesn't know
+is not one of the user's providers, so nothing is claimed for it.
+Verification: `TestASessionFilesProviderPricesItsCalls`.
+
 A read of every call decodes each file's cached shard, and over a long
 history that is tens of thousands of files (#2278: 68k shards, 415 MB).
 Asks for the same calls while one read is under way wait for it and get

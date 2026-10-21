@@ -338,17 +338,27 @@ func ledger(since time.Time, f Filter, recs []Record) (rows []Row, sum Totals, a
 // Recorded provider IDs and matched creator identities stay in their own fields.
 const UnknownProvider = "session-unknown"
 
-// logRecord is a call read from a session file, as a record: the upstream is
-// unknown, and what the file doesn't say is left out. Nothing
-// stood between the agent and the vendor, so what was sent is what the agent
-// asked for. Claude Code's file names the model it asked for (as it runs) and
-// the one the API answered with, which is the served model; Codex's and
-// OpenCode's name only the one they asked for (OpenCode's reply keeps the
-// model it was sent to, never the one the response named) (#680).
+// logRecord is a call read from a session file, as a record: what the file
+// doesn't say is left out, and a supplier is claimed only where the file names
+// one of the user's providers. Nothing stood between the agent and the vendor,
+// so what was sent is what the agent asked for. Claude Code's file names the
+// model it asked for (as it runs) and the one the API answered with, which is
+// the served model; Codex's and OpenCode's name only the one they asked for
+// (OpenCode's reply keeps the model it was sent to, never the one the response
+// named) (#680).
 func logRecord(c sessions.Call) Record {
 	r := Record{Time: c.Time, Agent: c.Agent, Provider: UnknownProvider, Model: c.Model, Served: c.Model, Requested: c.Requested,
 		Input: c.Input, Output: c.Output, CacheRead: c.CacheRead, CacheWrite: c.CacheWrite, CacheWrite1h: c.CacheWrite1h, Reasoning: c.Reasoning, Effort: c.Effort,
 		Millis: c.Millis, TTFT: c.TTFT, Session: c.Session, RequestID: c.RequestID, Error: c.ErrorText, ErrType: c.Error, Subagent: sessions.SubagentOf(c.File), ParentAgent: sessions.SubagentParent(c.File)}
+	// Pi's and omp's files name the provider they were set up to call, and
+	// Codex's names its model_provider: where that name is one of the user's
+	// providers the call went straight to it, so it is that provider's call —
+	// its tariff prices it, and the row says where it went. A name no provider
+	// has (another agent's own name for a relay, say) is left as the file
+	// recorded it (SessionProvider) and the row claims no supplier.
+	if p, ok := provider.ByID(c.Upstream); ok {
+		r.Provider = p.ID
+	}
 	if c.Agent == "codex" {
 		r.ResponseID = c.ResponseID
 		r.Compaction = codexCompactionOf(c)

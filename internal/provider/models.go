@@ -2224,6 +2224,19 @@ func PriceRateOK(r float64) string {
 	return ""
 }
 
+// ByID is byIDOrWas for a caller outside this package that has a name and
+// needs to know whether it is one of the user's providers: an agent's own
+// session file names the provider it was set up to call, and a name that is
+// one of the user's providers is that provider (usage.logRecord), while a
+// name that is not stays a name the file recorded and nothing more.
+func ByID(id string) (Provider, bool) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Provider{}, false
+	}
+	return byIDOrWas(id)
+}
+
 // byIDOrWas is the provider with that id, else the one it was renamed from.
 // Find would answer a display name as well, which is not how a price or a
 // reply limit is keyed: both are stored under the id the provider has now, and
