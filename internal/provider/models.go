@@ -1804,6 +1804,21 @@ func (p Provider) ListPrice(model string) (catalog.Price, bool) {
 	}
 	for _, m := range names {
 		if pr, ok := catalog.PricedBy(priceCatalogs(cats), m); ok {
+			// If the provider lists the model at zero cost (e.g. an aggregator's
+			// free promotional variant like minimax-m3.1-flash-free or mimo-v2.5-free),
+			// but the foundation model has a real API price from its maker,
+			// bill it at the maker's official API price instead of zero.
+			if pr.Input > 0 || pr.Output > 0 {
+				return pr, true
+			}
+			if mPr, mOk := catalog.PricedBy(makerPriceCatalogs(), m); mOk && (mPr.Input > 0 || mPr.Output > 0) {
+				return mPr, true
+			}
+			if canon := CanonicalModel(m); canon != "" && canon != m {
+				if mPr, mOk := catalog.PricedBy(makerPriceCatalogs(), canon); mOk && (mPr.Input > 0 || mPr.Output > 0) {
+					return mPr, true
+				}
+			}
 			return pr, true
 		}
 		if pr, ok := catalog.PricedBy(makerPriceCatalogs(), m); ok {
@@ -2182,6 +2197,15 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 		return SamePriceIn(s, id, model)
 	}
 	pr, ok := p.ListPrice(model)
+	if !ok || (pr.Input == 0 && pr.Output == 0) {
+		if mPr, mOk := MakerPrice(model); mOk && (mPr.Input > 0 || mPr.Output > 0) {
+			pr, ok = mPr, true
+		} else if canon != "" && canon != model {
+			if mPr, mOk := MakerPrice(canon); mOk && (mPr.Input > 0 || mPr.Output > 0) {
+				pr, ok = mPr, true
+			}
+		}
+	}
 	if !ok {
 		pr, ok = MakerPrice(model)
 	}
@@ -2190,8 +2214,8 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 	}
 	// then a custom price configured under another provider for the same core model
 	// when this known provider and the maker's catalog have none
-	if !ok {
-		if borrowed, found := crossProviderPrice(s.ModelPrices, model); found {
+	if !ok || (pr.Input == 0 && pr.Output == 0) {
+		if borrowed, found := crossProviderPrice(s.ModelPrices, model); found && (borrowed.Input > 0 || borrowed.Output > 0) {
 			pr, ok = borrowed, true
 		}
 	}

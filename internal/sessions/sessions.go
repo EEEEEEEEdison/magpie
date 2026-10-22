@@ -1677,11 +1677,8 @@ func priceOf(s settings.Settings, model string) (catalog.Price, bool) {
 	// These ids are the same model under another name. Read a price stated
 	// for the canonical name too, before falling back to its maker's list.
 	canonical := bare
-	switch bare {
-	case "hy4-preview-f":
-		canonical = "hy4-preview"
-	case "k3":
-		canonical = "kimi-k3"
+	if c := provider.CanonicalModel(bare); c != "" {
+		canonical = c
 	}
 	if canonical != bare {
 		if pr, ok := provider.AnyModelPriceIn(s, canonical); ok {

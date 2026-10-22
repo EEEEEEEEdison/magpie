@@ -242,3 +242,66 @@ func TestMakerPriceForMetaAndTencent(t *testing.T) {
 		t.Errorf("EffectivePriceIn(session-unknown, muse-spark-1.3-contributor) = %+v, ok=%v; want 0.1", epMuse, okEpMuse)
 	}
 }
+
+// Free promotional variants or aggregator channels marked as cost 0 (e.g.
+// minimax-m3.1-flash-free or mimo-v2.5-free) resolve to their maker's official
+// API prices rather than remaining $0.000, while anonymous models explicitly
+// priced zero by the user (omen-alpha, union-alpha) retain $0.
+func TestFreeChannelVariantsResolveToMakerOfficialPrice(t *testing.T) {
+	priceHome(t)
+	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{
+		"opencode-go": {
+			"models": {
+				"minimax-m3.1-flash-free": {"id": "minimax-m3.1-flash-free", "cost": {"input": 0, "output": 0, "cache_read": 0}},
+				"mimo-v2.5-free": {"id": "mimo-v2.5-free", "cost": {"input": 0, "output": 0, "cache_read": 0}}
+			}
+		},
+		"minimax": {
+			"models": {
+				"MiniMax-M3.1-Flash": {"id": "MiniMax-M3.1-Flash", "cost": {"input": 0.15, "output": 0.6, "cache_read": 0.015}}
+			}
+		},
+		"xiaomi": {
+			"models": {
+				"mimo-v2.5": {"id": "mimo-v2.5", "cost": {"input": 0.14, "output": 0.28, "cache_read": 0.0028}}
+			}
+		}
+	}`
+	if err := os.WriteFile(catalog.CachePath(), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+
+	if err := Save(Provider{ID: "opencode-go", Name: "OpenCode", Key: "k", Chat: "https://oc.example/v1", Catalog: "opencode-go",
+		Models: []string{"minimax-m3.1-flash-free", "mimo-v2.5-free"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := settings.Load()
+	// An explicit zero set by the user for an anonymous test model stays zero
+	s.ModelPrices = map[string]settings.ModelPrice{
+		"*/omen-alpha": {Input: new(0.0), Output: new(0.0), CacheRead: new(0.0), CacheWrite: new(0.0)},
+	}
+
+	// 1. minimax-m3.1-flash-free must not be zero; must be MiniMax official API price $0.15/$0.60
+	prMiniMax, okMiniMax := EffectivePriceIn(s, "opencode-go", "minimax-m3.1-flash-free")
+	if !okMiniMax || prMiniMax.Input != 0.15 || prMiniMax.Output != 0.6 {
+		t.Errorf("EffectivePriceIn(minimax-m3.1-flash-free) = %+v, ok=%v; want official API price 0.15/0.60", prMiniMax, okMiniMax)
+	}
+
+	// 2. mimo-v2.5-free must not be zero; must be Xiaomi official API price $0.14/$0.28
+	prMimo, okMimo := EffectivePriceIn(s, "opencode-go", "mimo-v2.5-free")
+	if !okMimo || prMimo.Input != 0.14 || prMimo.Output != 0.28 {
+		t.Errorf("EffectivePriceIn(mimo-v2.5-free) = %+v, ok=%v; want official API price 0.14/0.28", prMimo, okMimo)
+	}
+
+	// 3. User explicit zero on anonymous model stays zero
+	prOmen, okOmen := EffectivePriceIn(s, "opencode-go", "omen-alpha")
+	if !okOmen || prOmen.Input != 0 || prOmen.Output != 0 {
+		t.Errorf("EffectivePriceIn(omen-alpha) = %+v, ok=%v; want 0", prOmen, okOmen)
+	}
+}
