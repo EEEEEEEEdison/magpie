@@ -2069,6 +2069,14 @@ func MakerPrice(model string) (catalog.Price, bool) {
 			return pr, true
 		}
 	}
+	canon := CanonicalModel(model)
+	if canon != "" && canon != model {
+		for _, m := range pricedNames(canon) {
+			if pr, ok := catalog.PricedBy(makerPriceCatalogs(), m); ok {
+				return pr, true
+			}
+		}
+	}
 	return catalog.Price{}, false
 }
 
@@ -2135,12 +2143,23 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 			}
 		}
 	}
+	canon := CanonicalModel(model)
+	if canon != "" && canon != model {
+		for _, key := range [...]string{id + "/" + canon, AnyPriceKey(canon)} {
+			if m, ok := s.ModelPrices[key]; ok {
+				if pr, bad := m.Price(); bad == "" {
+					catalog.OneHourFor(model, &pr)
+					return pr, true
+				}
+			}
+		}
+	}
 	// then a price they set for the same model under a name another
 	// provider sells it by (a workbuddy2api/deepseek-v4.1-flash price is
 	// the price of deepseek-v4.1-flash too), so one price covers every
 	// provider serving the model; still the user's word, so still before
 	// any list price
-	if pr, ok := sameModelPrice(s.ModelPrices, model); ok {
+	if pr, ok := sameModelWildcardPrice(s.ModelPrices, model); ok {
 		catalog.OneHourFor(model, &pr)
 		return pr, true
 	}
@@ -2148,11 +2167,26 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 		if pr, ok := MakerPrice(model); ok {
 			return pr, true
 		}
+		if canon != "" && canon != model {
+			if pr, ok := MakerPrice(canon); ok {
+				return pr, true
+			}
+		}
 		return SamePriceIn(s, id, model)
 	}
 	pr, ok := p.ListPrice(model)
 	if !ok {
 		pr, ok = MakerPrice(model)
+	}
+	if !ok && canon != "" && canon != model {
+		pr, ok = MakerPrice(canon)
+	}
+	// then a custom price configured under another provider for the same core model
+	// when this known provider and the maker's catalog have none
+	if !ok {
+		if borrowed, found := crossProviderPrice(s.ModelPrices, model); found {
+			pr, ok = borrowed, true
+		}
 	}
 	if !ok {
 		pr, ok = SamePriceIn(s, id, model)
@@ -2164,31 +2198,92 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 	return pr, ok
 }
 
-// sameModelPrice is the price the user said this model costs from any
-// provider under another of the names it is sold by, for none: a "*/"
-// price names no provider, so the model it is for is the model, whatever
-// the provider it goes to calls it (BareModel). Only the "*/" keys count,
-// so a price set for one provider's model is not spent on another's; the
-// keys are read in order, so which one answers doesn't depend on the map's.
-func sameModelPrice(prices map[string]settings.ModelPrice, model string) (catalog.Price, bool) {
+// sameModelWildcardPrice finds an explicit all-provider wildcard price ("*/...")
+// for the same underlying model (matching BareModel or CanonicalModel).
+func sameModelWildcardPrice(prices map[string]settings.ModelPrice, model string) (catalog.Price, bool) {
 	bare := BareModel(model)
 	if bare == "" {
 		return catalog.Price{}, false
 	}
-	var keys []string
+	canon := CanonicalModel(model)
+
+	var bareKeys []string
+	var canonKeys []string
+
 	for key := range prices {
 		rest, ok := strings.CutPrefix(key, settings.AnyProvider)
-		if ok && BareModel(rest) == bare {
-			keys = append(keys, key)
+		if !ok {
+			continue
+		}
+		if BareModel(rest) == bare {
+			bareKeys = append(bareKeys, key)
+		} else if canon != "" && CanonicalModel(rest) == canon {
+			canonKeys = append(canonKeys, key)
 		}
 	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		if pr, bad := prices[key].Price(); bad == "" {
-			return pr, true
+
+	for _, list := range [...][]string{bareKeys, canonKeys} {
+		if len(list) == 0 {
+			continue
+		}
+		sort.Strings(list)
+		for _, key := range list {
+			if pr, bad := prices[key].Price(); bad == "" {
+				return pr, true
+			}
 		}
 	}
 	return catalog.Price{}, false
+}
+
+// crossProviderPrice borrows a custom price the user configured under a specific
+// provider for the same model, when neither that provider nor a wildcard set one.
+func crossProviderPrice(prices map[string]settings.ModelPrice, model string) (catalog.Price, bool) {
+	bare := BareModel(model)
+	if bare == "" {
+		return catalog.Price{}, false
+	}
+	canon := CanonicalModel(model)
+
+	var bareKeys []string
+	var canonKeys []string
+
+	for key := range prices {
+		if strings.HasPrefix(key, settings.AnyProvider) {
+			continue
+		}
+		slash := strings.IndexByte(key, '/')
+		if slash < 0 {
+			continue
+		}
+		modelPart := key[slash+1:]
+		if modelPart == "*" {
+			continue
+		}
+		if BareModel(modelPart) == bare {
+			bareKeys = append(bareKeys, key)
+		} else if canon != "" && CanonicalModel(modelPart) == canon {
+			canonKeys = append(canonKeys, key)
+		}
+	}
+
+	for _, list := range [...][]string{bareKeys, canonKeys} {
+		if len(list) == 0 {
+			continue
+		}
+		sort.Strings(list)
+		for _, key := range list {
+			if pr, bad := prices[key].Price(); bad == "" {
+				return pr, true
+			}
+		}
+	}
+	return catalog.Price{}, false
+}
+
+// sameModelPrice is kept for compatibility, delegating to sameModelWildcardPrice.
+func sameModelPrice(prices map[string]settings.ModelPrice, model string) (catalog.Price, bool) {
+	return sameModelWildcardPrice(prices, model)
 }
 
 // AnyModelPriceIn reads an explicit all-provider price under this model's
@@ -2200,7 +2295,16 @@ func AnyModelPriceIn(s settings.Settings, model string) (catalog.Price, bool) {
 			return pr, true
 		}
 	}
-	pr, ok := sameModelPrice(s.ModelPrices, model)
+	canon := CanonicalModel(model)
+	if canon != "" && canon != model {
+		if p, ok := s.ModelPrices[AnyPriceKey(canon)]; ok {
+			if pr, bad := p.Price(); bad == "" {
+				catalog.OneHourFor(model, &pr)
+				return pr, true
+			}
+		}
+	}
+	pr, ok := sameModelWildcardPrice(s.ModelPrices, model)
 	if ok {
 		catalog.OneHourFor(model, &pr)
 	}

@@ -41,6 +41,33 @@ var sepRun = regexp.MustCompile(`[-_]*\s+[-_\s]*`)
 // plain name, which is the same model (#1645).
 var windowTail = regexp.MustCompile(`@\d+[km]?$`)
 
+// modifierTail matches operational modifiers, promotional tags, and runtime
+// effort variants attached to a model name (e.g. "-free", "-thinking",
+// "-thought", "-high", "-low", "-medium", "-minimal", "-online", "-search").
+var modifierTail = regexp.MustCompile(`(?:[-_](?:free|thinking|thought|high|low|medium|minimal|online|search))+$`)
+
+// CanonicalModel returns the normalized core model identifier by stripping
+// channel wrappers, operational tags, effort variants, and folding well-known
+// aliases, so disparate relay namings resolve to the same underlying model
+// for pricing and cross-provider inheritance.
+func CanonicalModel(m string) string {
+	bare := BareModel(m)
+	if bare == "" {
+		return ""
+	}
+	canon := modifierTail.ReplaceAllString(bare, "")
+	switch canon {
+	case "k3", "kimi-k3-auto":
+		return "kimi-k3"
+	case "hy4-preview-f":
+		return "hy4-preview"
+	}
+	if canon != "" {
+		return canon
+	}
+	return bare
+}
+
 // BareModel is a model's name without its maker or path, its version, the
 // size of its context or its case: workbuddy2api/deepseek-v4.1-flash and
 // 9router/workbuddy/deepseek-v4.1-flash are both deepseek-v4.1-flash, the

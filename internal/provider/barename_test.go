@@ -127,3 +127,67 @@ func TestAnyPriceCoversTheModelUnderItsOtherNames(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalModelNormalizesVariants(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"workbuddy2api/deepseek-v4.1-flash", "deepseek-v4.1-flash"},
+		{"minimax-m3.1-flash-free", "minimax-m3.1-flash"},
+		{"gemini-3.8-flash-high", "gemini-3.8-flash"},
+		{"gemini-3.8-flash-low", "gemini-3.8-flash"},
+		{"claude-3-7-sonnet-thinking", "claude-3-7-sonnet"},
+		{"k3", "kimi-k3"},
+		{"kimi-k3-auto", "kimi-k3"},
+		{"hy4-preview-f", "hy4-preview"},
+		{"deepseek-v4.1-flash-online", "deepseek-v4.1-flash"},
+		{"cpa/workbuddy2api/deepseek-v4.1-flash-free", "deepseek-v4.1-flash"},
+	} {
+		if got := CanonicalModel(tc.in); got != tc.want {
+			t.Errorf("CanonicalModel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// When the user has configured a price under one specific provider's relay name
+// (e.g. cpa/workbuddy2api/glm-5.3-flash) and never set an all-provider wildcard
+// (*/...), a call via another provider (opencode-go/glm-5.3-flash) or using an
+// operational variant (glm-5.3-flash-free) borrows that custom price rather
+// than remaining unpriced.
+func TestCrossProviderPriceBorrowing(t *testing.T) {
+	priceHome(t)
+	priceCatalog(t)
+	for _, p := range []Provider{
+		{ID: "cpa", Name: "CPA", Key: "k", Chat: "https://cpa.example/v1", Models: []string{"workbuddy2api/glm-5.3-flash"}},
+		{ID: "opencode-go", Name: "OpenCode", Key: "k", Chat: "https://oc.example/v1", Models: []string{"glm-5.3-flash"}},
+		{ID: "direct", Name: "Direct", Key: "k", Chat: "https://direct.example/v1", Models: []string{"glm-5.3-flash-free"}},
+	} {
+		if err := Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// User only priced cpa's relay naming; no wildcard */... is configured
+	if err := SetModelPrice("cpa/workbuddy2api/glm-5.3-flash", &catalog.Price{Input: 0.15, Output: 0.5, CacheRead: 0.03}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Opencode-go's clean model name borrows cpa's custom tariff
+	pr, ok := EffectivePrice("opencode-go", "glm-5.3-flash")
+	if !ok || pr.Input != 0.15 || pr.Output != 0.5 {
+		t.Fatalf("opencode-go/glm-5.3-flash: %+v %v; want borrowed $0.15/$0.50 from cpa", pr, ok)
+	}
+
+	// Direct provider's free variant also borrows it via CanonicalModel
+	prVar, okVar := EffectivePrice("direct", "glm-5.3-flash-free")
+	if !okVar || prVar.Input != 0.15 || prVar.Output != 0.5 {
+		t.Fatalf("direct/glm-5.3-flash-free: %+v %v; want borrowed $0.15/$0.50 from cpa", prVar, okVar)
+	}
+
+	// But an explicit wildcard still overrides borrowed provider prices
+	if err := SetModelPrice("*/glm-5.3-flash", &catalog.Price{Input: 0.20, Output: 0.80}); err != nil {
+		t.Fatal(err)
+	}
+	prWild, okWild := EffectivePrice("opencode-go", "glm-5.3-flash")
+	if !okWild || prWild.Input != 0.20 || prWild.Output != 0.80 {
+		t.Fatalf("opencode-go/glm-5.3-flash: %+v %v; want wildcard $0.20/$0.80 over borrowed cpa price", prWild, okWild)
+	}
+}
