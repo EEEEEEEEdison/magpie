@@ -917,7 +917,7 @@ func claudeIn(at place) *Agent {
 			// its group or its provider: Claude Code then runs to the window
 			// it is told (claudeContextEnv), as Codex is (provider.CompactFor,
 			// #1809)
-			if s.CompactAt == 0 && (claudeOwnCompact(path, main) || provider.WindowTyped(main)) {
+			if s.CompactAt == 0 && claudeOwnCompact(path, main) {
 				n = 0
 			}
 		}
@@ -1117,9 +1117,6 @@ func claudeIn(at place) *Agent {
 			if s.CompactAt == 0 && userTop {
 				return 0
 			}
-			if s.CompactAt == 0 && provider.WindowTyped(ref) {
-				return -1
-			}
 			return cmp.Or(s.Compact(), -1)
 		}
 		var models []claudeBudget
@@ -1129,6 +1126,9 @@ func claudeIn(at place) *Agent {
 				if id := gateway.DesktopID(e); claudeName(id) == "" {
 					models = append(models, claudeBudget{id: id, window: e.Context, long: gateway.DesktopListed1M(e), compact: work(e.ID)})
 				}
+			}
+			if def == 0 && s.Compact() > 0 {
+				def = s.Compact()
 			}
 		}
 		if main != "" {
