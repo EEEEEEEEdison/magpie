@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // A model's own name is what is left of its id once the maker or path a
@@ -189,5 +190,55 @@ func TestCrossProviderPriceBorrowing(t *testing.T) {
 	prWild, okWild := EffectivePrice("opencode-go", "glm-5.3-flash")
 	if !okWild || prWild.Input != 0.20 || prWild.Output != 0.80 {
 		t.Fatalf("opencode-go/glm-5.3-flash: %+v %v; want wildcard $0.20/$0.80 over borrowed cpa price", prWild, okWild)
+	}
+}
+
+// Foundation model makers listed in models.dev without dedicated presets
+// (Meta) or whose vendor presets host third-party models (Tencent Tokenhub)
+// are consulted by MakerPrice and CanonicalModel.
+func TestMakerPriceForMetaAndTencent(t *testing.T) {
+	priceHome(t)
+	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{
+		"tencent-tokenhub": {
+			"models": {
+				"hy4-preview": {"id": "hy4-preview", "cost": {"input": 0.834, "output": 2.501, "cache_read": 0.042}}
+			}
+		},
+		"meta": {
+			"models": {
+				"muse-spark-1.3-contributor": {"id": "muse-spark-1.3-contributor", "cost": {"input": 0.1, "output": 0.2, "cache_read": 0.002}}
+			}
+		}
+	}`
+	if err := os.WriteFile(catalog.CachePath(), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+
+	// hy4-preview-f canonicalizes to hy4-preview and resolves against tencent-tokenhub
+	prHy4, okHy4 := MakerPrice("hy4-preview-f")
+	if !okHy4 || prHy4.Input != 0.834 || prHy4.Output != 2.501 {
+		t.Errorf("MakerPrice(hy4-preview-f) = %+v, ok=%v; want 0.834/2.501 from tencent-tokenhub", prHy4, okHy4)
+	}
+
+	// muse-spark-1.3-contributor resolves against meta
+	prMuse, okMuse := MakerPrice("muse-spark-1.3-contributor")
+	if !okMuse || prMuse.Input != 0.1 || prMuse.Output != 0.2 {
+		t.Errorf("MakerPrice(muse-spark-1.3-contributor) = %+v, ok=%v; want 0.1/0.2 from meta", prMuse, okMuse)
+	}
+
+	// Session file rows with unknown providers resolve through MakerPrice
+	s := settings.Load()
+	epHy4, okEpHy4 := EffectivePriceIn(s, "session-unknown", "hy4-preview-f")
+	if !okEpHy4 || epHy4.Input != 0.834 {
+		t.Errorf("EffectivePriceIn(session-unknown, hy4-preview-f) = %+v, ok=%v; want 0.834", epHy4, okEpHy4)
+	}
+	epMuse, okEpMuse := EffectivePriceIn(s, "session-unknown", "muse-spark-1.3-contributor")
+	if !okEpMuse || epMuse.Input != 0.1 {
+		t.Errorf("EffectivePriceIn(session-unknown, muse-spark-1.3-contributor) = %+v, ok=%v; want 0.1", epMuse, okEpMuse)
 	}
 }

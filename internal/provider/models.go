@@ -1757,6 +1757,13 @@ var makerCatalogs = sync.OnceValue(func() []string {
 			}
 		}
 	}
+	// Meta and Tencent Tokenhub make foundation models listed in models.dev,
+	// but either have no vendor preset (Meta) or host other models as well (Tencent Cloud).
+	for _, extra := range []string{"meta", "tencent-tokenhub", "tencent-token-plan", "zai"} {
+		if !slices.Contains(out, extra) {
+			out = append(out, extra)
+		}
+	}
 	return out
 })
 
