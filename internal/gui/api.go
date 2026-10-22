@@ -1136,6 +1136,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	gatewayFixRoutes(mux)
 	gatewayModeRoutes(mux)
 	privacyModelRoutes(mux)
+	maskingRoutes(mux)
 	builtinRoutes(mux)
 	mux.HandleFunc("GET /api/settings", func(rw http.ResponseWriter, r *http.Request) {
 		access.MigrateLegacyLANKeyBestEffort()
@@ -1180,6 +1181,10 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		if _, sent := fields["noAutoDownload"]; !sent {
 			in.NoAutoDownload = cur.NoAutoDownload
 		}
+		// nor whether the masked words match in any case
+		if _, sent := fields["redactWordsAnyCase"]; !sent {
+			in.RedactWordsAnyCase = cur.RedactWordsAnyCase
+		}
 		// nor how long an image is given to be drawn
 		if _, sent := fields["imageTimeout"]; !sent {
 			in.ImageTimeout = cur.ImageTimeout
@@ -1213,9 +1218,12 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		in.GitHubToken = cur.GitHubToken                   // set on its own (github-token below), never sent to the page
 		in.RequestArchive = cur.RequestArchive             // the Gateway page's, set on its own
 		in.RequestArchiveMaxMB = cur.RequestArchiveMaxMB   // in settings.json only
+		in.ClaudeRunsMost = cur.ClaudeRunsMost             // magpie claude-code runs, or settings.json (#2956)
 		in.GatewayConversations = cur.GatewayConversations // Sessions' explicit recording consent
 		in.RedactRules = cur.RedactRules                   // the masking rules, set on their own
 		in.RedactModel = cur.RedactModel                   // set on its own (privacy-model)
+		in.RedactActions = cur.RedactActions               // set on their own (redact-actions below)
+		in.RedactAllow = cur.RedactAllow                   // set on its own (redact-allow below)
 		in.DisabledModels = cur.DisabledModels             // set on their own (disabled-models below, #1867)
 		// used or left is the Usage page's toggle as much as Settings', set on its own
 		in.QuotaLeft = cur.QuotaLeft
@@ -2085,6 +2093,41 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			return
 		}
 		s.RedactRules = next
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// what is done with a value of a kind found, other than masking it
+	// (warn, block), all of them each time (#1977)
+	mux.HandleFunc("POST /api/settings/redact-actions", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Actions map[string]string `json:"actions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		s := settings.Load()
+		s.RedactActions = in.Actions
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// the values masking lets go as written, all of them each time (#1977)
+	mux.HandleFunc("POST /api/settings/redact-allow", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Allow []string `json:"allow"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		s := settings.Load()
+		s.RedactAllow = in.Allow
 		if err := settings.Save(s); err != nil {
 			fail(rw, err)
 			return
