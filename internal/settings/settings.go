@@ -727,8 +727,14 @@ type ModelPrice struct {
 	// else at the 5-minute price (catalog.OneHourFor).
 	CacheWrite1h *float64 `json:"cache_write_1h,omitempty"`
 	// Tiers are the prices of a request whose input is over a size, each
-	// whole: "magpie model price … --tier 272k …" (PAMI on Discord).
+	// whole: "magpie model price … --tier 272k …" (PAMI on Discord). One
+	// with From, To or both holds on those days only.
 	Tiers []catalog.Tier `json:"tiers,omitempty"`
+	// NoTiers is the user's word that the model has no long-context price at
+	// all, whatever its list says: a surcharge the vendor stopped charging
+	// (openai's long-context price over 272K, ended), or one it never charged
+	// this provider. The parts above are still the price.
+	NoTiers bool `json:"no_tiers,omitempty"`
 	// TimeZone is the zone the days and hours of TimeTiers and the days of
 	// OffDates are in, an IANA name such as Asia/Shanghai: where a vendor
 	// bills a request at the price of the hour it was made in (DeepSeek's
@@ -796,7 +802,8 @@ func (m ModelPrice) Price() (catalog.Price, string) {
 	}
 	for i, t := range m.Tiers {
 		if t.Above <= 0 || i > 0 && t.Above <= m.Tiers[i-1].Above ||
-			bad(t.Input) || bad(t.Output) || bad(t.CacheRead) || bad(t.CacheWrite) || bad(t.CacheWrite1h) {
+			bad(t.Input) || bad(t.Output) || bad(t.CacheRead) || bad(t.CacheWrite) || bad(t.CacheWrite1h) ||
+			!tierDays(t) {
 			return catalog.Price{}, fmt.Sprintf("tier %d", i+1)
 		}
 	}
@@ -825,6 +832,10 @@ func (m ModelPrice) Price() (catalog.Price, string) {
 		Input: *m.Input, Output: *m.Output,
 		CacheRead: *m.CacheRead, CacheWrite: *m.CacheWrite,
 		Tiers: slices.Clone(m.Tiers), OffDates: slices.Clone(m.OffDates),
+		NoTiers: m.NoTiers,
+	}
+	if p.NoTiers {
+		p.Tiers = nil
 	}
 	if m.CacheWrite1h != nil {
 		p.CacheWrite1h = *m.CacheWrite1h
@@ -840,6 +851,27 @@ func (m ModelPrice) Price() (catalog.Price, string) {
 	return p, ""
 }
 
+// tierDays is whether a tier's days are ones the file can hold: neither
+// given, or each "2006-01-02", From not after To.
+func tierDays(t catalog.Tier) bool {
+	day := func(s string) (time.Time, bool) {
+		if s == "" {
+			return time.Time{}, true
+		}
+		d, err := time.Parse("2006-01-02", s)
+		return d, err == nil
+	}
+	from, ok := day(t.From)
+	if !ok {
+		return false
+	}
+	to, ok := day(t.To)
+	if !ok {
+		return false
+	}
+	return from.IsZero() || to.IsZero() || !from.After(to)
+}
+
 // or is v when it is given and base when it isn't.
 func or(v *float64, base float64) float64 {
 	if v != nil {
@@ -852,7 +884,7 @@ func or(v *float64, base float64) float64 {
 // 1-hour cache write only when it is, and a time tier's only where it differs
 // from the price it overrides.
 func StatedPrice(p catalog.Price) ModelPrice {
-	m := ModelPrice{Input: new(p.Input), Output: new(p.Output), CacheRead: new(p.CacheRead), CacheWrite: new(p.CacheWrite), Tiers: slices.Clone(p.Tiers), OffDates: slices.Clone(p.OffDates)}
+	m := ModelPrice{Input: new(p.Input), Output: new(p.Output), CacheRead: new(p.CacheRead), CacheWrite: new(p.CacheWrite), Tiers: slices.Clone(p.Tiers), OffDates: slices.Clone(p.OffDates), NoTiers: p.NoTiers}
 	if p.CacheWrite1h > 0 {
 		m.CacheWrite1h = new(p.CacheWrite1h)
 	}
@@ -893,7 +925,7 @@ func CheckModelPrice(key string, m ModelPrice) error {
 		return err
 	}
 	if _, bad := m.Price(); strings.HasPrefix(bad, "tier ") {
-		return fmt.Errorf("the price of %q has a %s that is not over a size above 0 and above the tier before it, with every part finite and not negative", key, bad)
+		return fmt.Errorf("the price of %q has a %s that is not over a size above 0 and above the tier before it, with every part finite and not negative, and its days YYYY-MM-DD with from not after to", key, bad)
 	} else if strings.HasPrefix(bad, "time tier ") {
 		return fmt.Errorf("the price of %q has a %s whose \"from\" and \"to\" are not \"HH:MM\" times that differ, or whose days are not 1 (Monday) to 7 (Sunday), or whose parts are not finite and not negative", key, bad)
 	} else if bad == "off date" {

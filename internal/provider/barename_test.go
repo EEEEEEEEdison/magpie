@@ -368,3 +368,82 @@ func TestFreeChannelVariantsResolveToMakerOfficialPrice(t *testing.T) {
 		t.Errorf("EffectivePriceIn(omen-alpha) = %+v, ok=%v; want 0", prOmen, okOmen)
 	}
 }
+
+// A model a plugin lists carries the plugin's own provider id, which the
+// catalog doesn't know: it gave no word on levels, so the model's own are
+// read, as for a relay added by its endpoint. One a catalog provider lists
+// without levels still takes none.
+func TestEffortsOfAModelAPluginLists(t *testing.T) {
+	priceHome(t)
+	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{
+	  "opencode": {"models": {
+	    "deepseek-v4.1-flash-free": {"id":"deepseek-v4.1-flash-free","reasoning":true,
+	      "reasoning_options":[{"type":"effort","values":["low","high","max"]}]}}},
+	  "xiaomi": {"models": {
+	    "mimo-v2.6-flash": {"id":"mimo-v2.6-flash","reasoning":true,"reasoning_options":[{"type":"toggle"}]}}},
+	  "azure": {"models": {
+	    "deepseek-v4.1-flash": {"id":"deepseek-v4.1-flash","reasoning":true,"reasoning_options":[]}}}
+	}`
+	if err := os.WriteFile(catalog.CachePath(), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+
+	for _, tc := range []struct {
+		id, provider, want string
+	}{
+		// a plugin's id the catalog doesn't know: the model's levels
+		{"deepseek-v4.1-flash-free", "opencode-zen-free", "low,high,max"},
+		// a vendor's own word stands: xiaomi's switch alone gives no levels
+		{"mimo-v2.6-flash-free", "opencode-zen-free", ""},
+		// a catalog provider listing the model without levels says it takes none
+		{"deepseek-v4.1-flash", "azure", ""},
+	} {
+		m := catalog.Model{ID: tc.id, Provider: tc.provider}
+		if got := strings.Join(effortsOf(m), ","); got != tc.want {
+			t.Errorf("effortsOf(%s at %s) = %q, want %q", tc.id, tc.provider, got, tc.want)
+		}
+	}
+}
+
+// A zero a relay or a plugin wrote for a running variant is read at the
+// model's maker's price; an id that is its own name, or one no maker lists,
+// is not.
+func TestMakerPriceOfARunningVariant(t *testing.T) {
+	priceHome(t)
+	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{
+	  "minimax": {"models": {"minimax-m3.1-flash": {"id":"minimax-m3.1-flash","cost":{"input":0.15,"output":0.6}}}},
+	  "xiaomi": {"models": {"mimo-v2.6-flash": {"id":"mimo-v2.6-flash","cost":{"input":0.14,"output":0.28}}}},
+	  "opencode": {"models": {"mimo-v2.6-flash-free": {"id":"mimo-v2.6-flash-free","cost":{"input":0,"output":0}}}}
+	}`
+	if err := os.WriteFile(catalog.CachePath(), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+
+	for _, tc := range []struct {
+		id     string
+		input  float64
+		output float64
+		works  bool
+	}{
+		{"minimax-m3.1-flash-free", 0.15, 0.6, true},
+		{"mimo-v2.6-flash-free", 0.14, 0.28, true},
+		// its own name, not a variant; and one no maker lists
+		{"big-pickle", 0, 0, false},
+		{"deepseek-v4.1-flash-free", 0, 0, false},
+	} {
+		pr, ok := makerPriceOfVariant(tc.id)
+		if ok != tc.works || pr.Input != tc.input || pr.Output != tc.output {
+			t.Errorf("makerPriceOfVariant(%q) = %+v, %v; want %v/%v, %v", tc.id, pr, ok, tc.input, tc.output, tc.works)
+		}
+	}
+}

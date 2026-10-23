@@ -57,8 +57,13 @@ func TestDesktopAliasesInLedger(t *testing.T) {
 			t.Errorf("model ranking: %+v", models)
 		}
 	}
-	filtered := pageFromLedger(All, Filter{Model: "deepseek-v4.1-flash", Query: "mythos-magpie"}, 0, 20, all)
+	// the model is filtered and found by the name it was served under, never
+	// by the alias the client asked for: the search asks the models alone
+	filtered := pageFromLedger(All, Filter{Model: "deepseek-v4.1-flash", Query: "deepseek"}, 0, 20, all)
 	if filtered.Total != 3 {
-		t.Errorf("real model and original alias filter: %d rows, want 3", filtered.Total)
+		t.Errorf("real model and its own name: %d rows, want 3", filtered.Total)
+	}
+	if byAlias := pageFromLedger(All, Filter{Query: "mythos-magpie"}, 0, 20, all); byAlias.Total != 0 {
+		t.Errorf("the alias the client asked for found %d rows, want none", byAlias.Total)
 	}
 }

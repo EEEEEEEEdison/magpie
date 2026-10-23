@@ -411,7 +411,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const asked = [];
         const { page, errors } = await open(lang, "light", asked);
         await page.route("**/api/gateway/trace?*", async route => {
-          await page.waitForTimeout(100);
+          // the page closing under a poll in flight is the page's, not a
+          // failure: once it is closed the timeout rejects and the fulfill
+          // goes with it
+          await page.waitForTimeout(100).catch(()=>{});
           await route.fulfill({json:{mine:true, seq:1, routes:[{id:123,time:ROWS[0].t,agent:"codex",model:"gpt-6-sol",provider:"relay",order:[],tries:[],done:true,status:200}],totals:{requests:1,rerouted:0,errors:0},now:new Date().toISOString()}}).catch(()=>{});
         });
         await page.waitForTimeout(5500);

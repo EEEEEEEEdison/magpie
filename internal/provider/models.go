@@ -1731,8 +1731,18 @@ func (p Provider) Levelless(model string) bool {
 // model thinks and lists its family with levels (catalog's levels: a model
 // just added, gpt-6.1-sol).
 func effortsOf(m catalog.Model) []string {
-	if len(m.Efforts) > 0 || m.Provider != "" {
+	if len(m.Efforts) > 0 {
 		return m.Efforts
+	}
+	// A provider the catalog knows, listing the model without levels, gave
+	// its word: the model takes none (azure's deepseek-v4.1-flash). One it
+	// doesn't know — a plugin's own id (opencode-zen-free), a relay added by
+	// its endpoint — gave no word at all, so the model's own are read, as
+	// for one no list prices: a plugin's models showed no levels at all.
+	if m.Provider != "" {
+		if e, ok := catalog.ListedBy([]string{m.Provider}, m.ID); ok {
+			return e
+		}
 	}
 	return borrowedEfforts(m.ID)
 }
@@ -1846,10 +1856,8 @@ func (p Provider) ListPrice(model string) (catalog.Price, bool) {
 			// price: the zero is the tag's, not the model's. A catalog that
 			// prices the model itself at zero is taken at its word: it is a
 			// relay's own free model.
-			if canon, ok := VariantName(m); ok {
-				if mPr, mOk := catalog.PricedBy(makerPriceCatalogs(), canon); mOk && (mPr.Input > 0 || mPr.Output > 0) {
-					return mPr, true
-				}
+			if mPr, mOk := makerPriceOfVariant(m); mOk {
+				return mPr, true
 			}
 			return pr, true
 		}
@@ -1858,9 +1866,28 @@ func (p Provider) ListPrice(model string) (catalog.Price, bool) {
 		}
 	}
 	if pr, ok := p.pluginListPrice(model); ok {
+		// a plugin pricing a running variant of a model at zero — a free
+		// promotional one (opencode-zen-free's mimo-v2.6-flash-free) — is
+		// read at its maker's price, as a relay's catalog zero is above: the
+		// zero is the tag's, not the model's, and the Usage page already
+		// counts it at that price (priceOf), so the editor showed a list
+		// price the call was never billed at.
+		if pr.Input == 0 && pr.Output == 0 {
+			if mPr, mOk := makerPriceOfVariant(model); mOk {
+				return mPr, true
+			}
+		}
 		return pr, true
 	}
 	if p.pluginFree(model) {
+		// a plan's free model whose id carries a running tag — a Zero free
+		// plan's mimo-v2.6-flash-free — is the paid model's, its tag aside:
+		// the Usage page already counts it at the maker's price (priceOf
+		// reads a zero that way), so the editor showed a list price the
+		// call was never billed at.
+		if mPr, mOk := makerPriceOfVariant(model); mOk {
+			return mPr, true
+		}
 		return catalog.Price{}, true
 	}
 	return catalog.Price{}, false
@@ -2139,6 +2166,23 @@ func MakerPrice(model string) (catalog.Price, bool) {
 	return catalog.Price{}, false
 }
 
+// makerPriceOfVariant is the maker's price of the model a relay's running
+// tag in id is a variant of — the zero a relay or a plugin wrote for
+// gemini-3.8-flash-high or mimo-v2.6-flash-free is the tag's, not the
+// model's — and false when the id is its own name or no maker lists it.
+func makerPriceOfVariant(id string) (catalog.Price, bool) {
+	canon, ok := VariantName(id)
+	if !ok {
+		return catalog.Price{}, false
+	}
+	for _, m := range pricedNames(canon) {
+		if pr, ok := catalog.PricedBy(makerPriceCatalogs(), m); ok && (pr.Input > 0 || pr.Output > 0) {
+			return pr, true
+		}
+	}
+	return catalog.Price{}, false
+}
+
 // SamePriceIn is the maker's list price of the model the user said
 // providerID's model is the same as (settings' ModelSameAs, #2344): for an
 // id of the provider's own that no list prices, as WorkBuddy's kimi-k3-1
@@ -2234,7 +2278,11 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 		return SamePriceIn(s, id, model)
 	}
 	pr, ok := p.ListPrice(model)
-	if !ok || (pr.Input == 0 && pr.Output == 0) {
+	// A zero the provider's own list gives is its word, not a gap to fill: a
+	// plan or a relay serving the model free (clineFreeModel, pluginFree)
+	// must not be priced at the maker's. Only a model no list prices is
+	// looked up further, the way EffectivePrice documents it.
+	if !ok {
 		if mPr, mOk := MakerPrice(model); mOk && (mPr.Input > 0 || mPr.Output > 0) {
 			pr, ok = mPr, true
 		} else if canon != "" && canon != model {
@@ -2251,7 +2299,7 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 	}
 	// then a custom price configured under another provider for the same core model
 	// when this known provider and the maker's catalog have none
-	if !ok || (pr.Input == 0 && pr.Output == 0) {
+	if !ok {
 		if borrowed, found := crossProviderPrice(s.ModelPrices, model); found && (borrowed.Input > 0 || borrowed.Output > 0) {
 			pr, ok = borrowed, true
 		}

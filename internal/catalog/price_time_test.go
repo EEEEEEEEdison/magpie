@@ -160,3 +160,55 @@ func TestTimesAndSameKeepTheWindows(t *testing.T) {
 		t.Error("a shorter OffDates is not the same price")
 	}
 }
+
+// A long-context price a vendor charges for a while is a tier with the days
+// it holds on: a request within them is billed the tier, one before or after
+// them the price above, and one of no time told the tier, as a price read
+// without a time has only the file's word.
+func TestADatedTierHoldsOnItsDays(t *testing.T) {
+	p := Price{Input: 1, Output: 2, CacheRead: 0.1, TimeZone: "UTC",
+		Tiers: []Tier{{Above: 272000, Input: 20, Output: 75, CacheRead: 2, From: "2026-09-01", To: "2026-09-30"}}}
+	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 12, 0, 0, 0, time.UTC) }
+	for _, c := range []struct {
+		at   time.Time
+		want float64
+	}{
+		{day(2026, 8, 31), 1},  // the day before it began
+		{day(2026, 9, 1), 20},  // its first day
+		{day(2026, 9, 30), 20}, // its last
+		{day(2026, 10, 1), 1},  // the day it ended
+		{time.Time{}, 20},      // no time told: the file's word
+	} {
+		if got := p.AtTime(c.at).At(500000); got.Input != c.want {
+			t.Errorf("over 272k at %v: input %v, want %v", c.at, got.Input, c.want)
+		}
+	}
+	// one day alone: From only, or To only
+	open := Price{Input: 1, Output: 2, Tiers: []Tier{{Above: 100, Input: 9, Output: 9, From: "2026-01-01"}}}
+	if got := open.AtTime(day(2027, 5, 1)).At(1000); got.Input != 9 {
+		t.Errorf("a tier with only its first day ended: %+v", got)
+	}
+	if got := open.AtTime(day(2025, 12, 31)).At(1000); got.Input != 1 {
+		t.Errorf("a tier before its first day: %+v", got)
+	}
+}
+
+// A model the user says has no long-context price is billed the price above
+// whatever its list gave it, and a priced one is not.
+func TestNoTiersBillsThePriceAbove(t *testing.T) {
+	p := Price{Input: 1, Output: 2, Tiers: []Tier{{Above: 272000, Input: 20, Output: 75}}, NoTiers: true}
+	if got := p.At(500000); got.Input != 1 || got.Output != 2 {
+		t.Errorf("At over 272k: %+v, want the price above", got)
+	}
+	if got := p.AtTime(time.Now()).At(500000); got.Input != 1 {
+		t.Errorf("AtTime over 272k: %+v, want the price above", got)
+	}
+	kept := p
+	kept.NoTiers = false
+	if kept.At(500000).Input != 20 {
+		t.Error("the tier is billed again once the word is taken back")
+	}
+	if p.Same(kept) {
+		t.Error("Same reads NoTiers")
+	}
+}

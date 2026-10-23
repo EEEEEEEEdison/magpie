@@ -94,7 +94,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", serve(lang, posts));
         await page.goto("http://magpie.test/?view=providers");
-        await page.locator(".row.provider", { hasText: "ZCode" }).first().click();
+        // the list is drawn more than once while the page loads (its own
+        // read, then the window's load()), so a row found before then is
+        // replaced under the press: wait for the load, then press the row
+        // as it is now
+        await page.waitForFunction(() => window.load?.done === true);
+        const zcode = page.locator(".row.provider", { hasText: "ZCode" }).first();
+        await zcode.waitFor({ state: "visible" });
+        await zcode.click();
         const row = (id) => page.locator(`.editor .accts .acc[data-account-id="${id}"]`);
         await row(TEAM).locator(".acct-who").waitFor();
 

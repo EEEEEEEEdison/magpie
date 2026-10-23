@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,8 +60,20 @@ func TestDesktopSessionAccountMetadata(t *testing.T) {
 	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	// the third-party mode's folder, whatever else this system's sets hold:
+	// on Windows a set's All is Data, Mode and ThreeP, whose Mode is a
+	// folder of its own that is not -3p's
 	root := sessions.DesktopDataDirs()[0]
-	root3p := sessions.DesktopDataDirs()[1]
+	root3p := ""
+	for _, d := range sessions.DesktopDataDirs() {
+		if strings.HasSuffix(filepath.Base(d), "-3p") {
+			root3p = d
+			break
+		}
+	}
+	if root3p == "" {
+		t.Fatalf("no third-party Desktop folder among %v", sessions.DesktopDataDirs())
+	}
 	account, org := "11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222"
 	write := func(path, text string) {
 		t.Helper()

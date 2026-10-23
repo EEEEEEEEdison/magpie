@@ -113,7 +113,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const rows = p.locator(".led tbody tr.led-row");
 
         // opened: loading first, then the input and the output
-        await reader.click(p, rows.nth(0));
+        await reader.reach(p, rows.nth(0));
+        await rows.nth(0).click();
         assert.equal((await p.locator(".led-cx").first().textContent()).trim(), w.loading);
         await p.locator(".led-cx .cx-sec").first().waitFor();
         assert.deepEqual(await p.locator(".led-cx .cx-sec h4").allTextContents(), [w.input, w.output]);
@@ -123,29 +124,34 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // the reasoning and the agent's own context are folded, the words are not
         assert.deepEqual(await p.locator(".led-cx details.cx-part").evaluateAll((ds) => ds.map((d) => d.open)), [false, false]);
         assert(!(await p.locator(".led-cx details.cx-part .cx-t").first().isVisible()), "folded");
-        await reader.click(p, p.locator(".led-cx details.cx-part summary").first());
+        await reader.reach(p, p.locator(".led-cx details.cx-part summary").first());
+        await p.locator(".led-cx details.cx-part summary").first().click();
         assert(await p.locator(".led-cx details.cx-part").first().evaluate((d) => d.open));
         assert.equal((await p.locator(".led-cx details.cx-part .cx-t").first().textContent()).trim(), "<system-reminder>be careful</system-reminder>");
         // a long part shows some of itself and unrolls
         assert.equal(await p.locator(".led-cx .cx-part.clamp").count(), 1, "the long one only");
         const long = p.locator(".led-cx .cx-part").filter({ has: p.locator(".cx-more") }); // the same part, unrolled or not
         const short = await long.locator(".cx-t").evaluate((e) => e.getBoundingClientRect().height);
-        await reader.click(p, long.locator(".cx-more"));
+        await reader.reach(p, long.locator(".cx-more"));
+        await long.locator(".cx-more").click();
         assert(!(await long.evaluate((e) => e.classList.contains("clamp"))), "unrolled");
         const tall = await long.locator(".cx-t").evaluate((e) => e.getBoundingClientRect().height);
         assert(tall > short * 2, `the whole is taller: ${short} → ${tall}`);
         assert.equal((await long.locator(".cx-more").textContent()).trim(), w.less);
         refreshed.input = 1;
-        await reader.click(p, p.locator("#usageReload"));
+        await reader.reach(p, p.locator("#usageReload"));
+        await p.locator("#usageReload").click();
         await p.waitForTimeout(350);
         await p.locator(".led-cx .cx-sec").first().waitFor();
         const collapsed = await long.evaluate(e => e.classList.contains("clamp"));
         t.diagnostic("After changed ledger refresh: long content collapsed=" + collapsed);
         assert.equal(collapsed, false, "refresh must retain expanded request text");
         assert.equal((await long.locator(".cx-more").textContent()).trim(), w.less);
-        await reader.click(p, long.locator(".cx-more"));
+        await reader.reach(p, long.locator(".cx-more"));
+        await long.locator(".cx-more").click();
         refreshed.input = 2;
-        await reader.click(p, p.locator("#usageReload"));
+        await reader.reach(p, p.locator("#usageReload"));
+        await p.locator("#usageReload").click();
         await p.waitForTimeout(350);
         await p.locator(".led-cx .cx-sec").first().waitFor();
         assert(await long.evaluate(e => e.classList.contains("clamp")), "refresh also retains the reader's collapse choice");
@@ -166,7 +172,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.equal(Date.parse(g.to), t0 + 3100 + 30e3);
 
         // a call of a session file: at its own time
-        await reader.click(p, rows.nth(1));
+        await reader.reach(p, rows.nth(1));
+        await rows.nth(1).click();
         await p.locator(".led-detail").nth(1).locator(".cx-sec").first().waitFor();
         const l = asked.at(-1);
         assert.equal(l.session, "sess-log");
@@ -177,19 +184,24 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
         // and those the files can't tell, each saying why
         for (const [i, why] of [[2, w.why[0]], [3, w.why[1]], [4, w.why[2]]]) {
-          await reader.click(p, rows.nth(i));
+          await reader.reach(p, rows.nth(i));
+          await rows.nth(i).click();
           await p.locator(".led-detail").nth(i).locator(".cx-none", { hasText: why.slice(0, 20) }).waitFor();
           assert.equal((await p.locator(".led-detail").nth(i).locator(".cx-none").textContent()).trim(), why);
         }
 
         // opened again, or the list read anew, asks no more
         const n = asked.length;
-        await reader.click(p, rows.nth(0)); // closed
-        await reader.click(p, rows.nth(0)); // opened
+        await reader.reach(p, rows.nth(0));
+        await rows.nth(0).click(); // closed
+        await reader.reach(p, rows.nth(0));
+        await rows.nth(0).click(); // opened
         await p.locator(".led-detail").first().locator(".cx-sec").first().waitFor();
         const r = refreshed.n;
-        await reader.click(p, p.locator("#ledStatus .opt").nth(1));
-        await reader.click(p, p.locator("#ledStatus .opt").nth(0));
+        await reader.reach(p, p.locator("#ledStatus .opt").nth(1));
+        await p.locator("#ledStatus .opt").nth(1).click();
+        await reader.reach(p, p.locator("#ledStatus .opt").nth(0));
+        await p.locator("#ledStatus .opt").nth(0).click();
         for (let i = 0; i < 60 && refreshed.n < r + 2; i++) await p.waitForTimeout(40);
         await p.waitForTimeout(200);
         await p.locator(".led-detail").first().locator(".cx-sec").first().waitFor();
@@ -201,8 +213,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           if (q.get("session") === ROWS[4].session) return route.fulfill({ json: { found: true, input: [], output: [{role:"assistant",text:"Written later"}] } });
           return route.fallback();
         });
-        await reader.click(p, rows.nth(4));
-        await reader.click(p, rows.nth(4));
+        await reader.reach(p, rows.nth(4));
+        await rows.nth(4).click();
+        await reader.reach(p, rows.nth(4));
+        await rows.nth(4).click();
         await p.getByText("Written later", { exact: true }).waitFor();
 
         if (shots) await p.screenshot({ path: path.join(shots, `content-${engine}-${lang}.png`) });
@@ -220,7 +234,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await p.locator('[data-view="usage"]').first().click();
       await p.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();
       await p.locator("#ledWrap .led tbody tr").first().waitFor();
-      await reader.click(p, p.locator(".led tbody tr.led-row").nth(0));
+      await reader.reach(p, p.locator(".led tbody tr.led-row").nth(0));
+      await p.locator(".led tbody tr.led-row").nth(0).click();
       await p.locator(".led-cx .cx-sec").first().waitFor();
       const box = await p.locator(".led-box").boundingBox(), wrap = await p.locator("#ledWrap").boundingBox();
       assert(box.x >= wrap.x - 1 && box.x + box.width <= wrap.x + wrap.width + 1, `the details fit the box at 560: ${box.width} in ${wrap.width}`);

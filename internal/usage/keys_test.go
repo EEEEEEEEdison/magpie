@@ -73,9 +73,15 @@ func TestKeyUsageKeepsIdentityAndPrices(t *testing.T) {
 			t.Fatalf("old provider id: %+v", g)
 		}
 	}
-	rows, _, _ := ledger(Month.Since(now), Filter{Query: "TEAM"}, recs)
+	// the search asks the models alone: a key's name finds no row, and the
+	// rows a key answered keep its identity for the CSV
+	if found, _, _ := ledger(Month.Since(now), Filter{Query: "TEAM"}, recs); len(found) != 0 {
+		t.Fatalf("search found a row by a key's name: %+v", found)
+	}
+	all, _, _ := ledger(Month.Since(now), Filter{}, recs)
+	rows := slices.DeleteFunc(slices.Clone(all), func(r Row) bool { return r.ProviderKeyID != team })
 	if len(rows) != 2 {
-		t.Fatalf("key name search: %+v", rows)
+		t.Fatalf("the team key's rows: %+v", rows)
 	}
 	var b strings.Builder
 	if err := WriteCSV(&b, rows); err != nil {

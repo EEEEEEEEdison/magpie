@@ -95,6 +95,30 @@ func TestPricedByCanonicalIDKeepsOtherPrices(t *testing.T) {
 	}
 }
 
+// The canonical models.dev names today carries the day of the snapshot —
+// deepseek/deepseek-v4.1-flash-1017 — while WorkBuddy and the relays serve
+// deepseek-v4.1-flash, which is the same model: #1520, as api.json reads
+// since that entry was updated. A four-digit release that is no month and
+// day (qwen's -2507) is a model's own name, not a snapshot's.
+func TestPricedByCanonicalIDDated(t *testing.T) {
+	writeCatalog(t, `{"deepseek":{"id":"deepseek","models":{
+"deepseek-flash":{"id":"deepseek-flash","cost":{"input":0.15,"output":0.6,"cache_read":0.003},"canonical_model_id":"deepseek/deepseek-v4.1-flash-1017"}}},
+"alibaba-cn":{"id":"alibaba-cn","models":{
+"qwen3.8-2507":{"id":"qwen3.8-2507","cost":{"input":1,"output":2},"canonical_model_id":"alibaba/qwen3.8-2507"}}}}`)
+	for _, id := range []string{"deepseek-v4.1-flash", "deepseek-v4-1-flash", "DeepSeek-V4.1-Flash"} {
+		if p, ok := PricedBy([]string{"deepseek"}, id); !ok || p.Input != 0.15 || p.Output != 0.6 {
+			t.Errorf("PricedBy(%q) = %+v, %v, want deepseek-flash's 0.15/0.6", id, p, ok)
+		}
+	}
+	// a version that isn't a month and a day is not a snapshot's date
+	if p, ok := PricedBy([]string{"deepseek", "alibaba-cn"}, "qwen3.8"); ok {
+		t.Errorf("qwen3.8 priced %+v by qwen3.8-2507", p)
+	}
+	if p, ok := PricedBy([]string{"deepseek"}, "deepseek-v4.1-flash-2"); ok {
+		t.Errorf("deepseek-v4.1-flash-2 priced %+v", p)
+	}
+}
+
 // Entries a vendor lists under one canonical at different prices price
 // none of them, whichever the map gives first. models.dev has none such
 // today without the canonical id listed too (Moonshot's kimi-k2.7-code

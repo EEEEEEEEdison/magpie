@@ -223,7 +223,7 @@ func TestUsageOverBudgetHistoryIsReadOnce(t *testing.T) {
 			if got.Totals != want.Totals {
 				t.Fatalf("%s summary: %+v / %+v", p, got.Totals, want.Totals)
 			}
-			for _, f := range []Filter{{}, {Model: "m"}, {Agent: "codex"}, {Query: "relay"}} {
+			for _, f := range []Filter{{}, {Model: "m"}, {Agent: "codex"}, {Query: "M"}} {
 				equalPage(t, QueryPage(p, f, 0, 100), pageFromLedger(p, f, 0, 100, LedgerOf(p, f)))
 			}
 		}

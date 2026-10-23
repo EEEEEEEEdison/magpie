@@ -88,7 +88,7 @@ func TestSummaryByAccount(t *testing.T) {
 }
 
 // The ledger keeps one account's calls, the CSV says the account of each,
-// and a search finds them by it.
+// and a search asks the models alone, not the account.
 func TestLedgerByAccount(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
@@ -105,8 +105,10 @@ func TestLedgerByAccount(t *testing.T) {
 	if rows, _, _ := ledger(Month.Since(now), Filter{Account: "a@example.com", Provider: "claude"}, recs); len(rows) != 1 {
 		t.Fatalf("account a on Claude: %+v", rows)
 	}
-	if rows, _, _ := ledger(Month.Since(now), Filter{Query: "B@EXAMPLE"}, recs); len(rows) != 2 {
-		t.Fatalf("search by account: %+v", rows)
+	// the search asks the models alone: an account's name finds no row; its
+	// own filter does
+	if rows, _, _ := ledger(Month.Since(now), Filter{Query: "B@EXAMPLE"}, recs); len(rows) != 0 {
+		t.Fatalf("search found a row by its account: %+v", rows)
 	}
 	rows, _, _ = ledger(Month.Since(now), Filter{Provider: "cx"}, recs)
 	var b strings.Builder

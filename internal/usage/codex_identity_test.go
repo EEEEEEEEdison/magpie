@@ -136,12 +136,13 @@ func TestCodexLedgerResponseIdentityAndOwnConsumption(t *testing.T) {
 	if row, ok := findRowByResponse(rows, "resp-nested"); !ok || row.Model != "m" || row.SessionRole != "subagent" || row.Session != "main-a" || row.Subagent != "nested-c" || row.ParentAgent != "child-b" || row.Input != 150 || row.Effort != "medium" {
 		t.Fatalf("nested child row: %+v, found=%t", row, ok)
 	}
-	if filtered := LedgerOf(All, Filter{Query: "nested-c"}).Rows; len(filtered) != 1 || filtered[0].ResponseID != "resp-nested" {
-		t.Fatalf("ledger child-id filter = %+v", filtered)
+	// the search asks the models alone: an actor's id finds no row, while
+	// the model every row here was served finds them all
+	if filtered := LedgerOf(All, Filter{Query: "nested-c"}).Rows; len(filtered) != 0 {
+		t.Fatalf("ledger searched an actor's id: %+v", filtered)
 	}
-	parentFiltered := LedgerOf(All, Filter{Query: "child-b"}).Rows
-	if len(parentFiltered) != 4 {
-		t.Fatalf("ledger subagent and direct-parent filter = %+v", parentFiltered)
+	if filtered := LedgerOf(All, Filter{Query: "m"}).Rows; len(filtered) != len(rows) {
+		t.Fatalf("ledger model filter over the subagent calls = %d rows, want %d", len(filtered), len(rows))
 	}
 	for _, id := range []string{"resp-conflict", "resp-unpaired", "resp-rejected"} {
 		row, ok := findRowByResponse(rows, id)
@@ -225,9 +226,9 @@ func TestCodexRequestPageFoldsCopiesBeforeResponseMatching(t *testing.T) {
 	gateway.add(Row{Record: Record{Time: now.Add(-time.Minute), Agent: "codex", Provider: "openai", Model: "m", Input: 300, Output: 30, Status: 200, ResponseID: "resp-parent"}}, "", 1, false)
 	local.add(Row{Record: Record{Time: now.Add(-time.Hour), Agent: "codex", Model: "native-model", Input: 30, Output: 3,
 		Session: "native-session", ResponseID: "resp-parent"}, Source: "log", codexActor: "nested-c"}, "", 1, false)
-	page = buildRequestBlocksWithCodex(All, Filter{Query: "child-b"}, 0, 100, now, []*rowChunk{gateway}, []*rowChunk{local}, nil, nil, identities)
+	page = buildRequestBlocksWithCodex(All, Filter{Query: "m"}, 0, 100, now, []*rowChunk{gateway}, []*rowChunk{local}, nil, nil, identities)
 	if len(page.Rows) != 1 || page.Rows[0].ResponseID != "resp-parent" || page.Rows[0].ParentAgent != "child-b" {
-		t.Fatalf("request-page parent-id filter = %+v", page.Rows)
+		t.Fatalf("request-page model filter over a folded pair = %+v", page.Rows)
 	}
 }
 
@@ -373,9 +374,9 @@ func TestCodexQueryPageRefreshesIdentityAndSharesJSONFields(t *testing.T) {
 	if wire["response_id"] != "resp-cache" || wire["session_role"] != "subagent" {
 		t.Fatalf("usage row JSON lacks identity fields: %s", encoded)
 	}
-	filtered := QueryPage(All, Filter{Query: "child-b"}, 0, 100)
+	filtered := QueryPage(All, Filter{Query: "m"}, 0, 100)
 	if len(filtered.Rows) != 1 || filtered.Rows[0].ResponseID != "resp-cache" {
-		t.Fatalf("request-page child-id filter = %+v", filtered.Rows)
+		t.Fatalf("request-page model filter = %+v", filtered.Rows)
 	}
 
 	writeCodexCall(t, childPath, "child-b", "native-main", `"vscode"`, "resp-cache", "native-model", "low", now.Add(-time.Minute), 40, 4)

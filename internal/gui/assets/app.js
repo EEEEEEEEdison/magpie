@@ -7614,8 +7614,8 @@ function tokenSize(n) {
 // samePrice: two prices alike in every part, their 1-hour cache writes and
 // long-context prices included
 function samePrice(a, b) {
-  const norm = (p) => JSON.stringify([p.input, p.output, p.cache_read || 0, p.cache_write || 0, p.cache_write_1h || 0,
-    (p.tiers || []).map((x) => [x.above, x.input, x.output, x.cache_read || 0, x.cache_write || 0, x.cache_write_1h || 0])]);
+  const norm = (p) => JSON.stringify([p.input, p.output, p.cache_read || 0, p.cache_write || 0, p.cache_write_1h || 0, p.no_tiers ? 1 : 0,
+    (p.tiers || []).map((x) => [x.above, x.input, x.output, x.cache_read || 0, x.cache_write || 0, x.cache_write_1h || 0, x.from || "", x.to || ""])]);
   return norm(a) === norm(b);
 }
 function input(value, placeholder, type = "text") {
@@ -11302,13 +11302,49 @@ function renderModels(p) {
         tierRow.append(box);
         return i;
       });
+      // the days it holds on, "2006-01-02": a surcharge the vendor charges
+      // only for a while (OpenAI's long-context price from the day it began
+      // to the day it ended) is billed within them, its price above outside
+      const tierDay = (k, label, ph) => {
+        const i = input(tierNow()?.[k] || "", ph);
+        i.defaultValue = i.value;
+        i.dataset.part = "tier_" + k;
+        i.setAttribute("aria-label", label);
+        i.spellcheck = false;
+        i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") i.blur(); };
+        i.onchange = () => takePrice();
+        return i;
+      };
+      const fromDay = tierDay("from", t("Long-context price from"), "");
+      const toDay = tierDay("to", t("Long-context price to"), "");
+      const fromBox = el("label", "mpart");
+      fromBox.append(el("span", "", t("Starts on")), fromDay);
+      const toBox = el("label", "mpart");
+      toBox.append(el("span", "", t("Ends on")), toDay);
+      tierRow.append(fromBox, toBox);
+      // the model's own answer: none at all, whatever its list says. A
+      // vendor that stopped charging one is not billed it any more, and a
+      // relay that never charged it is not billed its model's.
+      const offTier = el("button", "text action mtier-off", t("No long-context price"));
+      offTier.title = t("The model has no long-context price: a request over any size is billed at the price above, whatever its list says");
+      offTier.onclick = (e) => { e.preventDefault(); tierOpen = false; takePrice("off"); };
+      tierRow.append(offTier);
+      const noTierNow = () => !!(prefs[id]?.price ? prefs[id].price.no_tiers : m.price?.no_tiers);
       const moreTier = el("button", "text action mtier-add", t("Long-context price"));
       moreTier.title = tierRow.title;
       let tierOpen = false;
-      moreTier.onclick = (e) => { e.preventDefault(); tierOpen = true; drawTier(); above.focus({ preventScroll: true }); };
+      moreTier.onclick = (e) => {
+        e.preventDefault();
+        tierOpen = true;
+        if (noTierNow()) takePrice(); // on again: the list's, until one is typed
+        else drawTier();
+        above.focus({ preventScroll: true });
+      };
       const drawTier = () => {
-        tierRow.hidden = !tierOpen && !tierNow() && !listTier;
+        const off = noTierNow();
+        tierRow.hidden = off || (!tierOpen && !tierNow() && !listTier);
         moreTier.hidden = !tierRow.hidden;
+        moreTier.textContent = off ? t("Long-context price: none") : t("Long-context price");
       };
       priceBox.append(moreTier, tierRow);
       drawTier();
@@ -11317,16 +11353,20 @@ function renderModels(p) {
         cells.forEach((c, i) => { const k = parts[i][0]; c.value = !pr ? "" : k === "cache_write_1h" ? pr.cache_write_1h ? shown(pr.cache_write_1h) : "" : shown(pr[k]); });
         const tr = tierNow();
         above.value = tr ? tokenSize(tr.above) : "";
+        fromDay.value = tr?.from || "";
+        toDay.value = tr?.to || "";
         tierCells.forEach((c, i) => { c.value = tr ? shown(tr[tierParts[i][0]]) : ""; });
         drawTier();
       };
-      const takePrice = () => {
+      const takePrice = (mode) => {
+        const off = mode === "off";
         const v = cells.map((c) => c.value.trim());
         const tv = [above, ...tierCells].map((c) => c.value.trim());
+        const dates = [fromDay, toDay].map((c) => c.value.trim());
         const x = pref();
         delete x.price; delete x.ownPrice;
         if (draft.priceTyped) delete draft.priceTyped[id];
-        if (v.every((s) => s === "") && tv.every((s) => s === "")) {
+        if (!off && v.every((s) => s === "") && tv.every((s) => s === "") && dates.every((s) => s === "")) {
           if (m.price) x.ownPrice = true;
           drawReset();
           return;
@@ -11354,9 +11394,17 @@ function renderModels(p) {
           if (n > 0) price.cache_write_1h = n;
         }
         // the long-context price: its parts typed, else the list's, else the
-        // price's own; none typed, the list's as it is
+        // price's own; none typed, the list's as it is. Off is the model's
+        // own word that it has none.
         const from = tierNow() || listTier;
-        if (tv.some((s) => s !== "")) {
+        if (off) {
+          price.no_tiers = true;
+        } else if (tv.some((s) => s !== "") || dates.some((s) => s !== "")) {
+          const day = (s) => s === "" || /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s));
+          if (!day(dates[0]) || !day(dates[1])) return bad(t("A day is written YYYY-MM-DD, like 2026-09-25"));
+          // a surcharge that ends before it begins is no window at all; the
+          // days compare as written, a "2006-01-02" day sorting by itself
+          if (dates[0] && dates[1] && dates[0] > dates[1]) return bad(t("A long-context price starts on or before the day it ends"));
           const size = tv[0] === "" ? from?.above : tokensTyped(tv[0]);
           if (!(size > 0)) return bad(t("A long-context price starts over a number of input tokens, like 272K"));
           const tier = { above: size };
@@ -11365,6 +11413,8 @@ function renderModels(p) {
             if (!(n >= 0)) return bad(t("A price is a number of dollars, 0 or more"));
             tier[k] = n;
           }
+          if (dates[0]) tier.from = dates[0];
+          if (dates[1]) tier.to = dates[1];
           price.tiers = [tier, ...((priceNow() || m.list)?.tiers || []).slice(1).filter((x) => x.above > size)];
         } else if (m.list?.tiers?.length) price.tiers = m.list.tiers;
         if (!m.price || !samePrice(m.price, price)) x.price = price;

@@ -50,8 +50,8 @@ type Row struct {
 func (r Record) Failed() bool { return r.Status >= 400 || r.Error != "" }
 
 // Filter narrows the ledger: to a route, one agent (its id, as AgentOf gives it), to
-// one provider, to the failed calls, and to the rows whose models, provider, host or
-// session hold Query (any case).
+// one provider, to the failed calls, and to the rows whose model or served
+// model holds Query (any case).
 type Filter struct {
 	Day       string // YYYY-MM-DD in the chart's local time zone; "" is the whole period
 	CallerKey string
@@ -69,7 +69,9 @@ type Filter struct {
 	// card's two counts are of
 	Failed  bool
 	Retried bool
-	Query   string
+	// Query keeps the rows whose model or served model holds it, any case:
+	// the Requests page's search box, which asks the models alone
+	Query string
 	// Computer narrows to the calls of one computer (#542): ThisComputer,
 	// OtherComputers, or another's id; "" is every computer's
 	Computer string
@@ -120,7 +122,7 @@ func (f Filter) keepsRow(r Row) bool {
 	if f.Through != "" && SourceOf(r) != f.Through {
 		return false
 	}
-	return f.keepsRecord(r.Record, r.SessionRole != "", r.Subagent, r.ParentAgent)
+	return f.keepsRecord(r.Record)
 }
 
 // OtherComputers is the Filter.Computer of every other computer's calls.
@@ -140,10 +142,10 @@ func (f Filter) computer(r Record) bool {
 }
 
 func (f Filter) keeps(r Record) bool {
-	return f.keepsRecord(r, false, "", "")
+	return f.keepsRecord(r)
 }
 
-func (f Filter) keepsRecord(r Record, codexIdentity bool, subagent, parentAgent string) bool {
+func (f Filter) keepsRecord(r Record) bool {
 	if f.Day != "" {
 		var day [len(time.DateOnly)]byte
 		if string(r.Time.In(time.Local).AppendFormat(day[:0], time.DateOnly)) != f.Day {
@@ -182,13 +184,12 @@ func (f Filter) keepsRecord(r Record, codexIdentity bool, subagent, parentAgent 
 	if f.Retried && !r.RetriedRequest() {
 		return false
 	}
+	// the search asks the models alone: the one the ledger recorded and the
+	// one the upstream said it served. A call the client asked for by one
+	// name and another answered is found by that other, never by the name
+	// asked for, so a model's search lists its own calls and no others.
 	if q := strings.ToLower(strings.TrimSpace(f.Query)); q != "" {
-		if codexIdentity && (strings.Contains(strings.ToLower(subagent), q) || strings.Contains(strings.ToLower(parentAgent), q)) {
-			return true
-		}
-		return slices.ContainsFunc([]string{r.Requested, r.Model, r.Served, r.Upstream, r.Provider, r.Host, r.Session, r.Effort, r.SessionProvider, r.SessionAccount, r.ProviderKeyID, r.ProviderKeyName, r.Account(), r.CallerKeyID, r.CallerKeyName}, func(s string) bool {
-			return strings.Contains(strings.ToLower(s), q)
-		})
+		return strings.Contains(strings.ToLower(r.Model), q) || strings.Contains(strings.ToLower(r.Served), q)
 	}
 	return true
 }

@@ -8,9 +8,10 @@ import (
 )
 
 // The Requests page packs rows into its cache and filters the rows it reads
-// back: the upstream key a call used must survive that, so a search by the
-// key's name finds the call there as it does in the ledger, and the summary
-// still groups the calls by key beside the remote route they came by.
+// back: the upstream key a call used must survive that, so a row still names
+// its key and route there, a model's search finds it as it does in the
+// ledger, and the summary still groups the calls by key beside the remote
+// route they came by.
 func TestRequestPageKeepsProviderKey(t *testing.T) {
 	pageHome(t)
 	now := time.Now()
@@ -24,17 +25,17 @@ func TestRequestPageKeepsProviderKey(t *testing.T) {
 			ProviderKeyID: id, ProviderKeyName: name, Input: 10, Output: 1, Status: 200})
 	}
 	for repeat := 0; repeat < 2; repeat++ {
-		page := QueryPage(All, Filter{Query: "team"}, 0, 100)
-		if page.Total != 3 || len(page.Rows) != 3 {
-			t.Fatalf("key name search: total %d, %+v", page.Total, page.Rows)
+		page := QueryPage(All, Filter{Query: "m"}, 0, 100)
+		if page.Total != 6 || len(page.Rows) != 6 {
+			t.Fatalf("model search: total %d, %+v", page.Total, page.Rows)
 		}
 		for _, r := range page.Rows {
-			if r.ProviderKeyID != team || r.ProviderKeyName != "Team" || r.Via != "studio" {
+			if r.ProviderKeyID != personal && r.ProviderKeyID != team || r.ProviderKeyName == "" || r.Via != "studio" {
 				t.Fatalf("row lost its key or route: %+v", r)
 			}
 		}
-		if page := QueryPage(All, Filter{Query: personal[:8]}, 0, 100); page.Total != 3 {
-			t.Fatalf("key id search: %d", page.Total)
+		if page := QueryPage(All, Filter{Query: personal[:8]}, 0, 100); page.Total != 0 {
+			t.Fatalf("a key's id found %d rows, want none: the search asks the models", page.Total)
 		}
 	}
 	s := Summarize(All)

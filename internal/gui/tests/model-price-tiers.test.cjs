@@ -65,7 +65,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const zh = lang === "zh";
       const L = { names: zh ? "名称与推理档位" : "Names & levels", input: zh ? "输入" : "Input", output: zh ? "输出" : "Output", cacheRead: zh ? "缓存读取" : "Cache read",
         oneHour: zh ? "1 小时缓存写入" : "Cache write 1h", long: zh ? "长上下文价格" : "Long-context price", over: zh ? "超过的输入 token 数" : "Over input tokens",
-        save: zh ? "保存" : "Save", badSize: zh ? "长上下文价格要写从多少输入 token 起算，比如 272K" : "A long-context price starts over a number of input tokens, like 272K" };
+        save: zh ? "保存" : "Save", badSize: zh ? "长上下文价格要写从多少输入 token 起算，比如 272K" : "A long-context price starts over a number of input tokens, like 272K",
+        from: zh ? "长上下文价格起始日" : "Long-context price from", to: zh ? "长上下文价格截止日" : "Long-context price to",
+        badDay: zh ? "日期写作 YYYY-MM-DD，例如 2026-09-25" : "A day is written YYYY-MM-DD, like 2026-09-25",
+        badOrder: zh ? "长上下文价格的起始日不能晚于截止日" : "A long-context price starts on or before the day it ends",
+        none: zh ? "无长上下文价格" : "No long-context price", noneSaid: zh ? "长上下文价格：无" : "Long-context price: none" };
       await page.locator('.row.provider[data-id="relay"]').click();
       if (!(await page.locator(".mnames:not([hidden])").count())) await page.getByRole("button", { name: L.names, exact: true }).click();
       const row = (id) => page.locator(".mname", { has: page.locator("code", { hasText: id }) });
@@ -78,7 +82,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // a list with a long-context price shows it in its quiet row, greyed
       assert(await row("gpt-6-astra").locator(".mtier").isVisible());
       assert(!(await row("gpt-6-astra").locator(".mtier-add").isVisible()));
-      assert.deepEqual(await tier("gpt-6-astra").evaluateAll((is) => is.map((i) => [i.value, i.placeholder])), [["", "272K"], ["", "20"], ["", "75"], ["", "2"], ["", "25"]]);
+      assert.deepEqual(await tier("gpt-6-astra").evaluateAll((is) => is.map((i) => [i.value, i.placeholder])), [["", "272K"], ["", "20"], ["", "75"], ["", "2"], ["", "25"], ["", ""], ["", ""]]);
       // the 1-hour box shows the list's, else 2× its input
       assert.deepEqual(await base("claude-opus-5-5").evaluateAll((is) => is.map((i) => i.placeholder)), ["5", "25", "0.5", "6.25", "10"]);
       // only a Claude model has a 1-hour box: gpt-6-astra has no such write
@@ -122,11 +126,30 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), L.over);
       await typeIn(row("plain-1").getByRole("textbox", { name: L.over, exact: true }), "lots");
       await page.locator("#status", { hasText: L.badSize }).waitFor();
+      // a day that isn't one is refused before the size is asked for
+      await typeIn(row("plain-1").getByRole("textbox", { name: L.from, exact: true }), "2026-9-1");
+      await page.locator("#status", { hasText: L.badDay }).waitFor();
       // (Enter first: the size taken fills the price boxes from its own, and
       // in Chromium a fill that blurs the size box lands after that fill)
       await typeIn(row("plain-1").getByRole("textbox", { name: L.over, exact: true }), "200k");
       await typeIn(row("plain-1").getByRole("textbox", { name: L.long + " · " + L.input, exact: true }), "2,5");
-      assert.deepEqual(await tier("plain-1").evaluateAll((is) => is.map((i) => i.value)), ["200K", "2.5", "4", "0.1", "0"]);
+      assert.deepEqual(await tier("plain-1").evaluateAll((is) => is.map((i) => i.value)), ["200K", "2.5", "4", "0.1", "0", "", ""]);
+      // the days it holds on: a vendor's surcharge that began and ended
+      await typeIn(row("plain-1").getByRole("textbox", { name: L.from, exact: true }), "2026-09-01");
+      await typeIn(row("plain-1").getByRole("textbox", { name: L.to, exact: true }), "2026-09-30");
+      assert.deepEqual(await tier("plain-1").evaluateAll((is) => is.map((i) => i.value)), ["200K", "2.5", "4", "0.1", "0", "2026-09-01", "2026-09-30"]);
+      // an end before the start is refused, and a refused price takes the
+      // whole edit with it (as every refused price does): typed again
+      await typeIn(row("plain-1").getByRole("textbox", { name: L.from, exact: true }), "2026-10-01");
+      await page.locator("#status", { hasText: L.badOrder }).waitFor();
+      for (const [label, v] of [[L.over, "200k"], [L.long + " · " + L.input, "2,5"], [L.from, "2026-09-01"], [L.to, "2026-09-30"]]) {
+        await typeIn(row("plain-1").getByRole("textbox", { name: label, exact: true }), v);
+      }
+      // a model whose list has one: the user's word that it has none
+      await row("gpt-6-astra").getByRole("button", { name: L.none, exact: true }).click();
+      assert(!(await row("gpt-6-astra").locator(".mtier").isVisible()));
+      assert(await row("gpt-6-astra").locator(".mtier-add").isVisible());
+      assert.equal(await row("gpt-6-astra").locator(".mtier-add").textContent(), L.noneSaid);
       assert.equal(await page.evaluate(() => scrollY), y, "nothing scrolled the page");
       assert.equal(await page.locator(".mname select").count(), 0);
       if (process.env.ARTIFACT_DIR) await page.locator(".mnames").screenshot({ path: path.join(process.env.ARTIFACT_DIR, `${engine}-${lang}-model-price-tier-rows.png`) });
@@ -136,14 +159,17 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(posts.map((p) => p.path), ["/api/provider/save"]);
       assert.deepEqual(posts[0].body.modelPrefs, {
         // its list's long-context price goes with the price set
-        "gpt-6-astra": { price: { input: 10, output: 1.5, cache_read: 0.25, cache_write: 12.5, tiers: astra.tiers } },
+        "gpt-6-astra": { price: { input: 10, output: 1.5, cache_read: 0.25, cache_write: 12.5, no_tiers: true } },
         "claude-opus-5-5": { price: { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25, cache_write_1h: 7.5 } },
-        "plain-1": { price: { input: 1, output: 4, cache_read: 0.1, cache_write: 0, tiers: [{ above: 200000, input: 2.5, output: 4, cache_read: 0.1, cache_write: 0 }] } },
+        "plain-1": { price: { input: 1, output: 4, cache_read: 0.1, cache_write: 0, tiers: [{ above: 200000, input: 2.5, output: 4, cache_read: 0.1, cache_write: 0, from: "2026-09-01", to: "2026-09-30" }] } },
       });
       const missing = await page.evaluate(() => ["Cache write 1h", "Long-context price", "Long-context price, over", "Over input tokens",
         "A long-context price starts over a number of input tokens, like 272K", "A cache write kept for an hour, as Anthropic bills it; empty: 2× input",
         "What the whole request costs when its input — cached tokens and cache writes included — is over this many tokens, as OpenAI bills gpt-6-astra over 272K; empty: the list's",
-        "{m} for 5 minutes, {h} for an hour"].filter((k) => !I18N.zh[k] || !I18N.ja[k] || !I18N.de[k]));
+        "{m} for 5 minutes, {h} for an hour", "Long-context price from", "Long-context price to", "Starts on", "Ends on",
+        "No long-context price", "Long-context price: none", "A day is written YYYY-MM-DD, like 2026-09-25",
+        "A long-context price starts on or before the day it ends",
+        "The model has no long-context price: a request over any size is billed at the price above, whatever its list says"].filter((k) => !I18N.zh[k] || !I18N.ja[k] || !I18N.de[k]));
       assert.deepEqual(missing, []);
       // no left-border accents on the new row
       assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll(".mtier, .mtier *")].filter((e) => parseFloat(getComputedStyle(e).borderLeftWidth) > 0 && getComputedStyle(e).borderLeftColor !== getComputedStyle(e).borderTopColor).length), 0);

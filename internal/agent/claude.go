@@ -917,7 +917,11 @@ func claudeIn(at place) *Agent {
 			// its group or its provider: Claude Code then runs to the window
 			// it is told (claudeContextEnv), as Codex is (provider.CompactFor,
 			// #1809)
-			if s.CompactAt == 0 && claudeOwnCompact(path, main) {
+			// a window the user typed for the main model leaves the
+			// threshold to it: Claude Code then runs to the window it is
+			// told. A Desktop model's typed window is not this one — the
+			// model here is the one Claude Code itself runs on
+			if s.CompactAt == 0 && (claudeOwnCompact(path, main) || provider.WindowTyped(main)) {
 				n = 0
 			}
 		}
@@ -1117,6 +1121,12 @@ func claudeIn(at place) *Agent {
 			if s.CompactAt == 0 && userTop {
 				return 0
 			}
+			// a window the user typed runs to itself, not to magpie's
+			// default under it (#1809, #2224): the default would cut a
+			// typed 500K back to 272K
+			if s.CompactAt == 0 && provider.WindowTyped(ref) {
+				return -1
+			}
 			return cmp.Or(s.Compact(), -1)
 		}
 		var models []claudeBudget
@@ -1127,9 +1137,10 @@ func claudeIn(at place) *Agent {
 					models = append(models, claudeBudget{id: id, window: e.Context, long: gateway.DesktopListed1M(e), compact: work(e.ID)})
 				}
 			}
-			if def == 0 && s.Compact() > 0 {
-				def = s.Compact()
-			}
+			// def stays 0 here: a top-level autoCompactWindow would take
+			// precedence over every model's own window below, which is
+			// what claudePlan writes instead (a model whose own differs
+			// from what it would run at without one)
 		}
 		if main != "" {
 			window := map[string]int{}

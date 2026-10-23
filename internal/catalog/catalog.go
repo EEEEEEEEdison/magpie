@@ -164,11 +164,16 @@ type Price struct {
 	// "2006-01-02" in TimeZone: a holiday on which a window holds but the
 	// vendor charges its other price.
 	OffDates []string `json:"off_dates,omitempty"`
+	// NoTiers says the model has no long-context price at all, whatever
+	// Tiers a list gave it: the user's word (settings.ModelPrice), as a
+	// surcharge a vendor stopped charging is no longer billed. A price of
+	// its own never carries both.
+	NoTiers bool `json:"no_tiers,omitempty"`
 }
 
 // Tier is a price from a request's input size on: what the whole request
 // costs once its input, cached and cache-written tokens included, is over
-// Above tokens.
+// Above tokens, on the days it holds on.
 type Tier struct {
 	Above        int     `json:"above"`
 	Input        float64 `json:"input"`
@@ -176,6 +181,13 @@ type Tier struct {
 	CacheRead    float64 `json:"cache_read"`
 	CacheWrite   float64 `json:"cache_write"`
 	CacheWrite1h float64 `json:"cache_write_1h,omitempty"`
+	// From and To are the days the tier holds on, "2006-01-02" in the
+	// price's TimeZone, From in and To out; neither is every day. A
+	// surcharge a vendor charges for a while — OpenAI's long-context price
+	// from the day it started to the day it ended — is a tier with both,
+	// and a request outside them is billed at the price above.
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
 }
 
 // TimeTier is a price in effect during a window of the week: what a request
@@ -346,9 +358,10 @@ func OneHourFor(id string, p *Price) {
 // Times is the price at r times each of its parts.
 func (p Price) Times(r float64) Price {
 	out := Price{Input: p.Input * r, Output: p.Output * r, CacheRead: p.CacheRead * r, CacheWrite: p.CacheWrite * r, CacheWrite1h: p.CacheWrite1h * r,
-		TimeZone: p.TimeZone, OffDates: slices.Clone(p.OffDates)}
+		TimeZone: p.TimeZone, OffDates: slices.Clone(p.OffDates), NoTiers: p.NoTiers}
 	for _, t := range p.Tiers {
-		out.Tiers = append(out.Tiers, Tier{Above: t.Above, Input: t.Input * r, Output: t.Output * r, CacheRead: t.CacheRead * r, CacheWrite: t.CacheWrite * r, CacheWrite1h: t.CacheWrite1h * r})
+		out.Tiers = append(out.Tiers, Tier{Above: t.Above, Input: t.Input * r, Output: t.Output * r, CacheRead: t.CacheRead * r, CacheWrite: t.CacheWrite * r, CacheWrite1h: t.CacheWrite1h * r,
+			From: t.From, To: t.To})
 	}
 	for _, t := range p.TimeTiers {
 		out.TimeTiers = append(out.TimeTiers, TimeTier{Days: slices.Clone(t.Days), From: t.From, To: t.To,
@@ -361,7 +374,7 @@ func (p Price) Times(r float64) Price {
 func (p Price) Same(q Price) bool {
 	if p.Input != q.Input || p.Output != q.Output || p.CacheRead != q.CacheRead || p.CacheWrite != q.CacheWrite ||
 		p.CacheWrite1h != q.CacheWrite1h || !slices.Equal(p.Tiers, q.Tiers) || p.TimeZone != q.TimeZone ||
-		!slices.Equal(p.OffDates, q.OffDates) || len(p.TimeTiers) != len(q.TimeTiers) {
+		!slices.Equal(p.OffDates, q.OffDates) || len(p.TimeTiers) != len(q.TimeTiers) || p.NoTiers != q.NoTiers {
 		return false
 	}
 	for i := range p.TimeTiers {
@@ -376,9 +389,11 @@ func (p Price) Same(q Price) bool {
 // tokens included, comes to prompt tokens is billed at: that of the highest
 // tier it is over, else the base price. OpenAI counts a request's input
 // with its cached tokens in it, and bills the whole request at the tier.
+// It reads every tier, as a caller with no time of the request has to: AtTime
+// drops the dated ones a call of t is outside.
 func (p Price) At(prompt int) Price {
 	flat := Price{Input: p.Input, Output: p.Output, CacheRead: p.CacheRead, CacheWrite: p.CacheWrite, CacheWrite1h: p.CacheWrite1h}
-	for _, t := range p.Tiers {
+	for _, t := range p.tiers() {
 		if prompt > t.Above {
 			flat = Price{Input: t.Input, Output: t.Output, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite, CacheWrite1h: t.CacheWrite1h}
 		}
@@ -386,17 +401,61 @@ func (p Price) At(prompt int) Price {
 	return flat
 }
 
+// tiers are the size tiers p bills at: none where the user said the model
+// has no long-context price (NoTiers), whatever a list gave it.
+func (p Price) tiers() []Tier {
+	if p.NoTiers {
+		return nil
+	}
+	return p.Tiers
+}
+
+// tiersOn are the size tiers that hold on the day t is, in p's zone: one
+// with From, To or both holds only within them; one with neither holds every
+// day. A zero t keeps them all, as a caller that can't tell the time of the
+// request has only the price as the file states it. The day is read only
+// where a tier is dated: this runs for every call counted, and a price of no
+// dated tier must cost what it did before them.
+func (p Price) tiersOn(t time.Time) []Tier {
+	ts := p.tiers()
+	if t.IsZero() || len(ts) == 0 {
+		return ts
+	}
+	dated := false
+	for _, x := range ts {
+		if x.From != "" || x.To != "" {
+			dated = true
+			break
+		}
+	}
+	if !dated {
+		return ts
+	}
+	day := t.In(p.zone()).Format("2006-01-02")
+	out := make([]Tier, 0, len(ts))
+	for _, x := range ts {
+		if x.From != "" && day < x.From || x.To != "" && day > x.To {
+			continue
+		}
+		out = append(out, x)
+	}
+	return out
+}
+
 // AtTime is p with the parts of the window t is in, its day of the week and
 // hour of the day in TimeZone, and its size tiers still cutting the request:
 // what one made then is billed at. A day in OffDates, or a time no TimeTier
 // holds, keeps the base price, and so does a zero t, or a price of no
-// windows, which is p itself.
+// windows, which is p itself. A size tier dated outside t is dropped: a
+// surcharge the vendor charges only for a while is not billed before or
+// after it.
 func (p Price) AtTime(t time.Time) Price {
+	out := p
+	out.Tiers = p.tiersOn(t)
 	tier, ok := p.timeTierAt(t)
 	if !ok {
-		return p
+		return out
 	}
-	out := p
 	out.Input, out.Output, out.CacheRead, out.CacheWrite, out.CacheWrite1h =
 		tier.Input, tier.Output, tier.CacheRead, tier.CacheWrite, tier.CacheWrite1h
 	return out
@@ -1008,6 +1067,12 @@ func canonicallyPriced(all map[string]mdProvider, providers []string, b string) 
 	for _, same := range []func(c string) bool{
 		func(c string) bool { return bareID(c) == b },
 		func(c string) bool { return dashed(bareID(c)) == dashed(b) },
+		// the canonical of the snapshot the vendor dates: DeepSeek names
+		// V4.1 Flash deepseek/deepseek-v4.1-flash-1017, and WorkBuddy and
+		// the relays serve it as deepseek-v4.1-flash (#1520, as api.json
+		// has it since the entry was updated)
+		func(c string) bool { return undated(bareID(c)) == undated(b) },
+		func(c string) bool { return dashed(undated(bareID(c))) == dashed(undated(b)) },
 	} {
 		for _, pid := range providers {
 			var got *Price
@@ -1561,6 +1626,40 @@ func mostGiven(by map[int]int) int {
 	}
 	return best
 }
+
+// undated is an id without the date a vendor appends to a snapshot of it:
+// YYYYMMDD, or the six digits Ark and DeepSeek write (deepseek's
+// "deepseek/deepseek-v4.1-flash-1017" is 2026-10-17). A four-digit release
+// (qwen's -2507) is a model of its own and stays.
+func undated(id string) string {
+	if i := strings.LastIndexAny(id, "-@"); i > 0 && snapshotDay(id[i+1:]) {
+		return id[:i]
+	}
+	return id
+}
+
+// snapshotDay is whether s is the date a snapshot is named by: YYYYMMDD from
+// 2000 on, YYMMDD from 2023 on, or a bare MMDD (DeepSeek's -1017 is
+// 2026-10-17), with a month and a day that are one. A version that reads as
+// neither (qwen's -2507, a 2025-07 release) is not one.
+func snapshotDay(s string) bool {
+	if strings.Trim(s, "0123456789") != "" {
+		return false
+	}
+	switch len(s) {
+	case 8:
+		return strings.HasPrefix(s, "20")
+	case 6:
+		yy, mm, dd := twoDigits(s[0:2]), twoDigits(s[2:4]), twoDigits(s[4:6])
+		return yy >= 23 && yy <= 39 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31
+	case 4:
+		mm, dd := twoDigits(s[0:2]), twoDigits(s[2:4])
+		return mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31
+	}
+	return false
+}
+
+func twoDigits(s string) int { return int(s[0]-'0')*10 + int(s[1]-'0') }
 
 // bareID is a model's id without the vendor's prefix, lowercase.
 func bareID(id string) string {

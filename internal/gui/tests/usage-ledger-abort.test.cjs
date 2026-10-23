@@ -19,7 +19,9 @@ const { inView } = require("./reader.cjs");
 
 const assets = process.env.MAGPIE_ASSETS || path.resolve(__dirname, "../assets");
 const now = Date.now();
-const ROW = (req) => ({ t: new Date(now - 60e3).toISOString(), agent: "codex", agentName: "Codex", icon: "codex-color", provider: "relay", providerName: "Relay", host: "team", req, model: "gpt-6-sol", in: 100, out: 10, ms: 900, status: 200, cost: 0.01, priced: true });
+// the model the answer was served by names it, so the table (which keeps the
+// served model, not the one asked for) tells the newest read from the rest
+const ROW = (req) => ({ t: new Date(now - 60e3).toISOString(), agent: "codex", agentName: "Codex", icon: "codex-color", provider: "relay", providerName: "Relay", host: "team", req, model: "gpt-6-sol", served: "served-" + req, in: 100, out: 10, ms: 900, status: 200, cost: 0.01, priced: true });
 
 function server(lang, seen, held) {
   return async (route) => {
@@ -96,15 +98,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.waitForTimeout(250);
       assert.equal(asked("page", "abc").length, before, "a refresh sent another read of the page beside the one on its way");
 
-      // the answers come; the page shows the newest, and no error is said
+      // the answers come; the page shows the newest, and no error is said.
+      // The served model names the answer, the table's SERVED column
       held.splice(0).forEach((go) => go());
-      await page.waitForFunction(() => /asked-abc/.test(document.querySelector("#ledWrap")?.textContent || ""), null, { timeout: 4000 }).catch(async () => {
+      await page.waitForFunction(() => /served-asked-abc/.test(document.querySelector("#ledWrap")?.textContent || ""), null, { timeout: 4000 }).catch(async () => {
         throw new Error("the newest answer was not drawn: " + (await page.locator("#ledWrap").innerText()).slice(0, 400));
       });
       await page.waitForFunction(() => !document.querySelector("#usageReload").classList.contains("busy"), null, { timeout: 4000 });
       const text = await page.locator("body").innerText();
       assert(!/abort/i.test(text), "a cancelled read was said as an error");
-      assert.equal(await page.locator("#ledWrap .led tbody tr", { hasText: "asked-ab" }).filter({ hasNotText: "asked-abc" }).count(), 0);
+      assert.equal(await page.locator("#ledWrap .led tbody tr", { hasText: "served-asked-ab" }).filter({ hasNotText: "served-asked-abc" }).count(), 0);
       // a refresh after the read is done reads afresh
       const n = seen.length;
       await page.locator("#usageReload").click();
