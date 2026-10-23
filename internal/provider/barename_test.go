@@ -3,6 +3,7 @@ package provider
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/catalog"
@@ -145,6 +146,68 @@ func TestCanonicalModelNormalizesVariants(t *testing.T) {
 		if got := CanonicalModel(tc.in); got != tc.want {
 			t.Errorf("CanonicalModel(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// A relay that pins a model's effort in its id (gemini-3.8-flash-high,
+// claude-opus-4-6-thinking) offers the levels of the model it is a variant
+// of, as its price does through CanonicalModel: the id the catalog has no
+// entry for falls back to the bare name the tag came off. A vendor's own
+// word on a variant stands — mimo-v2.6-flash's thinking switch alone gives
+// no levels, under any tag.
+func TestEffortsOfARunningTagInTheModelName(t *testing.T) {
+	priceHome(t)
+	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{
+	  "google": {"models": {"gemini-3.8-flash": {"id":"gemini-3.8-flash","reasoning":true,
+	    "reasoning_options":[{"type":"effort","values":["low","medium","high"]}]}}},
+	  "anthropic": {"models": {"claude-opus-4-6": {"id":"claude-opus-4-6","reasoning":true,
+	    "reasoning_options":[{"type":"effort","values":["low","medium","high","max"]}]}}},
+	  "xiaomi": {"models": {"mimo-v2.6-flash": {"id":"mimo-v2.6-flash","reasoning":true,
+	    "reasoning_options":[{"type":"toggle"}]}}}
+	}`
+	if err := os.WriteFile(catalog.CachePath(), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Reset()
+	t.Cleanup(catalog.Reset)
+
+	for _, tc := range []struct{ id, want string }{
+		{"gemini-3.8-flash", "low,medium,high"},
+		{"gemini-3.8-flash-high", "low,medium,high"},
+		{"gemini-3.8-flash-low", "low,medium,high"},
+		{"cpa/gemini-3.8-flash-high", "low,medium,high"},
+		{"claude-opus-4-6-thinking", "low,medium,high,max"},
+		// the vendor's own word on the variant is not overridden by a tag
+		{"mimo-v2.6-flash-free", ""},
+		{"mimo-v2.6-flash", ""},
+		{"unknown-model-high", ""},
+	} {
+		if got := strings.Join(borrowedEfforts(tc.id), ","); got != tc.want {
+			t.Errorf("borrowedEfforts(%q) = %q, want %q", tc.id, got, tc.want)
+		}
+	}
+
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{"gemini-3.8-flash-high", true},
+		{"claude-opus-4-6-thinking", true},
+		{"mimo-v2.6-flash-free", true},
+		{"unknown-model-high", false},
+	} {
+		if got := thinksInCatalog(tc.id); got != tc.want {
+			t.Errorf("thinksInCatalog(%q) = %v, want %v", tc.id, got, tc.want)
+		}
+	}
+
+	// what the agents' lists carry: the levels and the thinking flag both
+	e := entryFor(Provider{ID: "cpa", Chat: "https://cpa.example/v1"}, catalog.Model{ID: "gemini-3.8-flash-high"}, settings.Settings{})
+	if strings.Join(e.Efforts, ",") != "low,medium,high" || !e.Reasoning {
+		t.Errorf("entryFor(gemini-3.8-flash-high): efforts %v reasoning %v; want low,medium,high true", e.Efforts, e.Reasoning)
 	}
 }
 

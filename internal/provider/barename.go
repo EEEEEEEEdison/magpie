@@ -46,6 +46,35 @@ var windowTail = regexp.MustCompile(`@\d+[km]?$`)
 // "-thought", "-high", "-low", "-medium", "-minimal", "-online", "-search").
 var modifierTail = regexp.MustCompile(`(?:[-_](?:free|thinking|thought|high|low|medium|minimal|online|search))+$`)
 
+// HasTurnTag reports whether a model id ends in a running tag a relay adds
+// to the model's own name — a promotional one (-free), an effort pinned in
+// the id (-high, -thinking) or a toggle's (-online) — rather than being the
+// model's name: gemini-3.8-flash-high and minimax-m3.1-flash-free carry
+// one, k3, hy4-preview-f and deepseek-v4-pro-202606 don't. A price or a
+// level list read for such an id is the model's, its tag aside; one read
+// for an id without a tag is the id's own, whatever the alias map folds.
+func HasTurnTag(m string) bool {
+	bare := BareModel(m)
+	return bare != "" && modifierTail.MatchString(bare)
+}
+
+// VariantName is the name of the model a relay's id is a variant of — the
+// id with its running tag off (gemini-3.8-flash-high) or with a suffix of
+// the same name off (hy4-preview-f is hy4-preview, kimi-k3-auto is
+// kimi-k3) — and false when the id is its own name. A short alias that
+// stands for a different name is not a variant: k3 is Kimi Code's plan
+// name, not the API's kimi-k3, so nothing of kimi-k3's is read for it.
+func VariantName(id string) (string, bool) {
+	canon, bare := CanonicalModel(id), BareModel(id)
+	if canon == "" || canon == bare {
+		return "", false
+	}
+	if HasTurnTag(id) || strings.HasPrefix(bare, canon) {
+		return canon, true
+	}
+	return "", false
+}
+
 // CanonicalModel returns the normalized core model identifier by stripping
 // channel wrappers, operational tags, effort variants, and folding well-known
 // aliases, so disparate relay namings resolve to the same underlying model

@@ -39,10 +39,20 @@ func TestGrokEffortListPrice(t *testing.T) {
 			}
 		}
 	}
+	// A running tag in any model's id is read as not part of its name
+	// (provider.HasTurnTag): this fork resolves gemini-3.8-flash-high and
+	// minimax-m3.1-flash-free through CanonicalModel for prices too, so an
+	// effort-tagged id of a model the maker lists is priced as the model.
+	// A Cursor channel prefix goes with it, as a relay's does.
+	for _, id := range []string{"gpt-6-astra-high", "cursor-grok-4.7-high"} {
+		if pr, ok := MakerPrice(id); !ok || pr.Input <= 0 {
+			t.Errorf("MakerPrice(%q) = %+v, %v; want the model's maker price", id, pr, ok)
+		}
+	}
+	// A window or a model of its own is not a tag: they stay unpriced
 	for _, id := range []string{"grok-4.7-fast", "grok-4.7-low-fast", "grok-4.7-xhigh-fast", "grok-4.7-build",
 		"grok-4.7-build-fast", "grok-4.7-mini", "grok-4.7-mini-high", "grok-4.7-max",
-		// only Grok's ids are read this way
-		"gpt-6-astra-high", "cursor-grok-4.7-high", "gpt-6-astra@500k", "grok-4.7-build@500k"} {
+		"gpt-6-astra@500k", "grok-4.7-build@500k"} {
 		if pr, ok := grok.ListPrice(id); ok {
 			t.Errorf("ListPrice(%q) = %+v; want unpriced", id, pr)
 		}

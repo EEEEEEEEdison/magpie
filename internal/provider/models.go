@@ -1620,7 +1620,21 @@ func (p Provider) Thinks(model string) bool {
 			return true
 		}
 	}
-	return catalog.Thinks(model)
+	return thinksInCatalog(model)
+}
+
+// thinksInCatalog is catalog.Thinks for a model a relay names with a
+// running tag the catalog has no entry for (gemini-3.8-flash-high,
+// claude-opus-4-6-thinking): the word on the model it is a variant of, the
+// same normalization its price already goes through (CanonicalModel).
+func thinksInCatalog(id string) bool {
+	if catalog.Thinks(id) {
+		return true
+	}
+	if c, ok := VariantName(id); ok {
+		return catalog.Thinks(c)
+	}
+	return false
 }
 
 // PaidBesideFree says model costs its subscription's credits while the
@@ -1731,16 +1745,35 @@ func effortsOf(m catalog.Model) []string {
 // else, for one newer than the catalog, its maker's line's
 // (catalog.KinEfforts).
 func borrowedEfforts(id string) []string {
-	if e, ok := catalog.ListedByBorrowed(makerCatalogs(), id); ok {
+	if e, ok := borrowedEffortsOf(id); ok {
 		return e
 	}
-	if e := catalog.EffortsOf(id); len(e) > 0 {
+	// one a relay names with a running tag the catalog has no entry for —
+	// gemini-3.8-flash-high, minimax-m3.1-flash-free, claude-opus-4-6-thinking
+	// — takes the levels of the model it is a variant of, as its price does
+	// (CanonicalModel). Only when nothing says the model itself: a vendor's
+	// own word on the variant (mimo-v2.6-flash's toggle alone) stands, and an
+	// id without a tag is left as the catalog has it (deepseek-v4-pro-202606,
+	// which no list knows).
+	if c, ok := VariantName(id); ok {
+		e, _ := borrowedEffortsOf(c)
 		return e
+	}
+	return nil
+}
+
+// borrowedEffortsOf is borrowedEfforts for one id as the catalog spells it,
+// false when no catalog has a word on it.
+func borrowedEffortsOf(id string) ([]string, bool) {
+	if e, ok := catalog.ListedByBorrowed(makerCatalogs(), id); ok {
+		return e, true
+	}
+	if e := catalog.EffortsOf(id); len(e) > 0 {
+		return e, true
 	}
 	// one newer than this machine's catalog: its maker's line's levels
 	// (gpt-6.1-sol, NextCommit on Discord)
-	e, _ := catalog.KinEfforts(makerCatalogs(), id)
-	return e
+	return catalog.KinEfforts(makerCatalogs(), id)
 }
 
 // makerCatalogs are the models.dev ids of the vendors among the presets
@@ -1804,17 +1837,16 @@ func (p Provider) ListPrice(model string) (catalog.Price, bool) {
 	}
 	for _, m := range names {
 		if pr, ok := catalog.PricedBy(priceCatalogs(cats), m); ok {
-			// If the provider lists the model at zero cost (e.g. an aggregator's
-			// free promotional variant like minimax-m3.1-flash-free or mimo-v2.5-free),
-			// but the foundation model has a real API price from its maker,
-			// bill it at the maker's official API price instead of zero.
 			if pr.Input > 0 || pr.Output > 0 {
 				return pr, true
 			}
-			if mPr, mOk := catalog.PricedBy(makerPriceCatalogs(), m); mOk && (mPr.Input > 0 || mPr.Output > 0) {
-				return mPr, true
-			}
-			if canon := CanonicalModel(m); canon != "" && canon != m {
+			// A relay pricing a running variant of a model at zero — a free
+			// promotional one (minimax-m3.1-flash-free, mimo-v2.5-free) or one
+			// whose effort is pinned in its id — is read at its maker's API
+			// price: the zero is the tag's, not the model's. A catalog that
+			// prices the model itself at zero is taken at its word: it is a
+			// relay's own free model.
+			if canon, ok := VariantName(m); ok {
 				if mPr, mOk := catalog.PricedBy(makerPriceCatalogs(), canon); mOk && (mPr.Input > 0 || mPr.Output > 0) {
 					return mPr, true
 				}
@@ -2091,8 +2123,13 @@ func MakerPrice(model string) (catalog.Price, bool) {
 			return pr, true
 		}
 	}
-	canon := CanonicalModel(model)
-	if canon != "" && canon != model {
+	// a relay's running tag in the id (gemini-3.8-flash-high,
+	// minimax-m3.1-flash-free) or a suffix of the model's own name
+	// (hy4-preview-f) is not part of it: the maker's price of the model it is
+	// a variant of is read. An id that is its own name is left as it is — k3
+	// is Kimi Code's alias, not the API's kimi-k3, and deepseek-v4-pro-202606
+	// is a snapshot of its own.
+	if canon, ok := VariantName(model); ok {
 		for _, m := range pricedNames(canon) {
 			if pr, ok := catalog.PricedBy(makerPriceCatalogs(), m); ok {
 				return pr, true
@@ -2695,7 +2732,7 @@ func entryFor(p Provider, m catalog.Model, s settings.Settings) Entry {
 	// a model that thinks still does with the levels the user kept or
 	// none at all; one its source says nothing of thinks as most of the
 	// providers serving it say (#402)
-	e.Reasoning = m.Reasoning || len(e.Efforts) > 0 || catalog.Thinks(m.ID)
+	e.Reasoning = m.Reasoning || len(e.Efforts) > 0 || thinksInCatalog(m.ID)
 	e.Efforts = effortsKept(e.Efforts, s.ModelEfforts[e.ID])
 	// Codex's Ultra on a model OpenAI offers it on, served by another
 	// vendor (Copilot's gpt-6.1-sol, #656): a ChatGPT account's list says it
