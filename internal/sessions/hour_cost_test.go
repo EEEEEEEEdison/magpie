@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -50,5 +51,41 @@ func TestHourCostBillsEachHourItsWindowsPrice(t *testing.T) {
 	s.use("2026-10-19", "other", one)
 	if got, want := hourCost(s.hoursOf()["other"], s.Models["other"], peak), 0.5+2.0; got != want {
 		t.Errorf("a day-only count costs %v, want %v", got, want)
+	}
+}
+
+// A zone whose offset is not a whole hour puts a window's end inside an
+// hour, and that hour is billed by the minutes it spends on each side
+// rather than wholly at the price of one of them.
+func TestHourCostSplitsAnHourOnAHalfHourZone(t *testing.T) {
+	if _, err := time.LoadLocation("Asia/Kolkata"); err != nil {
+		t.Skipf("Asia/Kolkata: %v", err)
+	}
+	// 09:00-12:00 Kolkata is 03:30-06:30 UTC: the hour keyed 03 holds half
+	// an hour off-peak and half on-peak. Billed wholly at the hour's start
+	// it would be off-peak; at its end, on-peak.
+	peak := catalog.Price{Input: 1, Output: 4, TimeZone: "Asia/Kolkata",
+		TimeTiers: []catalog.TimeTier{{From: "09:00", To: "12:00", Input: 2, Output: 8}}}
+	one := Tokens{Input: 1_000_000, Output: 1_000_000}
+	hours := map[string]Tokens{
+		hourOf(time.Date(2026, 10, 20, 3, 0, 0, 0, time.UTC)): one, // half off, half on
+	}
+	// a million of each: off-peak an hour costs 1+4 = 5, peak 2+8 = 10.
+	// Half and half is half of each: 2.5+5 = 7.5. An implementation that
+	// bills the hour whole at either end's price gives 5 or 10.
+	got := hourCost(hours, Tokens{Input: 1_000_000, Output: 1_000_000}, peak)
+	if math.Abs(got-7.5) > 1e-9 {
+		t.Errorf("an hour half either side of a window's start cost %v, want 7.5", got)
+	}
+	// the hour wholly inside the window keeps the peak price whole, so a
+	// zone on the hour bills what it always did
+	inside := map[string]Tokens{hourOf(time.Date(2026, 10, 20, 4, 0, 0, 0, time.UTC)): one}
+	if got := hourCost(inside, Tokens{Input: 1_000_000, Output: 1_000_000}, peak); math.Abs(got-10) > 1e-9 {
+		t.Errorf("an hour wholly at peak cost %v, want 10", got)
+	}
+	// and an hour wholly outside it the base price
+	outside := map[string]Tokens{hourOf(time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)): one}
+	if got := hourCost(outside, Tokens{Input: 1_000_000, Output: 1_000_000}, peak); math.Abs(got-5) > 1e-9 {
+		t.Errorf("an hour wholly off peak cost %v, want 5", got)
 	}
 }

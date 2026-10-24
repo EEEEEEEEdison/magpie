@@ -600,6 +600,24 @@ as `usage.Filter.keepsRecord` matches a request. What is aggregated does not
 change: each name a call was made under keeps its own row, and a session's own
 line still names the models it called.
 
+A session's cost follows the hour of each call when its price bills hours
+differently (DeepSeek's peak windows, `catalog.Price.TimeTiers`). A day's
+`Hourly` (`hm`) is `Models` again keyed `2006-01-02T15` in UTC, written by
+`state.useAt` and taken back by `unuseAt`, and `state.hourly` forgets an hour
+once its last model is back to nothing. `sessions.hourCost` bills each hour at
+the price of the window it is in, and whatever no hour holds at the base
+price — a reader that knows a day but no hour bills that day at the base, which
+is what a file with no time gets. An hour a window's end falls inside, as in a
+zone whose offset is not a whole hour, is split by the minutes it spends on
+each side (`sessions.hourPrice`): a wholly-inside hour keeps one price, so a
+zone and a window both on the hour bill what they always did. `cacheVersion`
+22 added `Hourly`; a cache from before it is read again.
+Verification: `TestHourCostBillsEachHourItsWindowsPrice` and
+`TestHourCostSplitsAnHourOnAHalfHourZone`; the windows themselves, a wrapped
+one's days included, are `TestAtTimePicksTheWindow`,
+`TestTimeTierWindowsWrapMidnight` and `TestWrappedWindowBelongsToTheDayItOpens`
+in [`catalog/price_time_test.go`](../../internal/catalog/price_time_test.go).
+
 In the Usage request APIs, `session_role` classifies the canonical Codex actor as
 `main`, `subagent` or `unknown`. For a confirmed identity, `session` is its root
 thread ID; when the actor is known but its root is not, `session` is empty. An

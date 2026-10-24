@@ -438,11 +438,49 @@ func hourAt(key string) time.Time {
 func hourCost(hours map[string]Tokens, total Tokens, p catalog.Price) float64 {
 	cost, rest := 0.0, total
 	for key, t := range hours {
-		cost += p.CostSplitAt(hourAt(key), t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h)
+		cost += hourPrice(p, hourAt(key), t)
 		rest.sub(t)
 	}
 	if !rest.zero() {
 		cost += p.CostSplitAt(time.Time{}, rest.Input, rest.Output, rest.CacheRead, rest.CacheWrite, rest.CacheWrite1h)
+	}
+	return cost
+}
+
+// hourPrice is what t, the tokens of the hour start opens, cost at p: the
+// hour whole at the price of the window it is in, and an hour that straddles
+// a window's end split by the minutes it spends on each side.
+//
+// A zone whose offset from UTC is not a whole hour puts a window's ends
+// inside an hour rather than on it: India's +05:30 has a 09:00 window's
+// start at 03:30 UTC, so the hour keyed 03 holds half an hour either side of
+// it, and the hour billed whole at either end's price bills half of it
+// wrong. A zone on the hour, with windows on the hour, keeps one price for
+// the hour and takes no splitting.
+func hourPrice(p catalog.Price, start time.Time, t Tokens) float64 {
+	if t.zero() {
+		return 0
+	}
+	at := func(m int) catalog.Price { return p.AtTime(start.Add(time.Duration(m) * time.Minute)) }
+	// a window's ends fall on a whole minute, so a price that holds at the
+	// hour's start, at its middle and at its last minute holds all through:
+	// a window narrower than half an hour between two of them is the one
+	// case this misses, and no vendor bills by such a window
+	whole := at(0)
+	if whole.Same(at(30)) && whole.Same(at(59)) {
+		return whole.CostSplit(t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h)
+	}
+	// the hour's price changes inside it: each run of minutes at its own
+	// window's price, its share of the hour's tokens with it
+	cost := 0.0
+	for m := 0; m < 60; {
+		pr := at(m)
+		n := 1
+		for m+n < 60 && pr.Same(at(m+n)) {
+			n++
+		}
+		cost += pr.CostSplit(t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h) * float64(n) / 60
+		m += n
 	}
 	return cost
 }

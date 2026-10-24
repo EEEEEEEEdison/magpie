@@ -1139,14 +1139,19 @@ left out of a window is the base price's:
 ```
 
 `days` is 1 Monday to 7 Sunday, empty every day; `from` is in and `to` out, and
-a `to` before its `from` runs past midnight. `time_zone` is the IANA zone the
+a `to` before its `from` runs past midnight — and is then the day it opens on,
+so Monday's `22:00` to `02:00` holds Monday night and Tuesday's small hours,
+never Monday's own. `time_zone` is the IANA zone the
 windows and the off days are in, this computer's when absent. `off_dates` are
 days billed at the base price whatever the windows say, as a holiday whose
 weekday hours are on-peak. Each call is counted at the price of its own hour
 (`catalog.Price.AtTime`): the ledger, the Requests page, the session totals,
 Sessions' hours and the OTLP export all price a call at its time, so a day's
-total is the sum of its hours. `magpie model price` writes the base numbers
-only and leaves the windows as the file has them.
+total is the sum of its hours. Where a session's own files record no time but
+the hour, an hour a window's end falls inside — a zone whose offset is not a
+whole hour, India's +05:30 against a 09:00 window — is billed by the minutes
+it spends on each side (`sessions.hourPrice`). `magpie model price` writes the
+base numbers only and leaves the windows as the file has them.
 
 The order a price is looked for in is: **the price for this model → the price
 for `<provider id>/*`, which covers every model of that provider → what the

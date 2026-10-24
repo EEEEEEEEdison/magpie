@@ -195,7 +195,9 @@ type Tier struct {
 // size. A part left out is the base price's.
 type TimeTier struct {
 	// Days are the days of the week it holds on, 1 Monday to 7 Sunday;
-	// empty is every day.
+	// empty is every day. A window that wraps past midnight is the day it
+	// opens on: Monday's "22:00" to "02:00" holds Monday 22:00 up to
+	// Tuesday 02:00, not Monday's own small hours.
 	Days []int `json:"days,omitempty"`
 	// From and To are the window's ends in the day, "HH:MM", From in and
 	// To out: "09:00" to "12:00" is 9:00 up to 12:00. A To before From
@@ -478,24 +480,39 @@ func (p Price) timeTierAt(t time.Time) (TimeTier, bool) {
 	if day := at.Format("2006-01-02"); slices.Contains(p.OffDates, day) {
 		return TimeTier{}, false
 	}
-	weekday := int(at.Weekday())
-	if weekday == 0 {
-		weekday = 7
-	}
 	minutes := at.Hour()*60 + at.Minute()
 	for _, tier := range p.TimeTiers {
-		if len(tier.Days) > 0 && !slices.Contains(tier.Days, weekday) {
-			continue
-		}
 		from, fromOK := parseClock(tier.From)
 		to, toOK := parseClock(tier.To)
 		if !fromOK || !toOK {
 			continue
 		}
-		// from < to is a window in the day; from > to wraps past midnight
-		if from < to && minutes >= from && minutes < to || from > to && (minutes >= from || minutes < to) {
-			return tier, true
+		// from < to is a window in the day; from > to wraps past midnight,
+		// and the hours after midnight are the day the window opened on:
+		// Monday's 22:00-02:00 runs into Tuesday morning, and Monday's
+		// own small hours belong to Sunday's window (or, with no window of
+		// Sunday's, to none)
+		start := at
+		held := from < to && minutes >= from && minutes < to
+		if from > to && minutes < to {
+			start = at.AddDate(0, 0, -1)
+			held = true
+		} else if from > to && minutes >= from {
+			held = true
 		}
+		if !held {
+			continue
+		}
+		if len(tier.Days) > 0 {
+			weekday := int(start.Weekday())
+			if weekday == 0 {
+				weekday = 7
+			}
+			if !slices.Contains(tier.Days, weekday) {
+				continue
+			}
+		}
+		return tier, true
 	}
 	return TimeTier{}, false
 }

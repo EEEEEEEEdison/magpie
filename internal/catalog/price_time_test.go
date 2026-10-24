@@ -212,3 +212,43 @@ func TestNoTiersBillsThePriceAbove(t *testing.T) {
 		t.Error("Same reads NoTiers")
 	}
 }
+
+// A window that wraps past midnight is the day it opens on: Monday's
+// 22:00-02:00 holds Monday night and Tuesday's small hours, and Monday's
+// own small hours are Sunday's window's, or no window's.
+func TestWrappedWindowBelongsToTheDayItOpens(t *testing.T) {
+	p := Price{Input: 1, TimeZone: "UTC",
+		TimeTiers: []TimeTier{{Days: []int{1}, From: "22:00", To: "02:00", Input: 2}}}
+	// 2026-10-19 is a Monday, 2026-10-20 a Tuesday, 2026-10-18 a Sunday.
+	cases := []struct {
+		at   time.Time
+		peak bool
+	}{
+		{time.Date(2026, 10, 19, 21, 0, 0, 0, time.UTC), false}, // Monday before it
+		{time.Date(2026, 10, 19, 22, 0, 0, 0, time.UTC), true},  // Monday, it opens
+		{time.Date(2026, 10, 19, 23, 59, 0, 0, time.UTC), true}, // Monday night
+		{time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC), true},   // Tuesday, its tail
+		{time.Date(2026, 10, 20, 1, 59, 0, 0, time.UTC), true},  // Tuesday, its last minute
+		{time.Date(2026, 10, 20, 2, 0, 0, 0, time.UTC), false},  // Tuesday, it closes
+		{time.Date(2026, 10, 19, 0, 30, 0, 0, time.UTC), false}, // Monday's own small hours: Sunday's window at best
+		{time.Date(2026, 10, 20, 22, 0, 0, 0, time.UTC), false}, // Tuesday night: not Monday's
+	}
+	for _, c := range cases {
+		if got := p.InTimeTier(c.at); got != c.peak {
+			t.Errorf("%s: InTimeTier %v, want %v", c.at.Format("2006-01-02 15:04 Mon"), got, c.peak)
+		}
+	}
+	// Sunday's window wraps into Monday's small hours, which Monday's own
+	// window must not claim
+	q := Price{Input: 1, TimeZone: "UTC",
+		TimeTiers: []TimeTier{{Days: []int{7}, From: "22:00", To: "02:00", Input: 3}}}
+	if !q.InTimeTier(time.Date(2026, 10, 19, 0, 30, 0, 0, time.UTC)) {
+		t.Error("Monday 00:30 is Sunday's window's tail")
+	}
+	if got := q.AtTime(time.Date(2026, 10, 19, 0, 30, 0, 0, time.UTC)).Input; got != 3 {
+		t.Errorf("Sunday's tail at Monday 00:30: input %v, want 3", got)
+	}
+	if q.InTimeTier(time.Date(2026, 10, 19, 23, 0, 0, 0, time.UTC)) {
+		t.Error("Monday night is not Sunday's window")
+	}
+}
