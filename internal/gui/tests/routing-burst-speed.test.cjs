@@ -63,7 +63,7 @@ function serve(lang) {
 
 const want = {
   en: { first: /first token in 24 s/, speed: /tok\/s/, burst: /· 339 tok\/s/, half: /· 5509 tok\/s/, normal: /· 80 tok\/s/, slow: /· 33 tok\/s/, steady: /· 35 tok\/s/ },
-  zh: { first: /24 秒 后首响/, speed: /token\/秒/, burst: /· 339 token\/秒/, half: /· 5509 token\/秒/, normal: /· 80 token\/秒/, slow: /· 33 token\/秒/, steady: /· 35 token\/秒/ },
+  zh: { first: /24 秒 后出首字/, speed: /token\/秒/, burst: /· 339 token\/秒/, half: /· 5509 token\/秒/, normal: /· 80 token\/秒/, slow: /· 33 token\/秒/, steady: /· 35 token\/秒/ },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
