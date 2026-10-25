@@ -1,12 +1,14 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
 // Every row of the Usage page's Requests tab says a speed, or says why it
 // has none (夜松云 on Discord: "the speed shows for some rows and not for
-// others"). A gateway call with no speed of its own tells the least it wrote
-// at when that is known: one not streamed, its output over its whole time
-// (1,000 tokens or more over a second or more), and one that reasoned with
-// no first text recorded, its answer over the time after its first token.
-// A dash left has a tooltip that says why: failed, no output, not streamed,
-// all reasoning, too little after the first token, or let go in a burst.
+// others"). A reply's speed is its whole turn now (5989b1af): every output
+// token it wrote, its reasoning among them, over the ms from the request to
+// its last token, the wait for the first token in it. So a reply that
+// reasoned, or one whose first token was never timed, tells a speed where it
+// used to tell none; a reply that came in one burst at its end tells none,
+// and neither does one with no output or no time to divide.
+// A dash left has a tooltip that says why: failed, no output, no duration, a
+// turn under 100 ms, or let go in a burst.
 // The rows are shaped as real gateway ledger rows (usage.jsonl). English and
 // Chinese; no backend, the API is faked.
 const assert = require("node:assert/strict");
@@ -83,26 +85,22 @@ function server(lang) {
 
 const L = {
   en: {
-    whole: "≥124 tok/s", answer: "≥100 tok/s", measured: "100 tok/s",
-    wholeTip: "At least: 3,832 output tokens in 31 s, from the request to its last token, the wait for the first one counted too",
-    notStreamed: "Not streamed: no first token to time a speed from",
-    answerTip: "At least: 1,000 answer tokens in 10 s after the first token, the 300 reasoning tokens left out. No first text was recorded",
-    little: "Too little came after the first token to time a speed by: 6 tokens in 87 ms",
+    whole: "124 tok/s", short: "16 tok/s", answer: "81 tok/s", measured: "71 tok/s",
+    wholeTip: "3,832 output tokens in 31 s, the whole turn",
+    answerTip: "1,300 output tokens in 16 s, the whole turn",
+    measuredTip: "500 output tokens in 7.0 s, the whole turn",
     burst: "It came in one burst at its end, not as it was written, so how fast it was written isn't seen",
     failed: "A failed request tells no speed",
     noOut: "No output tokens to time a speed from",
-    allReasoning: "All its output was reasoning: no answer after it to time a speed from",
   },
   zh: {
-    whole: "≥124 token/秒", answer: "≥100 token/秒", measured: "100 token/秒",
-    wholeTip: "下限：从收到请求到最后一个 token，31 秒 输出 3,832 个 token，等首字的时间也算在里面",
-    notStreamed: "非流式：没有首字时间，算不出速度",
-    answerTip: "下限：首字后 10 秒 输出 1,000 个正文 token，300 个推理 token 不计。没有记录首个正文的时间",
-    little: "首字后内容太少，测不出速度：87 毫秒 输出 6 个 token",
+    whole: "124 token/秒", short: "16 token/秒", answer: "81 token/秒", measured: "71 token/秒",
+    wholeTip: "整轮 31 秒 输出 3,832 个 token",
+    answerTip: "整轮 16 秒 输出 1,300 个 token",
+    measuredTip: "整轮 7.0 秒 输出 500 个 token",
     burst: "内容在最后一次性到达，不是边写边发，看不出写得多快",
     failed: "失败的请求没有速度",
     noOut: "没有输出 token，算不出速度",
-    allReasoning: "输出全是推理，之后没有正文，算不出速度",
   },
 };
 
@@ -137,30 +135,30 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           if (s === "—") assert((await tip(i)).length > 0, "row " + i + "'s dash says why");
         }
 
-        // not streamed, long enough: the least it wrote at, and why it's a floor
+        // not streamed: its whole turn is the window, wait for the first
+        // token in it, so it tells a speed like any other
         assert.equal(await text(0), w.whole);
         assert((await tip(0)).startsWith(w.wholeTip), await tip(0));
-        assert((await tip(0)).includes(w.notStreamed), await tip(0));
-        // not streamed, too short for a floor
-        assert.equal(await text(1), "—");
-        assert.equal(await tip(1), w.notStreamed);
-        // 6 tokens 87 ms after the first
+        // not streamed and short, still a whole-turn speed: 105 tokens in 6.7 s
+        assert.equal(await text(1), w.short);
+        // its content came in one burst at its end: no speed, and says so
         assert.equal(await text(2), "—");
-        assert.equal(await tip(2), w.little);
+        assert.equal(await tip(2), w.burst);
         // a burst
         assert.equal(await text(3), "—");
         assert.equal(await tip(3), w.burst);
         // failed, and no output
         assert.equal(await tip(4), w.failed);
         assert.equal(await tip(5), w.noOut);
-        // the answer after hidden reasoning, no first text recorded
+        // reasoning then a tool call: the whole turn counts, reasoning in it
         assert.equal(await text(6), w.answer);
         assert((await tip(6)).startsWith(w.answerTip), await tip(6));
-        // reasoning only
+        // reasoning only, let go in one burst: no speed, and says why
         assert.equal(await text(7), "—");
-        assert.equal(await tip(7), w.allReasoning);
-        // what was measured is as it was
+        assert.equal(await tip(7), w.burst);
+        // the one timed after its first token counts its whole turn now
         assert.equal(await text(8), w.measured);
+        assert((await tip(8)).startsWith(w.measuredTip), await tip(8));
 
         assert.deepEqual(errors, []);
         await ctx.close();

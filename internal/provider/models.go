@@ -2301,8 +2301,12 @@ func priceOf(s settings.Settings, p Provider, known bool, model string) (catalog
 		pr, ok = MakerPrice(canon)
 	}
 	// then a custom price configured under another provider for the same core model
-	// when this known provider and the maker's catalog have none
-	if !ok {
+	// when this known provider and the maker's catalog have none. Never for a
+	// remote magpie: its list is the price that other magpie counts the call at,
+	// and one from before it told prices prices nothing, which remote_magpie.go
+	// says leaves the model to models.dev — not to a price set here for another
+	// provider's model of the same name.
+	if !ok && !p.IsRemoteMagpie() {
 		if borrowed, found := crossProviderPrice(s.ModelPrices, model); found && (borrowed.Input > 0 || borrowed.Output > 0) {
 			pr, ok = borrowed, true
 		}

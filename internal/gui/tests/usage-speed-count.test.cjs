@@ -11,18 +11,22 @@
 // 1 timed reply", and the Output speed card that one as its figure, the other
 // under it and the wait for the first token on a line of its own with its
 // count; one with neither, nothing. Counts are words, never a bare "(2)". The
-// rows of the Requests tab say each one's the same way. Codex's rows tell a
-// floor too: a call in a turn of several, timed from what asked for it, its
-// output over that time; a turn of one call that reasoned, its answer over
-// the time after its first token. A Codex turn of one call is measured, and
-// its answer's floor told, only over a second or more after its first token
-// and 100 tokens or more; else it tells the least it wrote at over the whole
-// turn (Fallmonkey on Discord: a first token at 6.8 s, the model working,
-// and the rest 0.2 s later in one push, read as 1,900 tok/s), by the same
-// 1,000-token rule as Claude Code's whole-time floor (Fallmonkey again: an
-// 11-token astra answer in 2.75 s read ≥4 tok/s, while an 815-token Claude
-// Code reply said nothing). Every
-// language, a wide window and a narrow one; no backend, the API is faked.
+// rows of the Requests tab say each one's the same way.
+//
+// A reply's speed is its whole turn now (5989b1af): every output token it
+// wrote over the ms from the request to its last, the wait for its first
+// token in it. So a turn of one call that reasoned tells its whole turn where
+// it used to tell its answer's floor after the first token (1,200 tokens in
+// 12 s, "100 tok/s", not ≥100 after it), and a Codex turn of one call still
+// tells none under a second or 100 tokens after its first (Fallmonkey on
+// Discord: a first token at 6.8 s, the model working, and the rest 0.2 s
+// later in one push, read as 1,900 tok/s; an 11-token astra answer in 2.75 s,
+// under the same gate). A floor is left to a session file's reply that wrote
+// 1,000 tokens or more over a second or more: 11 tokens in 2.75 s read ≥4
+// tok/s once while an 815-token Claude Code reply said nothing.
+//
+// Every language, a wide window and a narrow one; no backend, the API is
+// faked.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -64,7 +68,7 @@ const ROWS = [
 ];
 // the groups as usage.Breakdown sums them (TestGroupSpeedSaysHowManyRepliesItIsOf)
 const G = {
-  sol: { id: "gpt-6.1-sol", calls: 260, input: 2340000, output: 389000, cache_read: 0, cache_write: 0, cost: 0, timed: 1, ttft_ms: 1000, decode_ms: 4000, decode_out: 500, decode_n: 1, floor_out: 388500, floor_ms: 7770000, floor_n: 259 },
+  sol: { id: "gpt-6.1-sol", calls: 260, input: 2340000, output: 389000, cache_read: 0, cache_write: 0, cost: 0, timed: 1, ttft_ms: 1000, decode_ms: 5000, decode_out: 500, decode_n: 1, floor_out: 388500, floor_ms: 7770000, floor_n: 259 },
   // measured only: 992 tokens over 16 s of two replies, 62 tok/s
   astra: { id: "gpt-6-astra", calls: 9, input: 100000, output: 5000, cache_read: 0, cache_write: 0, cost: 0, timed: 2, ttft_ms: 3000, decode_ms: 16000, decode_out: 992, decode_n: 2 },
   cc: { id: "claude-opus-5-5", calls: 42, input: 210000, output: 64000, cache_read: 0, cache_write: 0, cost: 0, floor_out: 60000, floor_ms: 600000, floor_n: 30 },
@@ -121,30 +125,35 @@ function server(lang) {
 
 const L = {
   en: { speed: "Speed", kpi: "Output speed",
-    m: (n, k) => `${n} tok/s · ${k} timed ${k === 1 ? "reply" : "replies"}`, f: (n, k) => `≥${n} tok/s · ${k} replies`, join: "; ", timed: (k) => ` · ${k} timed replies`,
-    measured: (k, others) => (k === 1 ? `Measured on ${k} reply, from its first token to its end` : `Measured on ${k} replies, from their first token to their end`) + (others ? "; the others tell no speed" : ""),
-    floorTip: (k) => `At least: ${k} replies read from session files, which don't say when their answers began, so time before that is counted too`, row: "125 tok/s", rowFloor: "≥100 tok/s",
-    cx: "≥50 tok/s", answer: "≥100 tok/s", push: "≥120 tok/s", n1200: "1,200", turnTip: "the whole turn. What came after the first token (", answerTip: "At least: 1,000 answer tokens in " },
+    n: (x) => `${x} tok/s`, m: (n, k) => `${n} tok/s · ${k} timed ${k === 1 ? "reply" : "replies"}`, f: (n, k) => `≥${n} tok/s · ${k} replies`, join: "; ", timed: (k) => ` · ${k} timed replies`,
+    measured: (k, others) => (k === 1 ? `Measured on ${k} reply, over its whole turn` : `Measured on ${k} replies, over their whole turns`) + (others ? "; the others tell no speed" : ""),
+    floorTip: (k) => `At least: ${k} replies read from session files, which don't say when their answers began, so time before that is counted too`,
+    whole0: "500 output tokens in 5.0 s, the whole turn", whole2: "2,000 output tokens in 20 s, the whole turn",
+    codex: "A Codex turn of one call is timed only over a second or more and 100 tokens or more after its first token" },
   zh: { speed: "速度", kpi: "输出速度",
-    m: (n, k) => `${n} token/秒 · ${k} 次计时`, f: (n, k) => `≥${n} token/秒 · ${k} 次回复`, join: "；", timed: (k) => ` · ${k} 次计时`,
-    measured: (k, others) => `实测 ${k} 次回复：从首字到结束` + (others ? "；其余请求测不出速度" : ""),
-    floorTip: (k) => `下限：${k} 次读自会话文件的回复。会话文件不记录正文何时开始，之前的时间也算在里面`, row: "125 token/秒", rowFloor: "≥100 token/秒",
-    cx: "≥50 token/秒", answer: "≥100 token/秒", push: "≥120 token/秒", n1200: "1,200", turnTip: "首字后只有 ", answerTip: "输出 1,000 个正文 token，200 个推理 token 不计" },
+    n: (x) => `${x} token/秒`, m: (n, k) => `${n} token/秒 · ${k} 次计时`, f: (n, k) => `≥${n} token/秒 · ${k} 次回复`, join: "；", timed: (k) => ` · ${k} 次计时`,
+    measured: (k, others) => (k === 1 ? `实测 ${k} 次回复：整轮计时` : `实测 ${k} 次回复：整轮计时`) + (others ? "；其余请求测不出速度" : ""),
+    floorTip: (k) => `下限：${k} 次读自会话文件的回复。会话文件不记录正文何时开始，之前的时间也算在里面`,
+    whole0: "整轮 5.0 秒 输出 500 个 token", whole2: "整轮 20 秒 输出 2,000 个 token",
+    codex: "Codex 单次调用的整轮只在首字后满 1 秒且满 100 个 token 时计时" },
   "zh-TW": { speed: "速度", kpi: null,
-    m: (n, k) => `${n} token/秒 · ${k} 次計時`, f: (n, k) => `≥${n} token/秒 · ${k} 次回覆`, join: "；", timed: (k) => ` · ${k} 次計時`,
-    measured: (k, others) => `實測 ${k} 次回覆：從首字到結束` + (others ? "；其餘請求測不出速度" : ""),
-    floorTip: (k) => `下限：${k} 次讀自會話檔案的回覆。會話檔案不記錄正文何時開始，之前的時間也算在裡面`, row: "125 token/秒", rowFloor: "≥100 token/秒",
-    cx: "≥50 token/秒", answer: "≥100 token/秒", push: "≥120 token/秒", n1200: "1,200", turnTip: "首字後只有 ", answerTip: "輸出 1,000 個正文 token，200 個推理 token 不計" },
+    n: (x) => `${x} token/秒`, m: (n, k) => `${n} token/秒 · ${k} 次計時`, f: (n, k) => `≥${n} token/秒 · ${k} 次回覆`, join: "；", timed: (k) => ` · ${k} 次計時`,
+    measured: (k, others) => `實測 ${k} 次回覆：整輪計時` + (others ? "；其餘請求測不出速度" : ""),
+    floorTip: (k) => `下限：${k} 次讀自會話檔案的回覆。會話檔案不記錄正文何時開始，之前的時間也算在裡面`,
+    whole0: "整輪 5.0 秒 輸出 500 個 token", whole2: "整輪 20 秒 輸出 2,000 個 token",
+    codex: "Codex 單次調用的整輪只在首字後滿 1 秒且滿 100 個 token 時計時" },
   ja: { speed: null, kpi: null,
-    m: (n, k) => `${n} トークン/秒 · 計測 ${k} 件`, f: (n, k) => `≥${n} トークン/秒 · 応答 ${k} 件`, join: "／", timed: (k) => ` · 計測 ${k} 件`,
-    measured: (k, others) => `${k} 件の応答で実測：最初のトークンから終わりまで` + (others ? "。ほかのリクエストは速度を計れません" : ""),
-    floorTip: (k) => `下限：セッションファイルから読んだ ${k} 件の応答。回答が始まった時刻がないため、その前の時間も含まれます`, row: "125 トークン/秒", rowFloor: "≥100 トークン/秒",
-    cx: "≥50 トークン/秒", answer: "≥100 トークン/秒", push: "≥120 トークン/秒", n1200: "1,200", turnTip: "最初のトークン後は ", answerTip: "で回答 1,000 トークン（推論 200 トークンは含めず）" },
+    n: (x) => `${x} トークン/秒`, m: (n, k) => `${n} トークン/秒 · 計測 ${k} 件`, f: (n, k) => `≥${n} トークン/秒 · 応答 ${k} 件`, join: "／", timed: (k) => ` · 計測 ${k} 件`,
+    measured: (k, others) => `${k} 件の応答で実測：ターン全体で計測` + (others ? "。ほかのリクエストは速度を計れません" : ""),
+    floorTip: (k) => `下限：セッションファイルから読んだ ${k} 件の応答。回答が始まった時刻がないため、その前の時間も含まれます`,
+    whole0: "ターン全体の 5.0 秒 で 500 トークンを出力", whole2: "ターン全体の 20 秒 で 2,000 トークンを出力",
+    codex: "Codex の 1 回の呼び出しのターンは、最初のトークンから 1 秒以上かつ 100 トークン以上のときだけ計測します" },
   de: { speed: null, kpi: null,
-    m: (n, k) => `${n} Token/s · ${k} gemessene ${k === 1 ? "Antwort" : "Antworten"}`, f: (n, k) => `≥${n} Token/s · ${k} Antworten`, join: "; ", timed: (k) => ` · ${k} gemessene Antworten`,
-    measured: (k, others) => `Gemessen an ${k} ${k === 1 ? "Antwort" : "Antworten"}, vom ersten Token bis zum Ende` + (others ? "; die übrigen Anfragen zeigen kein Tempo" : ""),
-    floorTip: (k) => `Mindestens: ${k} Antworten aus Sitzungsdateien. Sie sagen nicht, wann die Antworten begannen, also zählt die Zeit davor mit`, row: "125 Token/s", rowFloor: "≥100 Token/s",
-    cx: "≥50 Token/s", answer: "≥100 Token/s", push: "≥120 Token/s", n1200: "1.200", turnTip: "der ganze Turn. Nach dem ersten Token kam nur ", answerTip: "Mindestens: 1.000 Antwort-Token in " },
+    n: (x) => `${x} Token/s`, m: (n, k) => `${n} Token/s · ${k} gemessene ${k === 1 ? "Antwort" : "Antworten"}`, f: (n, k) => `≥${n} Token/s · ${k} Antworten`, join: "; ", timed: (k) => ` · ${k} gemessene Antworten`,
+    measured: (k, others) => `Gemessen an ${k} ${k === 1 ? "Antwort über ihren ganzen Turn" : "Antworten über ihre ganzen Turns"}` + (others ? "; die übrigen Anfragen zeigen kein Tempo" : ""),
+    floorTip: (k) => `Mindestens: ${k} Antworten aus Sitzungsdateien. Sie sagen nicht, wann die Antworten begannen, also zählt die Zeit davor mit`,
+    whole0: "500 Ausgabe-Token in 5.0 s, der ganze Turn", whole2: "2.000 Ausgabe-Token in 20 s, der ganze Turn",
+    codex: "Ein Codex-Turn eines einzelnen Aufrufs wird nur über mindestens eine Sekunde und mindestens 100 Token gemessen" },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
@@ -157,11 +166,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       // fanbuz); 789: guzi171's window (#1634)
       for (const width of [1400, 983, 789, 700, 560]) {
         const w = L[lang];
-        // sol: one measured at 125 and 259 floors at 50, the floors first;
-        // astra: two measured at 62; Claude Code: 30 floors at 100; the
-        // period: three measured at 75 (1,492 tokens over 20 s), 289 floors
-        // at 54
-        const sol = w.f(50, 259) + w.join + w.m(125, 1), solTip = w.floorTip(259) + "\n" + w.measured(1, false);
+        // sol: one measured at 100 (500 tokens over its whole 5 s) and 259
+        // floors at 50, the floors first; astra: two measured at 62; Claude
+        // Code: 30 floors at 100; the period: three measured at 71 (1,492
+        // tokens over 21 s), 289 floors at 54
+        const sol = w.f(50, 259) + w.join + w.m(100, 1), solTip = w.floorTip(259) + "\n" + w.measured(1, false);
         const astra = w.m(62, 2), astraTip = w.measured(2, true);
         const cc = w.f(100, 30), ccTip = w.floorTip(30);
         await t.test(lang + " " + width, async () => {
@@ -184,20 +193,34 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await p.locator("#ledWrap .led tbody tr").first().waitFor();
           await p.waitForTimeout(200);
 
-          // the rows say each one's: measured, and at least
+          // the rows: every turn that was timed says its whole turn's speed,
+          // so what used to be a floor is a figure like the rest
           const cell = (i) => p.locator(".led tbody tr.led-row").nth(i).locator("td.speed");
-          assert.equal((await cell(0).textContent()).trim(), w.row);
-          assert.equal((await cell(1).textContent()).trim(), w.cx);
-          assert.equal((await cell(2).textContent()).trim(), w.rowFloor);
-          assert.equal((await cell(3).textContent()).trim(), "—");
-          assert.equal((await cell(4).textContent()).trim(), "—", "496 tokens over the whole turn tell nothing");
-          assert.equal((await cell(5).textContent()).trim(), w.answer);
-          assert((await cell(5).getAttribute("title")).includes(w.answerTip), "the answer's floor says so: " + (await cell(5).getAttribute("title")));
-          assert.equal((await cell(6).textContent()).trim(), "—", "Fallmonkey's 380 tokens over the whole turn tell nothing");
-          assert.equal((await cell(7).textContent()).trim(), "—", "Fallmonkey's 11-token astra answer tells nothing");
-          assert.equal((await cell(8).textContent()).trim(), w.push);
-          const pushTip = await cell(8).getAttribute("title");
-          assert(pushTip.includes(w.turnTip) && pushTip.includes(w.n1200), "the whole turn's floor says so: " + pushTip);
+          // sol's timed turn of one call: 500 tokens in its 5 s
+          assert.equal((await cell(0).textContent()).trim(), w.n(100));
+          assert((await cell(0).getAttribute("title")).startsWith(w.whole0), await cell(0).getAttribute("title"));
+          // a sol call in a turn of several: 1,500 tokens in its 30 s
+          assert.equal((await cell(1).textContent()).trim(), w.n(50));
+          // a Claude Code reply, 2,000 tokens in 20 s
+          assert.equal((await cell(2).textContent()).trim(), w.n(100));
+          assert((await cell(2).getAttribute("title")).startsWith(w.whole2), await cell(2).getAttribute("title"));
+          // a short one: 300 tokens in 20 s is slow, and still a speed
+          assert.equal((await cell(3).textContent()).trim(), w.n(15));
+          // 496 tokens over 11 s, under the Codex gate's 1,000 tokens: a
+          // speed now, where the answer's floor after the first token told none
+          assert.equal((await cell(4).textContent()).trim(), w.n(45));
+          // 1,200 tokens over 12 s, its reasoning in them
+          assert.equal((await cell(5).textContent()).trim(), w.n(100));
+          // Fallmonkey's 380 tokens over 7 s: a speed, not the 1,900 after
+          // the first token and not the whole turn's floor any more
+          assert.equal((await cell(6).textContent()).trim(), w.n(54));
+          // an 11-token astra answer in 2.75 s: under the Codex gate, so a
+          // dash, and it says why
+          assert.equal((await cell(7).textContent()).trim(), "—");
+          assert((await cell(7).getAttribute("title")).startsWith(w.codex), "the dash says why: " + (await cell(7).getAttribute("title")));
+          // 1,200 tokens in one push 0.5 s after a 9.5 s first token: over
+          // its whole 10 s, 120 tok/s
+          assert.equal((await cell(8).textContent()).trim(), w.n(120));
 
           // the ranking, by tokens: each group's speed beside its requests
           const rk = (id) => p.locator("#ledRank .rk").filter({ has: p.locator(".rk-nm", { hasText: id }) });
@@ -222,7 +245,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.deepEqual(await kpi.locator(".v > span").allTextContents(), w.f(54, 289).split(" · "), "the speed, then its count");
           const subs = kpi.locator(".sub");
           assert.equal(await subs.count(), 2);
-          assert.equal((await subs.nth(0).textContent()).trim(), w.m(75, 3));
+          assert.equal((await subs.nth(0).textContent()).trim(), w.m(71, 3));
           assert((await subs.nth(1).textContent()).endsWith(w.timed(3)), "the first token's line says its count: " + (await subs.nth(1).textContent()));
           assert(!(await subs.nth(1).textContent()).includes("/"), "no speed on the first token's line");
           assert(await subs.nth(1).evaluate((e) => e.scrollWidth <= e.clientWidth + 1), "the first token's count is read whole");

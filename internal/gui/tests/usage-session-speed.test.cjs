@@ -1,17 +1,21 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
 // The speed of a call read from a session file, on the Usage page's Requests
 // tab. Claude Code's session file has no first token, only when the line that
-// asked for a reply and the reply's last line were written, so its rows had
-// no speed at all, and each said "Not streamed", though the replies were
-// streamed. A long one now tells the least it wrote at, its tokens over that
-// whole time ("≥98 tok/s"); a short one says the file has no first token; a
-// call magpie timed keeps its own speed. Claude Code's, Claude Desktop's
-// and Codex's files tell one: a Codex call in a turn of several is timed
-// from what asked for it, before its first output item, to its last
-// (Fallmonkey on Discord). A narrow window shows it as a wide one does. The rows are real ledger rows read
-// from Claude Code's session files of claude-opus-5-5 replies; the first,
-// 2,558 tokens in 25,987 ms, measured 100.6 tok/s on Claude Code's own stream
-// (--include-partial-messages) from its first thinking event to its end.
+// asked for a reply and the reply's last line were written, so its rows used
+// to tell no speed at all, and each said "Not streamed", though the replies
+// were streamed. A reply's speed is its whole turn now (5989b1af): every
+// output token it wrote over the ms from the request to its last, so a
+// session file's row tells the speed of its whole turn ("98 tok/s") where it
+// used to tell the least it could have written at ("≥98 tok/s"). A call
+// magpie timed keeps its own speed, and a Codex call in a turn of several is
+// still timed from what asked for it, before its first output item, to its
+// last (Fallmonkey on Discord). A dash left says why: failed, or a turn too
+// fast to tell a speed by. A narrow window shows it as a wide one does.
+//
+// The rows are real ledger rows read from Claude Code's session files of
+// claude-opus-5-5 replies; the first, 2,558 tokens in 25,987 ms, measured
+// 100.6 tok/s on Claude Code's own stream (--include-partial-messages) from
+// its first thinking event to its end.
 // English and Chinese; no backend, the API is faked.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
@@ -97,16 +101,31 @@ function server(lang) {
   };
 }
 
+// A reply's speed is its whole turn now (5989b1af): every output token it
+// wrote over the ms from the request to its last, the wait for the first
+// token in it. So a session file's long reply, which used to tell the least
+// it wrote at, tells its own speed, and a gateway call never streamed tells
+// its own too rather than a floor.
 const L = {
   en: {
-    speed: "Speed", gatewayFloor: "≥500 tok/s", floor: "≥98 tok/s", desktop: "≥125 tok/s", codexFloor: "≥25 tok/s", timed: "75 tok/s", codex: "150 tok/s",
-    floorTip: "At least: 2,558 output tokens in 26 s, from the line that asked for it to its last. The session file has no first token, so the wait for it is counted too",
-    noFirst: "The session file has no first token to time a speed from", notStreamed: "Not streamed: no first token to time a speed from",
+    speed: "Speed",
+    whole: "98 tok/s", short: "87 tok/s", timed: "56 tok/s", notStreamed: "500 tok/s",
+    codex: "120 tok/s", codexTurn: "25 tok/s", desktop: "125 tok/s",
+    wholeTip: "2,558 output tokens in 26 s, the whole turn",
+    shortTip: "462 output tokens in 5.3 s, the whole turn",
+    notStreamedTip: "1,500 output tokens in 3.0 s, the whole turn",
+    failed: "A failed request tells no speed",
+    fast: "A turn under 100 ms came too fast to tell a speed by",
   },
   zh: {
-    speed: "速度", gatewayFloor: "≥500 token/秒", floor: "≥98 token/秒", desktop: "≥125 token/秒", codexFloor: "≥25 token/秒", timed: "75 token/秒", codex: "150 token/秒",
-    floorTip: "下限：从发出请求的那一行到最后一行，26 秒 输出 2,558 个 token。会话文件没有首字时间，等首字的时间也算在里面",
-    noFirst: "会话文件没有首字时间，算不出速度", notStreamed: "非流式：没有首字时间，算不出速度",
+    speed: "速度",
+    whole: "98 token/秒", short: "87 token/秒", timed: "56 token/秒", notStreamed: "500 token/秒",
+    codex: "120 token/秒", codexTurn: "25 token/秒", desktop: "125 token/秒",
+    wholeTip: "整轮 26 秒 输出 2,558 个 token",
+    shortTip: "整轮 5.3 秒 输出 462 个 token",
+    notStreamedTip: "整轮 3.0 秒 输出 1,500 个 token",
+    failed: "失败的请求没有速度",
+    fast: "不到 100 毫秒的整轮太快，测不出速度",
   },
 };
 
@@ -136,29 +155,31 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const text = async (i) => (await cell(i).textContent()).trim();
         const tip = (i) => cell(i).getAttribute("title");
 
-        // a long reply from a session file: the least it wrote at, and why
-        assert.equal(await text(0), w.floor);
-        assert.equal(await tip(0), w.floorTip);
-        assert(!(await cell(0).getAttribute("class")).includes("faint"), "a floor isn't faint");
-        // a short one: no speed, and not called "not streamed"
-        assert.equal(await text(1), "—");
-        assert.equal(await tip(1), w.noFirst);
+        // a long reply from a session file: its whole turn, and what it was
+        assert.equal(await text(0), w.whole);
+        assert((await tip(0)).startsWith(w.wholeTip), await tip(0));
+        // a short one tells a speed too: 462 tokens in 5.3 s
+        assert.equal(await text(1), w.short);
+        assert((await tip(1)).startsWith(w.shortTip), await tip(1));
         // what magpie timed is as it was
         assert.equal(await text(2), w.timed);
-        assert.equal(await text(3), w.gatewayFloor);
-        assert((await tip(3)).includes(w.notStreamed), await tip(3));
-        // a session file's own timing wins over the floor
+        // a gateway call never streamed is timed over its whole turn
+        assert.equal(await text(3), w.notStreamed);
+        assert((await tip(3)).startsWith(w.notStreamedTip), await tip(3));
+        // a Codex turn that reasoned first counts it too
         assert.equal(await text(4), w.codex);
-        // a failed call, and a reply in under a second, tell none
+        // a failed call, and a turn under 100 ms, tell none, and say why
         assert.equal(await text(5), "—");
+        assert.equal(await tip(5), w.failed);
         assert.equal(await text(6), "—");
-        // a Codex call in a turn of several tells its floor too
-        assert.equal(await text(7), w.codexFloor);
+        assert.equal(await tip(6), w.fast);
+        // a Codex call of one, timed only over a second or more and 100 tokens or more
+        assert.equal(await text(7), w.codexTurn);
         // Claude Desktop's file is Claude Code's
         assert.equal(await text(8), w.desktop);
-        // the floor is read whole, at either width
+        // the speed is read whole, at either width
         const clipped = await cell(0).evaluate((td) => td.scrollWidth > td.clientWidth + 1);
-        assert(!clipped, "the floor fits its cell");
+        assert(!clipped, "the speed fits its cell");
 
         // the row's details say it too
         // the first cell, not the time's link: at a narrow window the row is brought into sight first
@@ -166,7 +187,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const detail = p.locator(".led tbody tr.led-detail").first();
         await detail.waitFor();
         const pairs = await detail.locator("dt").evaluateAll((dts) => dts.map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]));
-        assert.deepEqual(pairs.find(([k]) => k === w.speed), [w.speed, w.floor], JSON.stringify(pairs));
+        assert.deepEqual(pairs.find(([k]) => k === w.speed), [w.speed, w.whole], JSON.stringify(pairs));
 
         assert.deepEqual(errors, []);
         await ctx.close();

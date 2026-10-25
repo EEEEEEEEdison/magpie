@@ -1,5 +1,10 @@
 // Request rows use the recorded prompt tiers and the reply's decode window,
 // in live and historical lists, grouped or flat. No user state is accessed.
+//
+// A reply's speed is its whole turn (usage.DecodeOf, 5989b1af): every output
+// token it wrote over the ms from the request to its last, the wait for its
+// first token in it. So a row tells a speed whether or not its first token
+// was timed, and the retry's ten seconds count in its turn too.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -39,6 +44,9 @@ const fixtures = [
   req(2, [tier(1000, 3000, 1000)], { out: 0 }),
   req(1, [tier(1000, 3000, 1000)], { tries: [{ id: seat.id, start: now.toISOString(), done: true, status: 200, fail: "other", ms: 11000, ttft: 7000 }] }),
   req(0, undefined, { session: "unknown-metrics", tokens: 0, out: 0, ms: 0, ttft: 0, priced: false, cost: 0 }),
+  // Kiro caches but counts no cache tokens: its tier says so, and the row
+  // shows no hit rate, never 0% (zeewell on X)
+  req(-1, [{ ...tier(148000, 0, 0, 19), cache_unknown: true }], { session: "kiro-metrics", tokens: 148019, out: 19 }),
 ];
 
 function serve(lang, feed) {
@@ -79,16 +87,28 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const check = async () => {
         assert.equal(await rows.nth(0).locator(".cache-hit .v").textContent(), "60%");
         assert.match(await rows.nth(0).locator(".cache-hit").getAttribute("title"), lang === "zh" ? /缓存命中率.*提示词/ : /Cache hit rate.*prompt/);
-        assert.match(await rows.nth(0).locator(".speed .v").textContent(), lang === "zh" ? /^100 token\/秒$/ : /^100 tok\/s$/);
+        // 400 tokens over its whole 11 s turn
+        assert.match(await rows.nth(0).locator(".speed .v").textContent(), lang === "zh" ? /^36 token\/秒$/ : /^36 tok\/s$/);
         assert.match(await rows.nth(1).locator(".cache-hit .v").textContent(), /0%$/);
         assert.match(await rows.nth(2).locator(".cache-hit .v").textContent(), /100%$/);
         assert.equal(await rows.nth(1).locator(".cost").textContent(), "≈$0.000", "known zero cost remains visible");
         assert.equal(await rows.nth(3).locator(".cache-hit").count(), 0, "legacy totals cannot establish a cache rate");
         assert.equal(await rows.nth(4).locator(".cache-hit").count(), 0, "output is not part of the prompt");
-        for (const i of [5, 6, 7, 9, 10, 11]) assert.equal(await rows.nth(i).locator(".speed").count(), 0, `row ${i} has no measured output speed`);
+        // every completed reply with output tells its whole turn's speed now,
+        // its first token timed or not: only a request still underway (9) and
+        // one with no output (10) tell none
+        for (const i of [9, 10]) assert.equal(await rows.nth(i).locator(".speed").count(), 0, `row ${i} has no output to time a speed by`);
+        // 400 tokens over its 11 s, its first token not timed
+        assert.match(await rows.nth(5).locator(".speed .v").textContent(), /^36 /, "a turn not streamed is timed over all of it");
+        // 8,264 tokens over its 24 s turn
+        assert.match(await rows.nth(6).locator(".speed .v").textContent(), /^339 /, "one burst at the end over a long wait is a speed over the whole turn");
+        // 8,264 tokens over 1.5 s
+        assert.match(await rows.nth(7).locator(".speed .v").textContent(), /^5509 /, "a fast turn's whole time is what it took");
         assert.match(await rows.nth(8).locator(".cache-hit").textContent(), /60%$/, "sum the billable prompt tiers across retries");
-        assert.match(await rows.nth(8).locator(".speed .v").textContent(), /^100 /, "retry wait and earlier output do not change decode speed");
+        // 400 tokens over its 21 s turn, the ten-second retry wait in it
+        assert.match(await rows.nth(8).locator(".speed .v").textContent(), /^19 /, "the retry wait is part of the turn its speed is over");
         assert.equal(await rows.nth(9).locator(".cache-hit").count(), 0, "a request still underway has no final rate");
+        assert.equal(await rows.nth(13).locator(".cache-hit").count(), 0, "a vendor that counts no cache tokens has no hit rate, not 0%");
         assert.equal(await rows.nth(12).locator(".meta").isVisible(), false, "a row with no available metrics has no empty band");
         assert.equal(await rows.locator(".rt-metric").filter({ hasText: "—" }).count(), 0, "unavailable metrics leave no dash placeholders");
         assert.equal(await rows.nth(0).locator(".ttft .k").textContent(), lang === "zh" ? "首字耗时" : "First token");
@@ -112,9 +132,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const unknown = page.locator("button.rt-session").filter({ hasText: "unknown-metrics" });
       assert.equal(await unknown.locator(".rt-metric").count(), 0, "a session with no measured cache or speed omits both");
       assert.equal(await unknown.locator(".cost").isVisible(), false, "a session with unknown cost omits it");
+      assert.equal(await page.locator("button.rt-session").filter({ hasText: "kiro-metrics" }).locator(".cache-hit").count(), 0, "a session of uncounted cache has no hit rate");
       assert.doesNotMatch(await unknown.locator(".summary").textContent(), /token|—/, "a session without token counts has no fake zero or dash");
       assert.equal(await group.locator(".cache-hit .v").textContent(), "63%", "cache average is weighted by prompt tokens, not by request count");
-      assert.match(await group.locator(".speed .v").textContent(), /^133 /, "speed is output divided by summed decode windows, not the mean of individual speeds");
+      assert.match(await group.locator(".speed .v").textContent(), /^176 /, "speed is output divided by summed turns, not the mean of individual speeds");
       assert.match(await group.locator(".cache-hit").getAttribute("title"), /9.*11|11.*9/, "unknown and unfinished requests are excluded and coverage is disclosed");
       assert.match(await group.locator(".rt-token-total").getAttribute("title"), /11.*12|12.*11/, "session token breakdown discloses missing records");
       await group.click();
@@ -187,7 +208,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       feed.seq = 13;
       feed.next([req(12, [tier(1920, 2080, 1200, 200)], { seq: 13, out: 200 })]);
       await page.waitForFunction(() => document.querySelector(".rt-req .cache-hit")?.textContent.endsWith("40%"));
-      assert.match(await rows.nth(0).locator(".speed .v").textContent(), /^50 /);
+      // 200 tokens over its whole 11 s turn
+      assert.match(await rows.nth(0).locator(".speed .v").textContent(), /^18 /);
       const updated = await rows.nth(0).locator(".tokens").getAttribute("title");
       assert.match(updated, /1,920/);
       assert.match(updated, /2,080/);

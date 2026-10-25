@@ -30,7 +30,7 @@ const routes = [
     tries: [{ id: relay.id, model: "gpt-6-sol", start: at(6), done: true, status: 429, ms: 300, fail: "rate" }], done: true, status: 429, ms: 300 },
   { id: 103, seq: 103, time: at(1), agent: "codex", model: "relay/gpt-6-sol", provider: "relay", order: [relay],
     tries: [ok(relay, 1, { served: "gpt-6-luna", swapped: true })], done: true, status: 200, ms: 1500, tokens: 12400, served: "gpt-6-luna", swapped: true,
-    // it wrote 2,000 tokens in the 1.2 s after its first, at 1,667 tok/s
+    // it wrote 2,000 tokens over its whole 1.5 s turn, at 1,333 tok/s
     out: 2000, ttft: 300 },
   { id: 100, seq: 100, time: at(9), agent: "claude", model: "claude/claude-opus-5", provider: "claude", order: [claude],
     tries: [ok(claude, 9, { served: "claude-opus-5-20260901" })], done: true, status: 200, ms: 1500, tokens: 800 },
@@ -71,8 +71,8 @@ function serve(lang, opened, live) {
 }
 
 const want = {
-  en: { speed: "1667 tok/s", tab: "Routing", quota: "Allowances", swap: "served gpt-6-luna", today: /today\s*42\s*calls\s*·\s*1\.2M\s*tokens/, fail: /429 · rate limited/, open: "Open Routing", story: /How the request at/ },
-  zh: { speed: "1667 token/秒", tab: "路由", quota: "额度", swap: "实际 gpt-6-luna", today: /今天\s*42\s*次调用\s*·\s*1\.2M\s*token/, fail: /429 · 限流/, open: "打开路由", story: /的请求是怎么路由的/ },
+  en: { speed: "1333 tok/s", tab: "Routing", quota: "Allowances", swap: "served gpt-6-luna", today: /today\s*42\s*calls\s*·\s*1\.2M\s*tokens/, fail: /429 · rate limited/, open: "Open Routing", story: /How the request at/ },
+  zh: { speed: "1333 token/秒", tab: "路由", quota: "额度", swap: "实际 gpt-6-luna", today: /今天\s*42\s*次调用\s*·\s*1\.2M\s*token/, fail: /429 · 限流/, open: "打开路由", story: /的请求是怎么路由的/ },
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {

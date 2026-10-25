@@ -256,6 +256,36 @@ func TestCrossProviderPriceBorrowing(t *testing.T) {
 	}
 }
 
+// A remote magpie is never lent a price set here for another provider's model
+// of the same name: its own list is what that magpie counts the call at, and
+// one from before it told prices tells nothing, which leaves the model to
+// models.dev (remote_magpie.go) rather than to a tariff of some other
+// provider. TestRemoteMagpiePrices is this from the gateway's side.
+func TestRemoteMagpieDoesNotBorrowAnotherProvidersPrice(t *testing.T) {
+	priceHome(t)
+	priceCatalog(t)
+	for _, p := range []Provider{
+		{ID: "cpa", Name: "CPA", Key: "k", Chat: "https://cpa.example/v1", Models: []string{"glm-5.3-flash"}},
+		{ID: "attic", Name: "Attic", Key: "k", Chat: "https://attic.example", Preset: RemoteMagpiePreset},
+	} {
+		if err := Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SetModelPrice("cpa/glm-5.3-flash", &catalog.Price{Input: 0.15, Output: 0.5}); err != nil {
+		t.Fatal(err)
+	}
+
+	// a plain provider still borrows it
+	if pr, ok := EffectivePrice("cpa", "glm-5.3-flash"); !ok || pr.Input != 0.15 {
+		t.Fatalf("cpa/glm-5.3-flash: %+v %v; want its own $0.15", pr, ok)
+	}
+	// the remote's list said nothing about the model, so nothing prices it here
+	if pr, ok := EffectivePrice("attic", "glm-5.3-flash"); ok {
+		t.Fatalf("attic/glm-5.3-flash: %+v, priced by cpa's tariff; want no price at all", pr)
+	}
+}
+
 // Foundation model makers listed in models.dev without dedicated presets
 // (Meta) or whose vendor presets host third-party models (Tencent Tokenhub)
 // are consulted by MakerPrice and CanonicalModel.
