@@ -37,6 +37,19 @@ func TestBareModelIsTheModelItself(t *testing.T) {
 		{"claude-opus-5 [1m]", "claude-opus-5"},
 		// v3 is another model than v2, so it is not a version tail
 		{"deepseek-v3", "deepseek-v3"},
+		// the region a model is sold in, with a colon where Bedrock puts a
+		// dot: workbuddy2api's cn:deepseek-v4.1-flash is the model itself
+		{"cn:deepseek-v4.1-flash", "deepseek-v4.1-flash"},
+		{"workbuddy2api/cn:deepseek-v4.1-flash", "deepseek-v4.1-flash"},
+		{"US:deepseek-v4.1-flash", "deepseek-v4.1-flash"},
+		{"cn:space-bunny", "space-bunny"},
+		// a region's word is one only before something shaped like a model's
+		// id: a relay's own router, cn:auto, keeps its name
+		{"cn:auto", "cn:auto"},
+		// a colon before a modifier is a suffix, not a region: glm-5:free is
+		// found's to cut, and a word no region goes by is left alone
+		{"glm-5:free", "glm-5:free"},
+		{"auto:free", "auto:free"},
 	} {
 		if got := BareModel(tc.in); got != tc.want {
 			t.Errorf("BareModel(%q) = %q, want %q", tc.in, got, tc.want)

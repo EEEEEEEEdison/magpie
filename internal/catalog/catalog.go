@@ -1407,16 +1407,45 @@ var relayPrefixes = []string{"claude-"}
 // included.
 var channelPrefix = regexp.MustCompile(`^[a-z]{2,24}-`)
 
+// regionPrefix is the geography a relay puts before a model's id with a
+// colon where Bedrock puts it with a dot: workbuddy2api's
+// cn:deepseek-v4.1-flash is the vendor's deepseek-v4.1-flash, sold in
+// another region. The words are listed as bedrockGeos lists its geographies.
+// found takes a colon for the start of a modifier instead (glm-5:free), and
+// a relay's own router may be named the way a region is, so a region's word
+// alone is no region: what follows it has to be shaped like a model's id,
+// a dash or a digit in it — cn:auto's "auto" is neither.
+var regionPrefix = regexp.MustCompile(`^(?:global|cn|us|eu|sg|jp|hk|kr|tw|uk|au|ca|in|br|de|fr):`)
+
+// WithoutRegion is id without the region a relay puts before it with a colon
+// (regionPrefix), when what follows the region is shaped like a model's id,
+// and id itself otherwise. It is the one judgement for what a region is:
+// BareModel reads a model's own name by it, and renamedBy asks a catalog for
+// the model behind it.
+func WithoutRegion(id string) string {
+	pre := regionPrefix.FindString(id)
+	if pre == "" {
+		return id
+	}
+	if rest := id[len(pre):]; strings.ContainsAny(rest, "-0123456789") {
+		return rest
+	}
+	return id
+}
+
 // renamed is the model a relay renamed to b, when models.dev lists none
 // by b (found), and the window the rename names, if any: a window mark
 // taken off ("deepseek-v4.1-flash[1m]", "[200k]", and Claude Code's
 // claude-opus-5[1m], which is claude-opus-5), then a relay's prefix
-// ("claude-deepseek-v4.1-flash", and a channel's word, "nyro-gpt-5.5").
+// ("claude-deepseek-v4.1-flash", and a channel's word, "nyro-gpt-5.5"), and
+// a region's (workbuddy2api's "cn:deepseek-v4.1-flash").
 // An id models.dev lists, or knows as an entry's canonical_model_id, is
 // always its own model, never renamed (cortecs's claude-sonnet-4 is
 // claude-sonnet-4-0, not sonnet-4-0); a prefix comes off only when what is
 // left is known — listed, or an entry's canonical_model_id (#1520) — and
-// names a version ("claude-auto" is not the router "auto").
+// names a version ("claude-auto" is not the router "auto"), and a region's
+// word is one only when what follows it is shaped like a model's id, so a
+// relay's own "cn:auto" keeps its name.
 func renamed(b string) (string, int, bool) { return renamedBy(b, true) }
 
 // renamedBy is renamed, a channel's word (channelPrefix) taken off only
@@ -1445,6 +1474,9 @@ func renamedBy(b string, channels bool) (string, int, bool) {
 		if rest := r[len(pre):]; strings.ContainsAny(rest, "0123456789") && knownModel(rest) {
 			return rest, w, true
 		}
+	}
+	if rest := WithoutRegion(r); rest != r && knownModel(rest) {
+		return rest, w, true
 	}
 	return "", 0, false
 }

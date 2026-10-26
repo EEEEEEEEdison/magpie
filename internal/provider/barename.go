@@ -3,6 +3,8 @@ package provider
 import (
 	"regexp"
 	"strings"
+
+	"github.com/yetone/magpie/internal/catalog"
 )
 
 // A model's own name — not a bare model id (BareModelIDs, which is an id
@@ -100,7 +102,8 @@ func CanonicalModel(m string) string {
 // BareModel is a model's name without its maker or path, its version, the
 // size of its context or its case: workbuddy2api/deepseek-v4.1-flash and
 // 9router/workbuddy/deepseek-v4.1-flash are both deepseek-v4.1-flash, the
-// one model they are sold as. A space in it is a "-", with the dashes or
+// one model they are sold as, and so is cn:deepseek-v4.1-flash, the model a
+// region is sold in. A space in it is a "-", with the dashes or
 // underscores beside it: a relay that lists its display name as the id spells
 // GPT-6 Astra's id "GPT-6-Astra" elsewhere, and GPT-6 Sol's "gpt-6- sol".
 func BareModel(m string) string {
@@ -109,6 +112,9 @@ func BareModel(m string) string {
 	if i := strings.LastIndexByte(m, '/'); i >= 0 {
 		m = m[i+1:]
 	}
+	// a region is no part of a model's name, and catalog is the one that
+	// says what counts as one
+	m = catalog.WithoutRegion(m)
 	m = vendorDot.ReplaceAllString(m, "")
 	if loc := versionTail.FindStringIndex(m); loc != nil && loc[0] > 0 {
 		m = m[:loc[0]]

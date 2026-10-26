@@ -594,7 +594,11 @@ price is looked up (`provider.BareModel` is one judgement for both), and the
 dashes or underscores beside the space go with it: a relay that lists its
 display name as the id spells `GPT-6 Astra` where the model's own id is
 `gpt-6-astra` and `gpt-6- sol` where it is `gpt-6-sol`, and each is one
-model, one row and one price.
+model, one row and one price. A region a relay writes before the id with a
+colon goes with them: `workbuddy2api/cn:deepseek-v4.1-flash` is
+`deepseek-v4.1-flash`, one row with the same model under its plain id. The
+region comes off only where what follows it is shaped like a model's id, a
+dash or a digit in it, so a relay's own `cn:auto` keeps its name.
 `Stats.Overview`'s `model` matches a session's models either way round,
 as `usage.Filter.keepsRecord` matches a request. What is aggregated does not
 change: each name a call was made under keeps its own row, and a session's own

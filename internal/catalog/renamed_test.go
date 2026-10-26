@@ -356,3 +356,49 @@ func TestChannelWordBeforeAModelIsTheModel(t *testing.T) {
 		}
 	}
 }
+
+// A region a relay sells a model in, written before its id with a colon
+// where Bedrock writes a geography with a dot: workbuddy2api's
+// cn:deepseek-v4.1-flash is the vendor's deepseek-v4.1-flash, and it kept
+// none of the model's levels, window or images while the bare id had them.
+func TestRegionPrefixBeforeAModelIsTheModel(t *testing.T) {
+	writeCatalog(t, renamedCatalog)
+
+	if got := strings.Join(EffortsOf("cn:deepseek-v4.1-flash"), ","); got != "low,high,max" {
+		t.Errorf("EffortsOf(cn:deepseek-v4.1-flash) = %q, want low,high,max", got)
+	}
+	if got := ContextOf("cn:deepseek-v4.1-flash"); got != 1000000 {
+		t.Errorf("ContextOf(cn:deepseek-v4.1-flash) = %d, want 1000000", got)
+	}
+	if !SeesImages("cn:deepseek-v4.1-flash") {
+		t.Error("SeesImages(cn:deepseek-v4.1-flash) = false, want true")
+	}
+	// a region is no part of the model's name, as a Bedrock geography isn't
+	if got := NameOf("cn:deepseek-v4.1-flash"); got != "DeepSeek V4.1 Flash" {
+		t.Errorf("NameOf(cn:deepseek-v4.1-flash) = %q, want DeepSeek V4.1 Flash", got)
+	}
+	// the path a custom provider's levels are borrowed by: the region is off
+	// before the maker that knows the model is asked
+	if got, ok := ListedByBorrowed([]string{"deepseek"}, "cn:deepseek-v4.1-flash"); !ok || strings.Join(got, ",") != "low,high,max" {
+		t.Errorf("ListedByBorrowed(cn:deepseek-v4.1-flash) = %q, %v, want low,high,max", strings.Join(got, ","), ok)
+	}
+	// found still cuts at a colon for a modifier
+	if got := strings.Join(EffortsOf("glm-5:free"), ","); got != "low,high" {
+		t.Errorf("EffortsOf(glm-5:free) = %q, want low,high", got)
+	}
+	// a region's word is one only before something shaped like a model's id:
+	// cn:auto is the relay's own routing alias, not the seven-level "auto"
+	// three routers list, and it borrows none of it
+	if got := EffortsOf("cn:auto"); len(got) != 0 {
+		t.Errorf("EffortsOf(cn:auto) = %v, want none", got)
+	}
+	if c, n := ContextOf("cn:auto"), NameOf("cn:auto"); c != 0 || n != "" {
+		t.Errorf("cn:auto took a catalog entry: window %d, name %q", c, n)
+	}
+	// nor does another word take an id for a model
+	for _, id := range []string{"cn:not-a-model", "xy:deepseek-v4.1-flash"} {
+		if ContextOf(id) != 0 || len(EffortsOf(id)) != 0 {
+			t.Errorf("%s was taken for a model", id)
+		}
+	}
+}
