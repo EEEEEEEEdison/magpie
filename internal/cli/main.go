@@ -121,6 +121,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie gateway-key models <id> [all|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some
   magpie gateway-key quotas <id> [on|off]   whether a key held to a budget, models or accounts is told the quotas of what it may use
   magpie mcp image                the image and video generation MCP server an agent is given from the library (stdio)
+  magpie tools [<name>]           the tools magpie's MCP servers give agents (images, vision, web search, plugins'), with their parameters
+  magpie tool <name> [--<param> <value>…] [<words>] [-o <file|folder>] [--json]   call one through the running magpie; an image or video it makes is saved
   magpie usage [today|7d|30d|all] tokens and cost per agent, model and subscription account (30d)
   magpie usage --csv [--account <name>] [today|7d|30d|all]   every request as CSV (or one account's): the model asked for, sent and served, tokens, cost, time, status, account
   magpie usage [--csv [--account <name>]] --last <dur>|--days <n>   the same for a window ending now (24h, 90m, 1.5 days), not from a midnight
@@ -221,6 +223,32 @@ var tuiRun = tui.Run
 // Windows, half a second for each one another program holds open).
 func syncAgentsOnChange() { catalog.Changed = agent.SyncCatalogSoon }
 
+// startUp brings the files magpie and its agents keep up to what this
+// magpie reads, before a command that may read them; a var so a test can
+// tell it ran.
+var startUp = func() {
+	// started by an update, the magpie it replaces goes first: the moves
+	// below write the files it may still be writing
+	update.AwaitPredecessor()
+	makeDirs()
+	settings.Migrate()
+	// every built-in plugin starts on (plugins.yml), on a new install too
+	if _, err := pluginrt.Settle(); err != nil {
+		fmt.Fprintf(os.Stderr, "magpie: plugins.yml: %v\n", err)
+	}
+	if _, err := pluginrt.Refresh(); err != nil {
+		fmt.Fprintf(os.Stderr, "magpie: plugins.yml: %v\n", err)
+	}
+	// the providers and settings read once for every agent's fields, which
+	// the moves below look at (a write among them reads them again)
+	release := provider.Hold()
+	agent.RenameLegacy()
+	agent.MoveCursorEfforts()
+	agent.MoveAntigravityEfforts()
+	agent.MoveOffAccountIDs()
+	release()
+}
+
 func run(args []string) error {
 	// a command that saved a provider or a group ends with the agents'
 	// files written, which its save no longer waits for; and a test's run
@@ -260,26 +288,26 @@ func run(args []string) error {
 	if len(args) > 1 && (args[0] == "accounts" || args[0] == "account") && args[1] == "discovery" {
 		return accountsDiscoveryCmd(args[2:])
 	}
-	// started by an update, the magpie it replaces goes first: the moves
-	// below write the files it may still be writing
-	update.AwaitPredecessor()
-	makeDirs()
-	settings.Migrate()
-	// every built-in plugin starts on (plugins.yml), on a new install too
-	if _, err := pluginrt.Settle(); err != nil {
-		fmt.Fprintf(os.Stderr, "magpie: plugins.yml: %v\n", err)
+	// what an agent starts for each session or message talks to the
+	// running gateway and nothing else: the moves below list every
+	// provider and account, which starts the plugin host and asks claude,
+	// cursor-agent and devin who is signed in — five processes and a
+	// Claude /usage for each Claude Code session's image MCP (#3318)
+	if len(args) > 0 {
+		switch args[0] {
+		case "mcp":
+			return imagemcp.Run(args[1:])
+		case "claude-mcp-helper": // internal: stdio MCP subprocess spawned by Claude Code
+			return claudebridge.RunMCP(args[1:])
+		case "statusline":
+			return statuslineCmd(args)
+		case "tools":
+			return toolsCmd(args[1:])
+		case "tool":
+			return toolCmd(args[1:])
+		}
 	}
-	if _, err := pluginrt.Refresh(); err != nil {
-		fmt.Fprintf(os.Stderr, "magpie: plugins.yml: %v\n", err)
-	}
-	// the providers and settings read once for every agent's fields, which
-	// the moves below look at (a write among them reads them again)
-	release := provider.Hold()
-	agent.RenameLegacy()
-	agent.MoveCursorEfforts()
-	agent.MoveAntigravityEfforts()
-	agent.MoveOffAccountIDs()
-	release()
+	startUp()
 	// a provider added, edited or removed, or a list fetched anew, reaches
 	// the model lists agents keep in files of their own, behind the save
 	// that changed it (agent.SyncCatalogSoon)
@@ -297,6 +325,7 @@ func run(args []string) error {
 	// for on a model of its own, on the model of magpie's picked beside
 	// its ChatGPT sign-in rather than on that account (atom_Ray on X)
 	gateway.CodexSideModel = agent.CodexSideModel
+	gateway.CodexSideSet = agent.CodexSideSet
 	// the setup kept the same on every computer, by whichever serves
 	gateway.WhileServing = append(gateway.WhileServing, davsync.Run)
 	// and dsh's patch lists, which dsh reads live: a route left behind by
@@ -419,8 +448,6 @@ func run(args []string) error {
 		return sessionsCmd(args)
 	case "quota", "quotas":
 		return quotaCmd(args)
-	case "statusline":
-		return statuslineCmd(args)
 	case "update":
 		return updateCmd(args)
 	case "library", "lib":
@@ -437,12 +464,8 @@ func run(args []string) error {
 		return s3Cmd(args[1:])
 	case "github":
 		return githubCmd(args[1:])
-	case "mcp":
-		return imagemcp.Run(args[1:])
 	case "claude-code":
 		return claudeCodeCmd(args[1:])
-	case "claude-mcp-helper": // internal: stdio MCP subprocess spawned by Claude Code
-		return claudebridge.RunMCP(args[1:])
 	}
 
 	a, err := agent.Find(args[0])
@@ -462,7 +485,12 @@ func run(args []string) error {
 				// Lody takes only a gateway on this computer's loopback
 				return fmt.Errorf("%s takes magpie only at a loopback address, and the gateway is at %s: nothing was opened", a.Name, gateway.URL())
 			}
-			openInBrowser(link)
+			if a.ID == "lody" {
+				// Lody on Linux is run with the link (agent.OpenLody)
+				_ = agent.OpenLody(link, func(u string) error { openInBrowser(u); return nil })
+			} else {
+				openInBrowser(link)
+			}
 			fmt.Println(green.Render("✓"), bold.Render(a.Name), muted.Render("opened to add magpie — confirm it there"))
 			fmt.Println(muted.Render("  " + link))
 			return nil
@@ -704,7 +732,13 @@ func list(agents []*agent.Agent, detectedOnly bool, dimFrom int) error {
 				r.vals += label.Render("  ·  " + said)
 			}
 			if a.Import != nil {
-				if a.Added != nil && a.Added() {
+				// unknown reads as not added here: the line only offers the
+				// command, never says magpie is missing
+				added := false
+				if a.Added != nil {
+					added, _ = a.Added()
+				}
+				if added {
 					r.vals = value.Render("magpie added")
 				} else {
 					r.vals = label.Render("magpie "+a.ID+" add") + faint.Render("  to add magpie")

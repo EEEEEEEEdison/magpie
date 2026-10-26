@@ -10,7 +10,10 @@ import (
 // for by one name and another answered belongs to the model that answered
 // it, so searching "claude" finds no call a relay answered with gpt-6.1-sol,
 // and the row's provider, host, session, account and key names are searched
-// by their own filters, not by this box.
+// by their own filters, not by this box. A Codex row is the one exception:
+// its thread, the subagent that made a call or the session it belongs to,
+// is searched too, the codexIdentity branch of keepsRecord, which the
+// Sessions page asks a thread by.
 func TestSearchAsksTheModelsAlone(t *testing.T) {
 	swapped := Record{Agent: "claude-desktop", Requested: "claude-sonnet-5", Model: "gpt-6.1-sol",
 		Provider: "cpa", Host: "relay.example", Session: "s-1234", Effort: "high",
@@ -44,5 +47,14 @@ func TestSearchAsksTheModelsAlone(t *testing.T) {
 	// and the ledger's own rows keep the same promise
 	if rows, _, _ := ledger(time.Time{}, Filter{Query: "claude"}, []Record{swapped, served}); len(rows) != 0 {
 		t.Fatalf("the name a client asked for found a row: %+v", rows)
+	}
+	// a Codex row is found by its thread, the session it belongs to, as the
+	// Sessions page asks for one
+	thread := Row{Record: Record{Model: "m", Session: "main-a"}, SessionRole: "unknown"}
+	if !(Filter{Query: "main-a"}).keepsRow(&thread) {
+		t.Fatalf("a Codex row's session did not find it")
+	}
+	if (Filter{Query: "main-a"}).keeps(Row{Record: Record{Model: "m", Session: "main-a"}}.Record) {
+		t.Fatalf("another agent's session found a row")
 	}
 }
