@@ -145,7 +145,10 @@ func TestCompactPageMatchesLedger(t *testing.T) {
 	}
 }
 
-func TestRequestPageModelRankingKeepsAlternatives(t *testing.T) {
+// A model picked is the one the ranking is of: the split lists the page's
+// own models, never one its rows leave out. Another model is picked in the
+// search box.
+func TestRequestPageModelRankingIsOfTheModelPicked(t *testing.T) {
 	pageHome(t)
 	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
 	records := []Record{
@@ -172,7 +175,7 @@ func TestRequestPageModelRankingKeepsAlternatives(t *testing.T) {
 			for _, share := range page.By["model"] {
 				models[share.ID] = share.Calls
 			}
-			if want := map[string]int{"gpt-5": 1, "gpt-5-mini": 1}; !reflect.DeepEqual(models, want) {
+			if want := map[string]int{"gpt-5": 1}; !reflect.DeepEqual(models, want) {
 				t.Fatalf("model ranking = %v, want %v", models, want)
 			}
 			if page.Total != 1 || len(page.Rows) != 1 || page.Rows[0].Model != "gpt-5" || page.Sum.Calls != 1 || page.Sum.Input != 10 {
@@ -190,6 +193,37 @@ func TestRequestPageModelRankingKeepsAlternatives(t *testing.T) {
 				if shares := page.By[dimension]; len(shares) != 1 || shares[0].Calls != 1 {
 					t.Fatalf("%s ranking ignored the model filter: %+v", dimension, shares)
 				}
+			}
+		})
+	}
+}
+
+// A model searched for is the one the ranking is of: the GUI writes the
+// model picked into the search box, so a ranking that kept the alternatives
+// would list models the page's own rows leave out.
+func TestRequestPageModelRankingFollowsTheSearch(t *testing.T) {
+	pageHome(t)
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
+	records := []Record{
+		{Time: now, Provider: "a", Agent: "codex", Model: "gpt-5", Input: 10},
+		{Time: now, Provider: "a", Agent: "codex", Model: "gpt-5-mini", Input: 20},
+		{Time: now, Provider: "b", Agent: "codex", Model: "other-provider", Input: 30},
+	}
+	gateway := &rowChunk{}
+	all := Ledgered{}
+	for i, r := range records {
+		row := Row{Record: r}
+		gateway.add(row, "", int64(i), false)
+		all.Rows = append(all.Rows, row)
+	}
+	f := Filter{Model: "gpt-5", Query: "gpt-5"}
+	for name, page := range map[string]RequestPage{
+		"compact": buildRequestPage(Today, f, 0, 100, gateway, nil),
+		"ledger":  pageFromLedger(Today, f, 0, 100, all),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := page.By["model"]; len(got) != 1 || got[0].ID != "gpt-5" || got[0].Calls != 1 {
+				t.Fatalf("model ranking = %+v, want gpt-5 alone", got)
 			}
 		})
 	}
@@ -268,7 +302,9 @@ func TestQueryPageSourceAndIdentityInvalidation(t *testing.T) {
 
 // One model at two providers is ranked once at each, with each one's own
 // first token and decode, and a provider picked still ranks the other
-// (inaction on Discord).
+// (inaction on Discord). A model picked keeps the split to that model: the
+// providers it went to are the ones left to switch to, and another model's
+// calls are no part of it.
 func TestRequestPageRanksModelAtEachProvider(t *testing.T) {
 	pageHome(t)
 	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
@@ -296,8 +332,11 @@ func TestRequestPageRanksModelAtEachProvider(t *testing.T) {
 				got[s.ID] = s
 			}
 			fast, slow := got[ModelAtKey("zhipu", "glm-5.3")], got[ModelAtKey("zcode", "glm-5.3")]
-			if len(got) != 3 || fast.Calls != 2 || slow.Calls != 1 || got[ModelAtKey("zcode", "kimi-k3")].Calls != 1 {
-				t.Fatalf("model at each provider = %+v, want glm-5.3 at zhipu (2) and at zcode (1), kimi-k3 at zcode (1)", page.By["modelAt"])
+			if len(got) != 2 || fast.Calls != 2 || slow.Calls != 1 {
+				t.Fatalf("model at each provider = %+v, want glm-5.3 at zhipu (2) and at zcode (1)", page.By["modelAt"])
+			}
+			if _, ok := got[ModelAtKey("zcode", "kimi-k3")]; ok {
+				t.Fatalf("another model's calls are in the model at each provider split: %+v", page.By["modelAt"])
 			}
 			if fast.Timed != 2 || fast.TTFT != 400 || slow.Timed != 1 || slow.TTFT != 800 {
 				t.Fatalf("first tokens mixed between providers: %+v %+v", fast, slow)

@@ -880,7 +880,11 @@ var Dimensions = []string{"provider", "agent", "model", "modelAt", "callerKey"}
 const NoCallerKey = "none"
 
 // Without is f with the pick of dimension d cleared: what d's shares are
-// counted over, so that the others are still there to switch to.
+// counted over, so that the others are still there to switch to. modelAt
+// gives up the provider alone: that split is the one model picked at each
+// provider it went to, so the model stays — its other providers are the
+// ones left to switch to — and a model searched or picked narrows it as it
+// narrows the page, another model's calls no part of it.
 func (f Filter) Without(d string) Filter {
 	switch d {
 	case "provider":
@@ -888,9 +892,11 @@ func (f Filter) Without(d string) Filter {
 	case "agent":
 		f.Agent = ""
 	case "model":
-		f.Model = ""
+		// The model picked stays: this split is of it, as the page's rows
+		// are, and another model is picked in the search box. Giving it up
+		// here would list models the page's own rows leave out.
 	case "modelAt":
-		f.Model, f.Provider = "", ""
+		f.Provider = ""
 	case "callerKey":
 		f.CallerKey = ""
 	}
