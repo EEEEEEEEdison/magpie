@@ -141,7 +141,7 @@ const (
 
 var rules = append([]rule{
 	{kind: "PRIVATE_KEY", re: regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]+?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----`), markers: []string{"PRIVATE KEY"}},
-	{kind: "API_KEY", re: regexp.MustCompile(`sk-(?:ant-|proj-|or-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}`), markers: []string{"sk-"}, bound: tokenCh},
+	{kind: "API_KEY", re: regexp.MustCompile(`sk-(?:ant-|proj-|or-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}`), markers: []string{"sk-"}, bound: tokenCh, ok: notASlug},
 	// a gateway's or a relay's own: oc_sk_…, or_sk_… (#195)
 	{kind: "API_KEY", re: regexp.MustCompile(`[a-z]{2,4}_sk_[A-Za-z0-9_-]{20,}`), markers: []string{"_sk_"}, bound: tokenCh, ok: secretValue},
 	{kind: "API_KEY", re: regexp.MustCompile(`(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|glpat-[A-Za-z0-9_-]{20,})`), markers: []string{"gh", "github_pat_", "glpat-"}, bound: tokenCh},
@@ -157,12 +157,12 @@ var rules = append([]rule{
 	{kind: "PASSWORD", re: regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://[^\s:@/?#"'<>]*:([^\s@/?#"'<>]{3,})@`), markers: []string{"://"}, ok: notAVariable},
 	// password = …, API_KEY: "…", as .env files and configs have them
 	{kind: "SECRET", re: regexp.MustCompile(`(?i)[A-Za-z0-9_.-]*(?:` + secretNames.pattern() + `)[A-Za-z0-9_.-]*` + quote + `[ \t]*[:=][ \t]*` + quote + `(` + secretCh + `{8,})`),
-		markers: secretNames.markers(), ok: secretValue, at: notCode},
+		markers: secretNames.markers(), ok: secretValue, at: fieldAt},
 	// a field called key and nothing more, as providers.json has one: "key":
 	// "oc_sk_…" (#195). Only a long value of letters and digits both, since
 	// code calls anything a key: a map's "key": "value", sort_key, keyboard.
 	{kind: "SECRET", re: regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_.-])` + quote + `key` + quote + `[ \t]*[:=][ \t]*` + quote + `(` + secretCh + `{16,})`),
-		markers: fieldNames{{"key", "key"}}.markers(), ok: secretValue, at: notCode},
+		markers: fieldNames{{"key", "key"}}.markers(), ok: secretValue, at: fieldAt},
 	// a password after its name in Chinese, Japanese or Korean, as people
 	// write one into a message: 密码：786kih, 密碼是 hunter2, パスワード: … .
 	// Unlike password = in a config, nothing in code is called 密码, so
@@ -292,6 +292,9 @@ func keyValue(v string) bool {
 // time.
 func keyAt(s string, a, b int) bool {
 	v := s[a:b]
+	if pathValue(v) {
+		return false // where a key is kept: 私钥 ~/.ssh/id_ed25519 (fieldvalue.go)
+	}
 	if keyValue(v) {
 		return true
 	}
@@ -399,6 +402,30 @@ func inUserinfo(s string, a int) bool {
 // the user every git host is reached by over SSH (git@github.com:o/r.git,
 // git@gitee.com, a company's own git@git.corp.com), no one's mailbox, and
 // was masked so a remote no longer read as one (jumy on Discord).
+// notASlug is false for words in lower case joined by hyphens, as a
+// page's address names an article about SK hynix
+// (cnbc.com/…/sk-hynix-third-quarter-profit.html), which went to the model
+// as a key. A key's characters are random: it has a capital, or a run of
+// 16 or more with no hyphen (DeepSeek's sk- and 32 hex digits, OpenRouter's
+// sk-or-v1- and 64), or hex digits alone, as a UUID's groups (sk- and a
+// UUID in lower case) are, which no word but a few like "face" is.
+func notASlug(v string) bool {
+	if strings.ContainsFunc(v, func(r rune) bool { return r >= 'A' && r <= 'Z' }) {
+		return true
+	}
+	if !strings.ContainsFunc(strings.TrimPrefix(v, "sk-"), func(r rune) bool {
+		return r != '-' && r != '_' && (r < '0' || r > '9') && (r < 'a' || r > 'f')
+	}) {
+		return true
+	}
+	for _, w := range strings.FieldsFunc(v, func(r rune) bool { return r == '-' || r == '_' }) {
+		if len(w) >= 16 {
+			return true
+		}
+	}
+	return false
+}
+
 func realEmail(v string) bool {
 	at := strings.LastIndexByte(v, '@')
 	if strings.EqualFold(v[:at], "git") {

@@ -403,9 +403,6 @@ type settingsJSON struct {
 	GatewayOn  bool   `json:"gatewayOn,omitempty"`
 	GatewayWhy string `json:"gatewayWhy,omitempty"`
 	Web        bool   `json:"web,omitempty"`
-	// NoVideo: this app's webview would crash on a <video> (Linux without
-	// gst-plugins-good, webkitPlaysVideo), so the pages show no video
-	NoVideo bool `json:"noVideo,omitempty"`
 	// the proxy vendor requests go through now, and where it came from:
 	// settings, environment, system, off or none
 	ProxyNow    string `json:"proxyNow"`
@@ -630,7 +627,6 @@ func settingsState() settingsJSON {
 	}
 	s.WSL = runtime.GOOS == "windows"
 	s.Web = webPage.Load()
-	s.NoVideo = !s.Web && !webkitPlaysVideo()
 	s.GatewayOn, s.GatewayWhy = gatewayMode(s.Web)
 	s.LANKey = "" // the retained credential belongs on disk, not in UI state
 	// the GitHub token, masked, and where the library's requests take one
@@ -855,12 +851,17 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		if s.Colorblind {
 			boot["colorblind"] = true
 		}
-		// a browser tab keeps its own font choice (fonts.js) and is told
-		// whether there is a list to choose from
+		// a browser tab keeps its own font choice (fonts.js)
 		if !isWeb(w) {
 			boot["uiFont"], boot["codeFont"] = s.UIFont, s.CodeFont
-		} else if fonts.Available {
-			boot["fonts"] = true
+		}
+		// and whether this app's webview would crash on a <video> (Linux
+		// without gst-plugins-good, webkitPlaysVideo), so the pages show
+		// none. Here, not in the settings: the page's settings come from
+		// /api/state, which never said it, so the masking demo set its
+		// video and the web process aborted (avk458 on X, omarchy)
+		if !isWeb(w) && !webkitPlaysVideo() {
+			boot["noVideo"] = true
 		}
 		// and whether it is a gateway's page alone (gatewaymode.go), so the
 		// pages left out never show
@@ -906,7 +907,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		writeJSON(rw, nil)
 	})
 	omarchyRoutes(mux, w)
-	fontRoutes(mux, !fonts.Available, fonts.List)
+	fontRoutes(mux, isWeb(w), !fonts.Available, fonts.List)
 	mux.HandleFunc("GET /api/state", func(rw http.ResponseWriter, r *http.Request) {
 		// the panel and its model picker load from here: an account still
 		// without its vendor's list (one whose try at start-up failed) is

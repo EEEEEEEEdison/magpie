@@ -1316,6 +1316,22 @@ func Portable() string { return appdir.Portable() }
 // writing them in place rather than replacing their inode.
 var fileMu sync.RWMutex
 
+// writing is set while fileMu is held for a write: what a write is made
+// from is read from the disk even while a request holds what was read
+// (filememo.Hold), or a change another magpie or the user made in the
+// held second would be written over. Only set or read under fileMu.
+var writing bool
+
+// lockFile takes fileMu for a write, and returns what lets it go.
+func lockFile() (unlock func()) {
+	fileMu.Lock()
+	writing = true
+	return func() {
+		writing = false
+		fileMu.Unlock()
+	}
+}
+
 // Load reads the settings; anything missing or unreadable is the default.
 func Load() Settings {
 	fileMu.RLock()
@@ -1388,7 +1404,11 @@ func loadChecked() (Settings, error) {
 	// read again only once the file changed: a look at the agents asks for
 	// the settings for every model of every agent (hundreds of reads, a
 	// fifth of the Agents page's wait)
-	b, err := filememo.Read("settings", Path(), func(b []byte) ([]byte, error) { return b, nil })
+	through := filememo.Read[[]byte]
+	if writing {
+		through = filememo.ReadNow[[]byte]
+	}
+	b, err := through("settings", Path(), func(b []byte) ([]byte, error) { return b, nil })
 	if err != nil {
 		if os.IsNotExist(err) {
 			return s.normal(), nil
@@ -1516,16 +1536,14 @@ func SavedAddr() string {
 
 // Save validates and writes the settings, preserving current recording consent.
 func Save(s Settings) error {
-	fileMu.Lock()
-	defer fileMu.Unlock()
+	defer lockFile()()
 	return save(s, false)
 }
 
 // SetGatewayConversations changes local recording consent without overwriting
 // other settings from an earlier snapshot.
 func SetGatewayConversations(on bool) error {
-	fileMu.Lock()
-	defer fileMu.Unlock()
+	defer lockFile()()
 	s := load()
 	s.GatewayConversations = on
 	return save(s, true)
@@ -1535,8 +1553,7 @@ func SetGatewayConversations(on bool) error {
 // file holds now, so a save elsewhere from an older snapshot isn't undone.
 // A settings file that can't be read is left as it is, with the error.
 func EditCheckinOff(edit func([]string) []string) error {
-	fileMu.Lock()
-	defer fileMu.Unlock()
+	defer lockFile()()
 	s, err := loadChecked()
 	if err != nil {
 		return err
@@ -1555,8 +1572,7 @@ func EditCheckinOff(edit func([]string) []string) error {
 // error: what it holds is unknown, not "no aliases". edit is given a copy,
 // and an error from it saves nothing.
 func EditUsageAliases(edit func(map[string]string) (map[string]string, error)) error {
-	fileMu.Lock()
-	defer fileMu.Unlock()
+	defer lockFile()()
 	s, err := loadChecked()
 	if err != nil {
 		return err
@@ -1575,8 +1591,7 @@ func EditUsageAliases(edit func(map[string]string) (map[string]string, error)) e
 // SetRedactModel turns the local masking model on or off, on its own, as
 // Settings → Privacy does once the model is downloaded.
 func SetRedactModel(on bool) error {
-	fileMu.Lock()
-	defer fileMu.Unlock()
+	defer lockFile()()
 	s := load()
 	s.RedactModel = on
 	return save(s, false)
@@ -1585,8 +1600,7 @@ func SetRedactModel(on bool) error {
 // SetRedactModelName keeps the local model the user picked while it is
 // off, for turning it on.
 func SetRedactModelName(name string) error {
-	fileMu.Lock()
-	defer fileMu.Unlock()
+	defer lockFile()()
 	s := load()
 	s.RedactModelName = name
 	return save(s, false)
@@ -1595,8 +1609,7 @@ func SetRedactModelName(name string) error {
 // SetRedactModelScore keeps score as the local model id's threshold; 0
 // is back to the model's own.
 func SetRedactModelScore(id string, score float64) error {
-	fileMu.Lock()
-	defer fileMu.Unlock()
+	defer lockFile()()
 	s := load()
 	m := maps.Clone(s.RedactModelScore)
 	if m == nil {
@@ -1617,8 +1630,7 @@ func SetRedactModelScore(id string, score float64) error {
 // UseRedactModel turns the local masking model on as name, the model
 // the user picked, once that model is downloaded.
 func UseRedactModel(name string) error {
-	fileMu.Lock()
-	defer fileMu.Unlock()
+	defer lockFile()()
 	s := load()
 	s.RedactModel, s.RedactModelName = true, name
 	return save(s, false)

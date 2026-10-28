@@ -1,0 +1,187 @@
+package gateway
+
+import (
+	"encoding/json"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/tidwall/gjson"
+	"github.com/yetone/magpie/internal/provider"
+)
+
+// relayNeedsCacheKey answers as CyberCaius's AnyRouter did a request
+// without a prompt_cache_key.
+func relayNeedsCacheKey(body []byte) (int, string) {
+	if gjson.GetBytes(body, "prompt_cache_key").String() == "" {
+		return 400, `{"error":{"message":"Arouter: prompt_cache_key is required (request id: x)","type":"invalid_request_error"},"type":"error"}`
+	}
+	return 0, ""
+}
+
+// Claude Desktop checks the gateway as it starts, and from Test
+// connection, with {"max_tokens":1,"messages":[{"role":"user",
+// "content":"."}]} on the shortest haiku it is listed:
+// magpie-0958175816.anthropic.claude-haiku-5-5[1m], leee's haiku, for
+// CyberCaius on Discord (v0.1.1838). It goes to Desktop's default model,
+// the first listed (his routing group 天翼云), not to leee nor to the
+// relay's GPT model a session ran on last, and is answered there. A
+// title still goes to that session's model.
+func TestClaudeDesktopProbeToDefaultModel(t *testing.T) {
+	claude := &fake{t: t, reply: sse(
+		`event: message_start`+"\n"+`data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"claude-haiku-5-5","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}`,
+		`event: message_stop`+"\n"+`data: {"type":"message_stop"}`)}
+	// as AnyRouter answers a GPT model asked for fewer than 16 tokens: the
+	// upstream's floor isn't passed on
+	relay := &fake{t: t, reply: deepseekReply, refuse: func(body []byte) (int, string) {
+		if c, m := relayNeedsCacheKey(body); c != 0 {
+			return c, m
+		}
+		if n := max(gjson.GetBytes(body, "max_tokens").Int(), gjson.GetBytes(body, "max_completion_tokens").Int()); n > 0 && n < 16 {
+			return 400, `{"error":{"message":"AnyRouter: bad response status code 400 (request id: x)","type":"new_api_error"}}`
+		}
+		return 0, ""
+	}}
+	ctyun := &fake{t: t, reply: deepseekReply}
+	up := setup(t, provider.Anthropic, claude)
+	ru := httptest.NewServer(relay)
+	t.Cleanup(ru.Close)
+	cu := httptest.NewServer(ctyun)
+	t.Cleanup(cu.Close)
+	for _, p := range []provider.Provider{
+		{ID: "leee", Name: "leee", Key: "k", Anthropic: up.URL, Models: []string{"claude-haiku-5-5"}},
+		{ID: "anyrouter", Name: "AnyRouter", Key: "k", Chat: ru.URL + "/v1", Models: []string{"gpt-6.1-sol"}},
+		{ID: "ctyun", Name: "天翼云", Key: "k", Chat: cu.URL + "/v1", Models: []string{"glm-5"}},
+	} {
+		if err := provider.Save(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := provider.SaveGroup(provider.Group{ID: "tianyi", Name: "天翼云", Members: []string{"ctyun/glm-5"}, Routing: provider.Ordered}); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.SetModelOrder("claude-desktop", []string{"group/tianyi"}); err != nil {
+		t.Fatal(err)
+	}
+	desktopPicked.Lock()
+	desktopPicked.model, desktopPicked.from = "", ""
+	desktopPicked.Unlock()
+	srv := New()
+	send := func(body string) (int, string) {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+		req.Header.Set("x-api-key", Token+"-claude-desktop")
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh) Claude/2.7032.0 Chrome/140.0 Electron/38.0")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	// a session's turn, on the relay's model, before the restart
+	if code, body := send(`{"model":"anyrouter/gpt-6.1-sol","max_tokens":32000,"stream":true,"tools":[{"name":"Bash","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"hi"}]}`); code != 200 {
+		t.Fatalf("turn: %d %s", code, body)
+	}
+	first := gjson.GetBytes(relay.got, "prompt_cache_key").String()
+	if first == "" || strings.Contains(strings.ToLower(first), "magpie") {
+		t.Fatalf("turn's cache key %q", first)
+	}
+
+	// Desktop's check, by the id it was listed leee's haiku by
+	const probe = `{"model":"magpie-0958175816.anthropic.claude-haiku-5-5[1m]","max_tokens":1,"messages":[{"role":"user","content":"."}]}`
+	relay.calls, relay.got, claude.got = 0, nil, nil
+	if code, body := send(probe); code != 200 {
+		t.Fatalf("probe: %d %s", code, body)
+	}
+	if claude.got != nil || relay.calls != 0 || modelOf(ctyun.got) != "glm-5" {
+		t.Fatalf("probe went to leee (%s) or the relay (%d calls), not Desktop's default 天翼云 (got %s)", claude.got, relay.calls, ctyun.got)
+	}
+
+	// a title still goes to the session's model
+	relay.got = nil
+	if code, body := send(`{"model":"magpie-0958175816.anthropic.claude-haiku-5-5[1m]","max_tokens":200,"stream":true,"system":"You write short session titles.","messages":[{"role":"user","content":"hi"}]}`); code != 200 {
+		t.Fatalf("title: %d %s", code, body)
+	}
+	if modelOf(relay.got) != "gpt-6.1-sol" {
+		t.Fatalf("title went to %q", modelOf(relay.got))
+	}
+	// the same conversation keeps its key
+	if code, body := send(`{"model":"anyrouter/gpt-6.1-sol","max_tokens":32000,"stream":true,"tools":[{"name":"Bash","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"ok"},{"role":"user","content":"more"}]}`); code != 200 {
+		t.Fatalf("second turn: %d %s", code, body)
+	}
+	if k := gjson.GetBytes(relay.got, "prompt_cache_key").String(); k != first {
+		t.Fatalf("second turn's key %q, first %q", k, first)
+	}
+
+	// with the relay's GPT model first listed, the check is answered there
+	// at once: asked for a reply OpenAI's models give, as the relay says
+	// no floor to ask again at
+	if err := provider.SetModelOrder("claude-desktop", []string{"anyrouter/gpt-6.1-sol"}); err != nil {
+		t.Fatal(err)
+	}
+	relay.calls, relay.got, claude.got = 0, nil, nil
+	if code, body := send(probe); code != 200 {
+		t.Fatalf("probe on the relay: %d %s", code, body)
+	}
+	if claude.got != nil || relay.calls != 1 || modelOf(relay.got) != "gpt-6.1-sol" {
+		t.Fatalf("probe on the relay: %d calls, leee got %s", relay.calls, claude.got)
+	}
+}
+
+// desktopProbe knows Desktop's check alone, not a title or a turn.
+func TestDesktopProbe(t *testing.T) {
+	for body, want := range map[string]bool{
+		`{"model":"magpie-0958175816.anthropic.claude-haiku-5-5[1m]","max_tokens":1,"messages":[{"role":"user","content":"."}]}`: true,
+		`{"model":"x","max_tokens":200,"messages":[{"role":"user","content":"."}]}`:                                              false,
+		`{"model":"x","max_tokens":1,"system":"You write short session titles.","messages":[{"role":"user","content":"."}]}`:     false,
+		`{"model":"x","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}`:                                               false,
+		`{"model":"x","max_tokens":1,"tools":[{"name":"a"}],"messages":[{"role":"user","content":"."}]}`:                         false,
+	} {
+		if desktopProbe([]byte(body)) != want {
+			t.Errorf("desktopProbe(%s) = %v", body, !want)
+		}
+	}
+}
+
+// magpie's own cache key goes only to OpenAI's API and a provider the user
+// added by its address; a vendor's preset, a signed-in account and a
+// plugin get none. A relay that turns the field away is asked again
+// without it, once.
+func TestOwnCacheKey(t *testing.T) {
+	for _, c := range []struct {
+		p    provider.Provider
+		want bool
+	}{
+		{provider.Provider{ID: "relay", Chat: "https://relay.example/v1"}, true},
+		{provider.Provider{ID: "openai", Preset: "openai", Responses: "https://api.openai.com/v1"}, true},
+		{provider.Provider{ID: "deepseek", Preset: "deepseek", Chat: "https://api.deepseek.com/v1"}, false},
+		{provider.Provider{ID: "codex", Account: &provider.Account{}, Responses: "https://chatgpt.com/backend-api/codex"}, false},
+		{provider.Provider{ID: "relay-own", Chat: "https://relay.example/v1", ExtraBody: provider.ExtraBody{"prompt_cache_key": json.RawMessage(`"${sessionId}"`)}}, false},
+		{provider.Provider{ID: "relay-forced", Chat: "https://relay.example/v1", ExtraBody: provider.ExtraBody{"!prompt_cache_key": json.RawMessage(`"k"`)}}, false},
+	} {
+		if got := ownCacheKey(c.p); got != c.want {
+			t.Errorf("ownCacheKey(%s) = %v", c.p.ID, got)
+		}
+	}
+
+	refusing := func(body []byte) (int, string) {
+		if gjson.GetBytes(body, "prompt_cache_key").Exists() {
+			return 400, `{"error":{"message":"Unrecognized request argument supplied: prompt_cache_key"}}`
+		}
+		return 0, ""
+	}
+	f := &fake{t: t, reply: deepseekReply, refuse: refusing}
+	setup(t, provider.Chat, f)
+	srv := New()
+	for turn := range 2 {
+		calls := f.calls
+		req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"fake/m1","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("x-api-key", Token)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("turn %d: %d %s", turn+1, rec.Code, rec.Body)
+		}
+		if n, want := f.calls-calls, 2-turn; n != want {
+			t.Errorf("turn %d: %d upstream calls, want %d", turn+1, n, want)
+		}
+	}
+}

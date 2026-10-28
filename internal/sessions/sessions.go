@@ -155,6 +155,9 @@ type Session struct {
 	// Convs are the ids magpie's gateway keys the session's requests by
 	// when they carry no session id of their own (dshConvs)
 	Convs []string `json:"-"`
+	// Copies are the ids of the sessions that are copies of its
+	// conversation, not listed apart from it (ccCopies)
+	Copies []string `json:"-"`
 }
 
 // PriceOf is the effective price of a model as a session names it, at the
@@ -215,6 +218,14 @@ type state struct {
 	// MsgAt is the time of the message last counted, as MsgDay is its date:
 	// what takes back its hour when the same message is counted again
 	MsgAt time.Time `json:"msg_at,omitzero"`
+	// Claude Code: the uuids of the first and the last message of the
+	// file's own conversation (ccLink)
+	Root string `json:"root,omitempty"`
+	Leaf string `json:"leaf,omitempty"`
+	// Claude Code: the uuids of the summaries its compactions (/compact,
+	// /rewind's summarize) left in the file. A copy made after one starts
+	// with that summary, so its Root is one of these (ccCopies).
+	Compacts []string `json:"compacts,omitempty"`
 	// Codex: the model in use, and its running total (input with cache) last seen
 	Model string  `json:"model,omitempty"`
 	Total *Tokens `json:"total,omitempty"`
@@ -491,6 +502,7 @@ func (s *state) clone() *state {
 	c.Codex = s.Codex.clone()
 	c.Claude = s.Claude.clone()
 	c.Models = slices.Clone(s.Models)
+	c.Compacts = slices.Clone(s.Compacts)
 	if s.Total != nil {
 		t := *s.Total
 		c.Total = &t
@@ -1083,10 +1095,12 @@ func CachePath() string { return filepath.Join(filepath.Dir(catalog.CachePath())
 // 19: the names the user gave Claude Code's and WorkBuddy's (custom-title).
 // 20: Codex's source and direct parent thread identity.
 // 21: Codex subagent nicknames and parent spawn task names.
-// 22: each day's tokens by the hour they were spent in, which a vendor
+// 22: dsh's gateway conversation ids (Convs).
+// 23: Claude Code's first and last message uuids (Root, Leaf).
+// 24: Claude Code's compact summaries' uuids (Compacts).
+// 25: each day's tokens by the hour they were spent in, which a vendor
 // billing its hours differently is priced by.
-// 23: dsh's gateway conversation ids (Convs).
-const cacheVersion = 23
+const cacheVersion = 25
 
 type cacheFile struct {
 	Version int               `json:"version"`
@@ -1591,10 +1605,17 @@ func listSessions(limit int) []Session {
 	identities := codexIdentitySnapshot(files)
 	taskTitles := codexSubagentTaskTitles(files)
 
+	copies := ccCopies(files)
+	copyIDs := copiesByKeeper(copies, groups)
+
 	price, titles := pricer(), codexTitleOf()
 	out := []Session{}
 	for _, k := range keys {
+		if copies[k] != "" {
+			continue
+		}
 		if s, ok := assemble(groups[k], price, titles); ok {
+			s.Copies = copyIDs[k]
 			setSessionCodexIdentity(&s, identities)
 			setSessionCodexTaskTitle(&s, taskTitles)
 			out = append(out, s)
