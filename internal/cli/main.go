@@ -85,7 +85,7 @@ const usage = `magpie — one place to pick every agent's model
                                   or only the models ticked for it, a new one off until it is ticked
   magpie search [add <api> <key>|rm <api>]   Tavily, Brave, Exa, Firecrawl, You.com, DeepSeek or SearXNG for web search when no provider can search
   magpie groups                   routing groups: several models agents pick as one, group/<id>
-  magpie group add <name> models=<m1>,<m2> [routing=smart|order|rotate|usage|pace] [stays=auto|session|turn|off]
+  magpie group add <name> models=<m1>,<m2> [routing=smart|order|rotate|usage|pace|weight|free|fast] [stays=auto|session|turn|off]
   magpie group <id> | set <id> k=v… | rm <id>   show, change or remove one (magpie group help for more)
   magpie accounts [agent] [--json]  every subscription magpie knows, with each one's allowance used and when it resets
   magpie accounts add <agent>     sign in to one more Claude, ChatGPT or Google (Gemini CLI, Antigravity) subscription
@@ -142,6 +142,8 @@ const usage = `magpie — one place to pick every agent's model
                                   http(s):// or socks5:// proxy for it; --mirror: a GitHub download mirror put
                                   before the github.com URL (none unless given; still checked against usemagpie.ai's SHA-256)
   magpie update mirror [<prefix>|off]  the mirror every update, the app's own too, is downloaded through
+  magpie update channel [stable|every]  which versions updates offer: stable (one a week, an urgent one at
+                                  once) or every version as it comes out (the default)
   magpie update auto [on|off] [download|notify] [30m|1h|6h|24h]
                                   whether the app looks for updates by itself, how often (6h), and whether
                                   it downloads one at once or only says it is out (notify: for metered networks)
@@ -239,6 +241,11 @@ var startUp = func() {
 	if _, err := pluginrt.Refresh(); err != nil {
 		fmt.Fprintf(os.Stderr, "magpie: plugins.yml: %v\n", err)
 	}
+	// a vendor's keys saved a provider each ("NVIDIA #001"…) are one
+	// provider with those keys, before anything lists them
+	if _, err := provider.FoldCopies(); err != nil {
+		fmt.Fprintf(os.Stderr, "magpie: providers.json: %v\n", err)
+	}
 	// the providers and settings read once for every agent's fields, which
 	// the moves below look at (a write among them reads them again)
 	release := provider.Hold()
@@ -258,6 +265,11 @@ func run(args []string) error {
 		agent.SyncCatalogSettled()
 		catalog.Changed = was
 	}()
+	// what a shell's agy runs (agy_cli.go): every argument after run is
+	// agy's, --help too, and nothing is moved or started first
+	if ok, err := agyCmd(args); ok {
+		return err
+	}
 	// before anything is read, moved or started: --help on any command
 	// prints its usage and does nothing else
 	if helpAsked(args) {
@@ -326,6 +338,11 @@ func run(args []string) error {
 	// its ChatGPT sign-in rather than on that account (atom_Ray on X)
 	gateway.CodexSideModel = agent.CodexSideModel
 	gateway.CodexSideSet = agent.CodexSideSet
+	// the list the Codex app reads from a file beside the ChatGPT sign-in,
+	// its picker showing magpie's models only so (laddieyao on Discord),
+	// written again when the backend's list changes
+	agent.CodexDesktopList = gateway.CodexDesktopCatalog
+	gateway.CodexDesktopChanged = agent.SyncCatalogSoon
 	// the setup kept the same on every computer, by whichever serves
 	gateway.WhileServing = append(gateway.WhileServing, davsync.Run)
 	// and dsh's patch lists, which dsh reads live: a route left behind by
@@ -468,6 +485,13 @@ func run(args []string) error {
 		return claudeCodeCmd(args[1:])
 	}
 
+	// the agent of a plugin that is gone (deleted on disk) is no agent
+	// here, but what magpie stashed of its file puts it back (#3810)
+	if len(args) == 2 && strings.EqualFold(args[1], "default") {
+		if g, ok, err := agent.RestoreGone(args[0]); ok {
+			return goneDefault(args[0], g, err)
+		}
+	}
 	a, err := agent.Find(args[0])
 	if err != nil {
 		return err
@@ -645,6 +669,27 @@ func disconnect(a *agent.Agent) error {
 		if n := a.Notice(); n != "" {
 			fmt.Println(muted.Render("  ↻ " + n))
 		}
+	}
+	return nil
+}
+
+// goneDefault says what `magpie <id> default` did for the agent of a
+// plugin that is gone.
+func goneDefault(id string, g agent.Gone, err error) error {
+	for _, p := range g.Put {
+		fmt.Println(green.Render("✓"), bold.Render(id), muted.Render(p))
+	}
+	for _, p := range g.Off {
+		fmt.Println(green.Render("✓"), bold.Render(id), muted.Render(p+": magpie was out of it already"))
+	}
+	if len(g.Put) > 0 {
+		fmt.Println(muted.Render("  its plugin is gone; disconnected from magpie, back to what it had before"))
+	}
+	if g.PluginOff != "" {
+		fmt.Println(green.Render("✓"), bold.Render(g.PluginOff), muted.Render("is not on magpie: its plugin is off, and magpie put back what it had when the plugin was turned off"))
+	}
+	if err != nil {
+		return fmt.Errorf("%s's plugin is gone, and magpie couldn't put its config back: %w", id, err)
 	}
 	return nil
 }

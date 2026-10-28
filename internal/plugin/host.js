@@ -1834,8 +1834,8 @@ const shown = (v, n) => (typeof v === "string" ? v.trim().slice(0, n) : "")
 // own field (#2038, Vocllum): auth.options, each {key, label, description?,
 // default?, confirm?}. magpie shows each as an Off/On switch in the
 // provider's editor and keeps what the user sets; the plugin reads it with
-// input.magpie.option(provider, key). A switch is only kept and handed
-// over, nothing is run when it changes. Keys are [a-z0-9_-], 1–40 long,
+// input.magpie.option(provider, key). A switch is kept and handed over,
+// and the models listed again (one may go by it); nothing else is run. Keys are [a-z0-9_-], 1–40 long,
 // the first of a key kept; at most MAX_OPTIONS; one without a key or a
 // label is left out.
 const MAX_OPTIONS = 16
@@ -2371,7 +2371,8 @@ async function load({ provider, account, proxy }) {
 //       ms; none: it never runs out), window? ("fiveHour", "weekly") }]
 //       (every reset still to be used) } (the rate-limit resets the
 //       account may spend),
-//     windows?: [{ name, used (percent, 0–100), resetsAt? (ISO or ms),
+//     windows?: [{ name, used (percent, 0–100; left out: the plugin didn't
+//       say, which is no share and not 0%), resetsAt? (ISO or ms),
 //       resetSecs?, display?, amount? / limit? / unit? (the window's own
 //       count, when it counts in amounts: amount of limit used, in unit,
 //       "credits"), span? (seconds the window runs), model? (a
@@ -2380,7 +2381,11 @@ async function load({ provider, account, proxy }) {
 //       count as one), aside? (using it up doesn't
 //       stop the account), runsOutAt? (ISO or ms: when the soonest
 //       credits left in it are lost, apart from its reset, as WorkBuddy's
-//       packages end) / runsOut? (how many are lost then) }],
+//       packages end) / runsOut? (how many are lost then), balance?
+//       (how much is left, in unit, of a prepaid wallet with no total:
+//       sent without used, it is no share, yet routing knows the account
+//       and puts the one with the most left first among the provider's
+//       accounts in the same unit, #3950) }],
 //     signIn?: "expired" | "kept" | "renewed" (what the read means for the
 //       account's sign-in, as a model request's X-Magpie-Sign-In says;
 //       without it an error saying to sign in again marks the account and
@@ -2427,7 +2432,7 @@ async function usageOf(provider, account) {
         : null,
     windows: (Array.isArray(u.windows) ? u.windows : []).map((w) => ({
       name: text(w?.name),
-      used: Math.max(0, num(w?.used)), // past 100 when overspent
+      used: w?.used == null ? null : Math.max(0, num(w?.used)), // past 100 when overspent; null: not said
       resetsAt: when(w?.resetsAt),
       resetSecs: Math.max(0, Math.round(num(w?.resetSecs))),
       display: text(w?.display),
@@ -2441,6 +2446,7 @@ async function usageOf(provider, account) {
       aside: !!w?.aside,
       runsOutAt: when(w?.runsOutAt),
       runsOut: Math.max(0, num(w?.runsOut)),
+      balance: typeof w?.balance === "number" && isFinite(w.balance) ? Math.max(0, w.balance) : null, // null: not said
     })),
   }
 }
@@ -2477,7 +2483,8 @@ async function checkinOf(provider, account) {
   const num = (v) => (typeof v === "number" && isFinite(v) ? Math.max(0, v) : 0)
   const message = typeof r.message === "string" ? r.message : ""
   if (!checkinOutcomes.includes(r.outcome)) {
-    return { outcome: "failed", credit: 0, streak: 0, message: message || `the plugin answered no outcome (${JSON.stringify(r.outcome ?? null)})` }
+    const said = r.outcome === undefined || r.outcome === null ? "no outcome" : JSON.stringify(r.outcome)
+    return { outcome: "failed", credit: 0, streak: 0, message: message ? `the plugin answered ${said}: ${message}` : `the plugin answered ${said}` }
   }
   return { outcome: r.outcome, credit: num(r.credit), streak: Math.round(num(r.streak)), message }
 }

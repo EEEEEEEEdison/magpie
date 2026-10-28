@@ -1026,7 +1026,7 @@ body.window .field.solo { grid-column: auto; }
    while it shows its account */
 .acct-eye { display: none; flex: none; align-self: center; padding: 2px; border-radius: 4px; color: var(--muted); line-height: 0; opacity: 0; }
 body.masked .acct-eye { display: inline-flex; }
-body.masked :hover > .acct-eye, body.masked :focus-within > .acct-eye, .acct-eye[aria-pressed="true"] { opacity: 1; }
+body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.masked :focus-within > .acct-eye, .acct-eye[aria-pressed="true"] { opacity: 1; }
 .acct-eye:hover { color: var(--fg); background: var(--pill-hover); }
 .quota-balance b { margin-left: auto; font-size: 15px; color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
 /* a balance field's several amounts (#420): a line each, the label quiet
@@ -1068,6 +1068,15 @@ body.masked :hover > .acct-eye, body.masked :focus-within > .acct-eye, .acct-eye
 @media (prefers-reduced-motion: reduce) { .quota-refresh { transition: none; } }
 .skeleton { display: block; border-radius: 5px; background: linear-gradient(90deg, var(--skel, var(--pill)) 25%, var(--skel-hi, var(--pill-hover)) 45%, var(--skel, var(--pill)) 65%); background-size: 240% 100%; animation: skeleton-shift 1.4s ease-in-out infinite; }
 @keyframes skeleton-shift { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+/* magpie's bird on what is loading, placed by its feet (skelBird, and the
+   plugin page's README strings) */
+.sk-bird { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 1; pointer-events: none; }
+.sk-bird.roam { position: fixed; z-index: 32; }
+.sk-bird svg { position: absolute; left: -13.2px; top: -19.6px; width: 22px; height: 22px; color: var(--fg); fill: currentColor; overflow: visible; }
+.sk-bird .tail { transform-box: view-box; transform-origin: 14px 22px; }
+.sk-bird .wing { transform-box: view-box; transform-origin: 30px 19.8px; }
+.sk-bird[data-flap] .wing { animation: sk-flap .16s ease-in-out infinite alternate; }
+@keyframes sk-flap { from { transform: rotate(-22deg); } to { transform: rotate(18deg); } }
 .sk-cost { width: 72px; height: 15px; }
 .skeleton-card { min-height: 78px; display: flex; flex-direction: column; gap: 9px; justify-content: center; }
 .sk-title { width: 38%; height: 12px; }
@@ -1865,7 +1874,8 @@ body.panel .profiles #save { height: 25px; } /* the field's: the line keeps its 
 @keyframes pq-mode-flash { 0%, 30% { background: var(--accent-soft); color: var(--accent); } }
 @media (prefers-reduced-motion: reduce) { .pq-mode.flash { animation: none; } }
 .pq-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; padding: 10px 12px; border-radius: 11px; background: var(--card); box-shadow: var(--card-edge); }
-.pq-user { font-size: 12.5px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pq-who { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.pq-user { flex: 0 1 auto; min-width: 0; font-size: 12.5px; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pq-sub { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .pq-sub.err { color: var(--muted); white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 /* a line with the card's refresh: the words shorten, the refresh keeps
@@ -3284,6 +3294,7 @@ body:not(.side-nav) #view-settings .set-head.stuck::before { box-shadow: 0 1px 0
 .set-searching .feat-say { display: none; }
 .row.pref .sub.feat-why { color: var(--muted); font-size: 11px; }
 /* the local model's row says a download, a device or an error in full */
+#privacyModelRow .val { gap: 8px; }
 #privacyModelRow .sub { white-space: normal; overflow-wrap: anywhere; }
 /* Privacy › how it's found: the rules, always on while anything is masked,
    and the local model, which says why it can't be used while nothing is */
@@ -3520,6 +3531,17 @@ input.words.search-key, input.words.search-url { flex: 1 1 120px; width: auto; m
 .row.pref.lan-address-row { position: relative; height: 50px; transition: height .28s var(--ease); }
 .row.pref.lan-address-row .who { position: absolute; top: 16px; left: 14px; }
 .prefs .lan-address-row .val { max-width: 64%; }
+/* Browser access: a link per address, each with its copy button */
+.prefs .web-page-link-row .val { max-width: 64%; gap: 6px; }
+.web-page-links { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
+.web-page-link { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; }
+.row.pref.web-page-warn .name { color: var(--amber); }
+/* three choices leave the words no room in a narrow window: they go under */
+@media (max-width: 600px) {
+  .row.pref.web-page-mode { flex-wrap: wrap; row-gap: 8px; }
+  .row.pref.web-page-mode .who { flex: 1 1 100%; }
+  .prefs .web-page-mode .val { max-width: 100%; }
+}
 .lan-address-controls { position: absolute; inset: 0; pointer-events: none; }
 .lan-address-controls > * { position: absolute; pointer-events: auto; }
 .row.pref .proto.pick.lan-interface { top: 13px; right: 40px; width: 240px; max-width: calc(100% - 40px); margin-left: 0; font: var(--code-style, normal) var(--code-weight, 400) 12px var(--code-font, var(--code)); font-stretch: var(--code-stretch, 100%); transition: top .28s var(--ease), background .12s, color .12s; }
@@ -3670,7 +3692,7 @@ body.panel .modal { padding: 16px 12px; }
      the old one, and the page stayed a few pixels wider than the window
      (#2142, #1864, #2023). No specificity: any transition declared wins. */
   :where(*), :where(*)::before, :where(*)::after { transition-property: none; }
-  .skeleton { animation: none !important; }
+  .skeleton, .sk-bird .wing { animation: none !important; }
 }
 
 /* A browser on a phone: keep the desktop and tray's layout independent.
@@ -4211,7 +4233,7 @@ body.window .row + .row.agent.conn > .who { min-height: 41px; } /* the line abov
 .ag-stale-copy .ag-quiet { height: 20px; margin-left: 4px; padding: 0 6px; vertical-align: middle; }
 .ag-stale-copy .ag-quiet.busy { opacity: .6; cursor: progress; }
 .ag-hint { font-size: 12px; color: var(--muted); }
-.ag-tier { width: 70px; flex: none; font-size: 12px; color: var(--fg-2); }
+.ag-tier { width: 70px; flex: none; font-size: 12px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ag-vl .field.ag-pick { width: 220px; justify-content: flex-start; }
 .ag-vl .field.ag-eff { flex: none; }
 /* the subagents' effort, while they are on Claude Code's pick: Default, dimmed, as a macOS control that can't be used yet */

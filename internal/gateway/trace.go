@@ -11,6 +11,7 @@ package gateway
 import (
 	"context"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -119,6 +120,11 @@ type Route struct {
 	Own     int64 `json:"own,omitempty"`
 	Retried int64 `json:"retried,omitempty"`
 	Queued  int64 `json:"queued,omitempty"`
+	// Phase: "redact" while it is being masked and not yet done
+	// (noteRedacting), so its row says masking rather than routing;
+	// Masking: the ms of Own that went on masking it (maskingMs)
+	Phase   string `json:"phase,omitempty"`
+	Masking int64  `json:"masking,omitempty"`
 	// Served: the model the reply says answered, as the last try has it;
 	// Swapped: another than the one that try asked for; Routed: that try
 	// asked another magpie's routing group, and Served is its member
@@ -252,19 +258,28 @@ type Weighed struct {
 	Used     float64 `json:"used"`             // share of the allowance counting the model, used
 	// Amount of Limit in Unit: the count that share is of, when the
 	// vendor counts it so (WorkBuddy's credits, #659)
-	Amount   float64           `json:"amount,omitempty"`
-	Limit    float64           `json:"limit,omitempty"`
-	Unit     string            `json:"unit,omitempty"`
-	Renews   []time.Time       `json:"renews,omitempty"` // when those windows renew, the biggest first
-	Pace     float64           `json:"pace,omitempty"`   // remaining allowance per hour until its window resets
-	Due      *time.Time        `json:"due,omitempty"`    // when the allowance window used for pace resets
-	Tokens   float64           `json:"tokens,omitempty"` // least used: tokens it served lately
-	Free     bool              `json:"free,omitempty"`   // its model costs nothing there (free first)
-	Turn     bool              `json:"turn,omitempty"`   // in turn: it was this one's turn
-	Fit      int               `json:"fit,omitempty"`    // keyFit
-	Speaks   provider.Protocol `json:"speaks,omitempty"` // a key made for one protocol only
-	Rest     *Rest             `json:"rest,omitempty"`   // resting after a failure, when the request came
+	Amount float64 `json:"amount,omitempty"`
+	Limit  float64 `json:"limit,omitempty"`
+	Unit   string  `json:"unit,omitempty"`
+	// Balance is a prepaid wallet's left in Unit (left.bal, #3950): the
+	// Routing page tells the figure, not a share
+	Balance  *float64          `json:"balance,omitempty"`
+	Renews   []time.Time       `json:"renews,omitempty"`   // when those windows renew, the biggest first
+	Pace     float64           `json:"pace,omitempty"`     // remaining allowance per hour until its window resets
+	Due      *time.Time        `json:"due,omitempty"`      // when the allowance window used for pace resets
+	Tokens   float64           `json:"tokens,omitempty"`   // least used: tokens it served lately
+	Free     bool              `json:"free,omitempty"`     // its model costs nothing there (free first)
+	LateTTFT float64           `json:"lateTtft,omitempty"` // speed first: its ms to the first token lately, 0 if not measured (speed.go)
+	LateTPS  float64           `json:"lateTps,omitempty"`  // speed first: its tokens a second lately, 0 if not told
+	Turn     bool              `json:"turn,omitempty"`     // in turn: it was this one's turn
+	Fit      int               `json:"fit,omitempty"`      // keyFit
+	Speaks   provider.Protocol `json:"speaks,omitempty"`   // a key made for one protocol only
+	Rest     *Rest             `json:"rest,omitempty"`     // resting after a failure, when the request came
 	Unlisted bool              `json:"unlisted,omitempty"`
+	// Window: left out as the request is longer than this, its model's
+	// context window (roomy), unless every one with room is out of its
+	// allowance (#3749)
+	Window int `json:"window,omitempty"`
 	// DueBy: "reset" when Due is when an auto-used Codex reset about to
 	// run out starts the windows again, sooner than they renew (#717)
 	DueBy string `json:"dueBy,omitempty"`
@@ -450,6 +465,10 @@ func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from 
 		if l.of > 0 {
 			w.Amount, w.Limit, w.Unit = l.amount, l.of, l.unit
 		}
+		if l.balIn != "" {
+			b := l.bal
+			w.Balance, w.Unit = &b, l.balUnit
+		}
 		if !l.due.IsZero() {
 			due := l.due
 			w.Due = &due
@@ -468,6 +487,9 @@ func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from 
 	}
 	if wg.free != nil {
 		w.Free = wg.free[c.rest]
+	}
+	if sp, ok := wg.speed[c.restID()]; ok {
+		w.LateTTFT, w.LateTPS = math.Round(sp[0]), math.Round(sp[1]*10)/10
 	}
 	if sinks(p.Sink, p.Routing) {
 		markSunk(&w, c)
