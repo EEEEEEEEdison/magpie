@@ -38,11 +38,12 @@ const pages = [
   entry(BROKEN, "broken", "Broken", []),
 ];
 
-// 与 pagePolicy 一致：web 不写 scheme，原生窗口仅写当前窗口的 scheme。
-// 两种路径都只允许插件自己的目录，不能用全部 scheme 的并集代替。
+// what pluginpage.go's pagePolicy sends: a browser's page gets its folder
+// under https and http (ownSources, #4198); the native window names its
+// own scheme, one.
 const policy = (tok, scheme = "") => {
   const dir = `magpie.test/_magpie/plugin/${tok}/`;
-  const own = scheme ? `${scheme}://${dir}` : dir;
+  const own = scheme ? `${scheme}://${dir}` : `https://${dir} http://${dir}`;
   return [
     "sandbox allow-scripts", "default-src 'none'", `script-src ${own}`, `style-src ${own} 'unsafe-inline'`,
     `img-src ${own} data:`, `font-src ${own}`, `media-src ${own}`, "connect-src 'none'", "frame-src 'none'",

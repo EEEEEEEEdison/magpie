@@ -355,9 +355,12 @@ func pluginCatalog(pp plugin.Provider) []catalog.Model {
 		}
 		if m.ImageSaid {
 			c.ImageInput = &m.Image
-			// what else it takes (audio, video, pdf), only where the
-			// plugin said what it takes: the host's default for a model
-			// it said nothing of is text alone (#1595)
+		}
+		// what else it takes (audio, video, pdf), where someone said it:
+		// the plugin's word stands whether or not it spoke of images
+		// (Command Code's plans, #4436); the host's default for a model
+		// said nothing of is text alone and is nobody's word (#1595)
+		if m.InputsSaid {
 			c.InputModalities = m.Inputs
 		}
 		c.OutputModalities = m.Outputs
@@ -809,6 +812,9 @@ func init() {
 		}
 		return ProxyOf(mid)
 	}
+	// a plugin provider switched off in magpie isn't asked its models:
+	// Off means no request goes to it (ChangQiu on Discord)
+	plugin.ListingOff = pluginsOff
 	// a models hook saying its account's sign-in expired marks it, as a
 	// built-in whose model list the vendor refused marked the account
 	plugin.OnSignIn(func(id, account, said string) {
@@ -917,4 +923,24 @@ func (p Provider) do(client *http.Client, req *http.Request) (*http.Response, er
 	}
 	req.Header.Del(ConversationHeader)
 	return client.Do(req)
+}
+
+// pluginsOff is the plugins' own ids of the plugin providers switched off
+// in magpie, which a listing of the plugins asks nothing: a plugin's id
+// is magpie's (PluginID) as it is, or with "-plugin" taken off. It reads
+// providers.json alone, never the plugins' list, which a listing is
+// asking for.
+func pluginsOff() []string {
+	var out []string
+	for _, p := range storedFile().Providers {
+		if !p.Off {
+			continue
+		}
+		for _, id := range []string{p.ID, strings.TrimSuffix(p.ID, "-plugin")} {
+			if id != "" && PluginID(id) == p.ID && !slices.Contains(out, id) {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
 }

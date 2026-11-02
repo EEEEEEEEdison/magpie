@@ -249,7 +249,9 @@ next reply. A call in that message that wasn't made yet becomes its own
 reply when it is made (`written`). A reply told this way has no words or
 thinking: the model's text before its call is lost to the client.
 
-The user's own `~/.claude.json` and `~/.claude` are never written. Claude
+The user's own `~/.claude.json` and `~/.claude` are never written by
+magpie (Claude Code writes them, as when it records its onboarding done,
+below). Claude
 Code asks whether to trust a folder it has not run in; the helper answers
 yes only when the bridge sets `MAGPIE_CLAUDE_TUI_TRUST=1`, which it does
 for magpie's own working folder or a saved account's config directory,
@@ -354,6 +356,47 @@ tested on the bytes Claude Code 2.1.316 drew, `testdata/usage-2.1.316.bin`),
 for `provider.parseClaudeUsage`. Claude Code 2.1.316's `-p /usage`
 printed only the session's cost there, no window, in a real run.
 
+These one-off interactive runs (`askClaudeTUI`, `claudeUsageTUI`) work in
+magpie's shared work folder (`oneOffDir`: `claudeWorkDir`, a fresh temp
+folder only when it can't be made), where the helper may answer the trust
+question, so a config directory holds one trusted entry for it instead of
+a new `magpie-claude-<n>` entry each read (#4830, mydosu): 67 had piled up
+in one `~/.claude.json`. Entries left by older magpies stay; magpie
+doesn't write that file. In a saved account's config directory, magpie
+writes the folder's entry itself before each run there (`trustWork`,
+`provider.ClaudeTrustFolder`), and so before a bridge run of that
+account in magpie's folder: on mydosu's Windows (#4830) the helper's
+answer was never recorded there, and every read of the account waited
+out its time on the question. The entry is keyed as Claude Code 2.1.316
+looks a folder up (`claudeTrustKeys`): the path in NFC, with forward
+slashes on Windows (`C:/Users/<me>/AppData/Local/Temp/magpie-claude-work`),
+also with its links resolved (`/private/var/…` on a Mac), and the WSL
+mount path for a Claude Code in WSL. Only a direct child of
+`claude-accounts` is written, never `~/.claude.json`; every other key
+is kept, a file that can't be parsed is left alone, and a run's own
+fallback folder isn't recorded. The run's own session file in that folder is
+removed by the `session_id` the helper's init line names (`dropOneOff`),
+so the folder's project doesn't fill with "hi"s. The helper is told when
+its caller stops waiting (`claudetui.DeadlineEnv`, the context's deadline
+less `oneOffMargin`, at most a quarter of what is left) and ends then on
+its own, saying what Claude Code hadn't done and its last screen ("Claude
+Code hadn't drawn /usage's panel in the 16.9s its caller waits for it:
+…"). Killed at the deadline instead, it said nothing, and on Windows the
+reading's error was "exit status 1" alone. A run that still says nothing
+is "Claude Code's interactive mode said nothing before magpie stopped
+waiting for it" (`oneOffErr`), and the card says the reason
+(`quotaError`'s "Allowance unavailable: {why}"), its full text kept for the
+tooltip. A question about trust left unanswered at the deadline is named
+with its folder ("Claude Code asked whether to trust <folder>, not answered
+in the 16.8s …"), where it said "showed no prompt" before (#4830). A failed
+run also goes to app.log (`logOneOff`: "claude: a /usage read of saved
+account <dir> failed: …"), with the helper's whole reason, which the card
+clips to 300 bytes, on one line: the home folder and any
+`/Users/<name>` or `C:\Users\<name>` become `~`, secrets go through
+`redact.Scrub`, and past 800 bytes it keeps the first 300 and the last 500,
+so the end of the last screen stays. The `-p` asks keep a temp folder
+each, which they remove: `-p` asks nothing about trust.
+
 The Claude Code provider editor's "Claude Code runs as" row
 (`claudeModeRow` in app.js, drawn by claudemode.js, which it loads with
 its first read) is a switch between Interactive mode (TUI) and claude
@@ -377,11 +420,28 @@ anew: a turn that takes earlier turns back, an effort change. A run given up on
 (`letGo`) is not taken back, since the interactive mode can't answer a
 control request to stop a turn.
 
+A config folder whose onboarding isn't done (one only `-p` ran in, or
+the account Claude Code is signed in to where `claude` was never run,
+#4817, steven_4422 on Discord) shows its first-run screens before the
+prompt. The helper goes through them as a person would (`ready`,
+`onboard`): Enter on the text style (the default kept), Enter on the
+security notes (`firstRun`), and Esc on whether to set up the terminal
+(`terminalSetup`, shown for a TERM_PROGRAM it knows, such as
+Apple_Terminal or vscode), so that nothing of the user's terminal is set
+up. Each key goes once its screen has stayed drawn 300ms (`trustSettle`).
+Claude Code then records the onboarding done itself (2.1.316:
+`hasCompletedOnboarding`, `lastOnboardingVersion`; magpie writes neither
+in the user's folder),
+and later runs show none of it. Until this change the notes ended the
+run, so with the interactive mode On every request and the `/usage` read
+failed until the user ran Claude Code once by hand. A screen still shown
+after three answers (`onboardTries`) ends the run, saying to run Claude
+Code once in a terminal. `TestShimGoesThroughOnboarding` holds it.
+
 If the interactive Claude Code doesn't start or show its prompt within 45
-seconds (`claudetui.ReadyWait`), or asks how to sign in (`signIn`: a
+seconds (`claudetui.ReadyWait`), asks how to sign in (`signIn`: a
 Claude Code signed in for `-p` only, as in a container given
-`CLAUDE_CODE_OAUTH_TOKEN`), shows its first-run notes (`firstRun`:
-"Security notes", a config folder whose onboarding isn't done) or asks
+`CLAUDE_CODE_OAUTH_TOKEN`), stays on its first-run screens, or asks
 about a folder the user hasn't trusted, the helper ends, saying why on
 its stderr and in its exit (`fail` in `Run`). It never becomes `claude
 -p`. Until 11-01 it did, and wrote `<cache>/magpie/claude-tui-broken`,
@@ -588,6 +648,22 @@ A Claude Code that ends before it answers a control request
 exit status and the end of its stderr (`endedBefore`), as one that ends
 before it reads its input is (`whyEnded`). The tool-results path and
 `resume` already start a new run when the one they found has ended.
+
+A Claude Code whose output ends after its reply began (a `KStart` on the
+segment) and before the reply ended (its stop, a refusal, a result or an
+error) exited mid-reply: only the `message_start`, or part of the text,
+was heard. `readOutput` ends the segment with an error, "Claude Code
+exited before it ended its reply" and the end of its stderr
+(`replyUnended`, #4822), in `-p` and the interactive mode alike. Before
+it, the closed segment was a 200 with nothing or the words so far, as a
+reply that ended. Now `relay` answers a stream with nothing sent yet, and
+any reply not streamed, a 502, so the spare account may answer (the cut
+try keeps its usage row as handed on). A stream already sent ends in the
+protocol's error event: Anthropic's `error`, chat's `error` chunk with no
+`[DONE]`, Responses' `response.failed`. A reply not streamed whose words
+came before any failure is a failure too, as a translated reply cut short
+is (`errEndedShort`). `TestClaudeSubscriptionRunExitedMidReplyFails`
+holds it on all three protocols, streamed and not, `-p` and interactive.
 
 magpie ends a run (`abort`) by asking Claude Code to end with SIGTERM
 (`proc.Tree.Stop`) and kills its tree only once it has exited or

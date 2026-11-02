@@ -354,6 +354,24 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 		}
 		writeJSON(rw, rs)
 	})
+	// and one account's, from Settings' Check in now (xiaowu_95660), by
+	// its vendor and key as /api/settings lists them: asked once now,
+	// whatever its switch says, which it leaves as it is
+	mux.HandleFunc("POST /api/usage/checkin-account", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ By, Key string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Key == "" {
+			fail(rw, errors.New("no account"))
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+		defer cancel()
+		rs := provider.CheckInAccount(ctx, in.By, in.Key)
+		if len(rs) == 0 {
+			fail(rw, errors.New("No daily check-in reaches this account"))
+			return
+		}
+		writeJSON(rw, rs[0])
+	})
 	// what was left of each window over time, for the quota cards' curves
 	// (#651); ?days= back
 	mux.HandleFunc("GET /api/usage/quotas/history", func(rw http.ResponseWriter, r *http.Request) {

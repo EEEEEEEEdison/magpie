@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -38,7 +39,9 @@ func TestMain(m *testing.M) {
 // fakeTrust asks whether to trust the folder as Claude Code 2.1.314 does:
 // its words placed by cursor moves, "No, exit" chosen, and drawn again on
 // No once it listens, the keys before that lost. Enter on No exits.
-func fakeTrust(r *bufio.Reader) {
+// With always, it never listens, as a question whose answer never goes
+// through.
+func fakeTrust(r *bufio.Reader, always bool) {
 	var mu sync.Mutex
 	yes, deaf := false, true
 	draw := func() {
@@ -47,6 +50,9 @@ func fakeTrust(r *bufio.Reader) {
 	}
 	draw()
 	time.AfterFunc(150*time.Millisecond, func() {
+		if always {
+			return
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		deaf, yes = false, false
@@ -80,6 +86,62 @@ func fakeTrust(r *bufio.Reader) {
 	}
 }
 
+// fakeOnboard shows Claude Code 2.1.316's onboarding where its config
+// folder has none done (FAKE_ONBOARD set): the text style, the security
+// notes, and with "terminal" whether to set up the terminal. Each is
+// drawn again 150ms after it is first, the keys before that lost; Enter
+// goes on, and Esc skips the terminal setup, whose Enter (Yes) is written
+// down as "terminal-set-up". Gone through, it writes "onboarded" in the
+// config folder, and shows none of it again. With "stuck" the notes come
+// back after each Enter.
+func fakeOnboard(r *bufio.Reader, how string) {
+	cfg := os.Getenv("CLAUDE_CONFIG_DIR")
+	if _, err := os.Stat(filepath.Join(cfg, "onboarded")); err == nil {
+		return
+	}
+	screens := []string{
+		"\r\n Let's get started.\r\n\r\n Choose\x1b[1Cthe text style that looks best with your terminal\r\n ❯ 1. Dark mode ✔\r\n   2. Light mode\r\n",
+		// a space a move of the cursor or a no-break space, as 2.1.316
+		// draws them
+		"\r\n Security\x1b[1Cnotes:\r\n\r\n 1. Claude can make mistakes\r\n    You should always review Claude's responses\r\n\r\n 2. Due to prompt injection risks, only use it with code you trust\r\n\r\n Press\u00a0Enter\x1b[1Cto\x1b[1Ccontinue…\r\n",
+	}
+	if how == "terminal" {
+		screens = append(screens, "\r\n Use Claude Code's terminal\x1b[1Csetup?\r\n\r\n For the optimal coding experience, enable the recommended settings\r\n for your terminal: Option+Enter for newlines and no audible bell\r\n\r\n ❯ 1. Yes, use recommended settings\r\n   2. No, maybe later with /terminal-setup\r\n\r\n Enter to confirm · Esc to skip\r\n")
+	}
+	for i := 0; i < len(screens); i++ {
+		fmt.Print("\x1b[2J\x1b[H" + screens[i])
+		deaf := make(chan struct{})
+		time.AfterFunc(150*time.Millisecond, func() {
+			fmt.Print("\x1b[2J\x1b[H" + screens[i])
+			close(deaf)
+		})
+		for {
+			c, err := r.ReadByte()
+			if err != nil {
+				os.Exit(0)
+			}
+			select {
+			case <-deaf:
+			default:
+				continue
+			}
+			terminal := strings.Contains(screens[i], "terminal\x1b[1Csetup")
+			if c == '\r' && terminal {
+				_ = os.WriteFile(filepath.Join(cfg, "terminal-set-up"), nil, 0o600)
+			}
+			if c == '\r' && how == "stuck" && i == 1 {
+				i--
+				break
+			}
+			if c == '\r' || c == 0x1b && terminal {
+				break
+			}
+		}
+	}
+	_ = os.MkdirAll(cfg, 0o700)
+	_ = os.WriteFile(filepath.Join(cfg, "onboarded"), nil, 0o600)
+}
+
 func fakeClaude(args []string) {
 	if slices.Contains(args, "-p") {
 		sc := bufio.NewScanner(os.Stdin)
@@ -92,16 +154,15 @@ func fakeClaude(args []string) {
 		fmt.Print("something went wrong\n")
 		os.Exit(3)
 	}
-	if os.Getenv("FAKE_LOGIN") == "1" {
-		// signed in for -p alone: the interactive mode asks how to sign in
-		fmt.Print("\r\nSelect login method:\r\n\r\n ❯ 1. Claude account with subscription\r\n   2. Anthropic Console account\r\n")
+	if os.Getenv("FAKE_STALL") == "1" {
+		// drawn, but no prompt ever comes
+		fmt.Print("\r\nStarting up…\r\n")
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	}
-	if os.Getenv("FAKE_NOTES") == "1" {
-		// onboarding not done: the first-run notes, as 2.1.316 draws them,
-		// a space a move of the cursor or a no-break space
-		fmt.Print("\r\n Security\x1b[1Cnotes:\r\n\r\n 1. Claude can make mistakes\r\n    You should always review Claude's responses\r\n\r\n 2. Due to prompt injection risks, only use it with code you trust\r\n\r\n Press\u00a0Enter\x1b[1Cto\x1b[1Ccontinue…\r\n")
+	if os.Getenv("FAKE_LOGIN") == "1" {
+		// signed in for -p alone: the interactive mode asks how to sign in
+		fmt.Print("\r\nSelect login method:\r\n\r\n ❯ 1. Claude account with subscription\r\n   2. Anthropic Console account\r\n")
 		time.Sleep(time.Minute)
 		os.Exit(0)
 	}
@@ -115,8 +176,11 @@ func fakeClaude(args []string) {
 	// outside one sends it
 	fakeRaw()
 	r := bufio.NewReader(os.Stdin)
-	if os.Getenv("FAKE_TRUST") == "1" {
-		fakeTrust(r)
+	if v := os.Getenv("FAKE_ONBOARD"); v != "" {
+		fakeOnboard(r, v)
+	}
+	if v := os.Getenv("FAKE_TRUST"); v != "" {
+		fakeTrust(r, v == "deaf")
 	}
 	// what it was started with, for the test to read
 	_ = os.WriteFile(filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "args"), []byte(strings.Join(args, "\n")), 0o600)
@@ -425,6 +489,13 @@ func TestDropLeft(t *testing.T) {
 // exits or answers: what it wrote, its stderr, and how it ended.
 func runEnds(t *testing.T, home string, env []string) (out, stderr string, err error) {
 	t.Helper()
+	b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hello"}})
+	return runEndsTold(t, home, env, string(b))
+}
+
+// runEndsTold is runEnds told line, a stream-json line, for "hello".
+func runEndsTold(t *testing.T, home string, env []string, line string) (out, stderr string, err error) {
+	t.Helper()
 	exe, _ := os.Executable()
 	cfg := filepath.Join(home, "claude")
 	tmp := filepath.Join(home, "tmp")
@@ -444,8 +515,7 @@ func runEnds(t *testing.T, home string, env []string) (out, stderr string, err e
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	})
-	b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "hello"}})
-	_, _ = stdin.Write(append(b, '\n'))
+	_, _ = io.WriteString(stdin, line+"\n")
 	done := make(chan string, 1)
 	go func() {
 		var all strings.Builder
@@ -482,7 +552,7 @@ func TestShimNeverPrints(t *testing.T) {
 		{"untrusted folder", "trust the folder", []string{"FAKE_TRUST=1"}},
 		// at once, not after readyWait: runEnds waits 30s (#4504)
 		{"asks to sign in", "sign", []string{"FAKE_LOGIN=1"}},
-		{"first-run notes", "notes", []string{"FAKE_NOTES=1"}},
+		{"first-run screens it stays on", "first-run screens", []string{"FAKE_ONBOARD=stuck"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			home := t.TempDir()
@@ -521,6 +591,70 @@ func TestShimFirstMessageWaitsForTools(t *testing.T) {
 	}
 	if d := time.Since(start); d < 2*time.Second {
 		t.Fatalf("answered in %s, before the tools were listed", d)
+	}
+}
+
+// A config folder whose onboarding isn't done (the account Claude Code
+// is signed in to where `claude` was never run, #4817) is gone through
+// as a person would: the text style kept, the security notes read on,
+// the terminal setup skipped. Claude Code records it done, and the next
+// run is shown none of it.
+func TestShimGoesThroughOnboarding(t *testing.T) {
+	for _, how := range []string{"1", "terminal"} {
+		t.Run(how, func(t *testing.T) {
+			home := t.TempDir()
+			for run := range 2 {
+				out, stderr, err := runEnds(t, home, []string{"FAKE_ONBOARD=" + how})
+				if err != nil || !strings.Contains(out, "echo: hello") || strings.Contains(out, "print mode") {
+					t.Fatalf("run %d ended %v, wrote %q, stderr %q", run, err, out, stderr)
+				}
+			}
+			cfg := filepath.Join(home, "claude")
+			if _, err := os.Stat(filepath.Join(cfg, "onboarded")); err != nil {
+				t.Fatal("the onboarding wasn't recorded done")
+			}
+			if _, err := os.Stat(filepath.Join(cfg, "terminal-set-up")); err == nil {
+				t.Fatal("the user's terminal was set up")
+			}
+		})
+	}
+}
+
+// A one-off run's caller (a /usage read, a test's "hi") tells the helper
+// when it stops waiting (DeadlineEnv), and the helper ends then on its
+// own, saying what Claude Code hadn't done and what it last drew. Killed
+// at the caller's deadline instead, it said nothing, and the reading's
+// error was "exit status 1" (#4830, mydosu, Windows).
+func TestShimEndsAtItsCallersDeadline(t *testing.T) {
+	wd, _ := os.Getwd()
+	for _, c := range []struct {
+		name, line, why, screen string
+		env                     []string
+	}{
+		{"no prompt", `{"type":"user","message":{"role":"user","content":"hello"}}`, "showed no prompt in the", "Starting up", []string{"FAKE_STALL=1"}},
+		// the question a saved account's reads waited out on (#4830,
+		// mydosu): said, with the folder, never "showed no prompt"
+		{"trust unanswered", `{"type":"user","message":{"role":"user","content":"hello"}}`, "asked whether to trust " + wd + ", not answered in the", "trust this folder", []string{"FAKE_TRUST=deaf", TrustEnv + "=1"}},
+		// FAKE_USAGE names no panel: nothing is drawn for /usage
+		{"no /usage panel", `{"type":"command","command":"/usage"}`, "hadn't drawn /usage's panel in the", "", []string{"FAKE_USAGE=" + filepath.Join(t.TempDir(), "none")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			start := time.Now()
+			by := start.Add(3 * time.Second).UnixMilli()
+			out, stderr, err := runEndsTold(t, t.TempDir(), append(c.env, DeadlineEnv+"="+strconv.FormatInt(by, 10)), c.line)
+			d := time.Since(start)
+			if err == nil || strings.Contains(out, `"type":"result"`) {
+				t.Fatalf("ended %v, wrote %q", err, out)
+			}
+			if !strings.Contains(stderr, "claude-tui: Claude Code "+c.why) || !strings.Contains(stderr, c.screen) {
+				t.Fatalf("stderr %q", stderr)
+			}
+			// at the deadline, with room for a slow machine to start it,
+			// and well before the helper's own waits (20s, 45s)
+			if d < 2500*time.Millisecond || d > 15*time.Second {
+				t.Fatalf("ended after %s, the deadline 3s", d)
+			}
+		})
 	}
 }
 

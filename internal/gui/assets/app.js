@@ -6690,7 +6690,7 @@ function accountPlan(a) {
   if (agent === "copilot") return named("GitHub", a.plan && cap(a.plan));
   if (agent === "claude") return named("Claude", a.plan && cap(a.plan));
   if (agent === "cursor") return named("Cursor", a.plan && cap(a.plan));
-  if (agent === "grok") return a.plan || "SuperGrok";
+  if (agent === "grok") return a.plan || "Grok";
   if (agent === "gemini" || agent === "antigravity") return a.plan || "Google";
   if (agent === "zcode") return a.plan || "GLM Coding Plan";
   if (agent === "workbuddy") return a.plan || "WorkBuddy";
@@ -11983,7 +11983,7 @@ const SUBS = [
   // cursor-agent keeps one account; signing in again replaces it
   { agent: "cursor", name: "Cursor", icon: "cursor", plans: "Pro · Ultra · Teams", single: true },
   // so does Grok Build
-  { agent: "grok", name: "Grok (SuperGrok)", icon: "xai", plans: "SuperGrok · X Premium+", own: true },
+  { agent: "grok", name: "Grok", icon: "xai", plans: "SuperGrok · X Premium+", own: true },
   // signed in with GitHub's device code; the editors' own sign-in stays theirs
   { agent: "copilot", name: "Copilot", icon: "githubcopilot", plans: "Free · Education · Pro · Pro+ · Max · Business · Enterprise", own: true },
   // Z.ai's GLM Coding Plan, signed in as ZCode does; ZCode's own account is read too
@@ -12006,7 +12006,7 @@ const SUBS = [
   { agent: "qoder", get name() { return t("Qoder (international)"); }, icon: "qoder", plans: "Pro", own: true, risk: true,
     hint: "For accounts on qoder.com, the international site.",
     riskNote: QODER_RISK },
-  { agent: "qoder-cn", name: "Qoder CN", icon: "qoder", plans: "Pro", own: true, risk: true,
+  { agent: "qoder-cn", get name() { return t("Qoder CN"); }, icon: "qoder", plans: "Pro", own: true, risk: true,
     hint: "For accounts on qoder.cn: signed in with an Alibaba Cloud account or a phone number.",
     riskNote: QODER_RISK },
   // the devin CLI's own account is read; more are signed in beside it, each in a data folder of magpie's
@@ -13425,11 +13425,14 @@ function loginUsageOf(agent) {
 const SIGN_IN_GONE = /sign-in has (expired|lapsed)|sign in again/i;
 
 function quotaError(err, q) {
-  // signed in again in place, settings kept, from the row's Sign in again
-  // (blue12345655 on Discord looked for a way to add it again, found none)
+  // first-run screens the helper can't pass (#4817)
+  if (/^Claude Code: claude-tui: .{0,40}(stays on its first-run screens|shows its first-run notes)/.test(err)) return t("Finish Claude Code's first-run setup, then refresh. Run magpie claude-code to find its executable.");
+  // the /usage helper's other reasons, on the card (#4830)
+  const tui = /^Claude Code: claude-tui: (.+?)(?:: |$)/m.exec(err) || /^(Claude Code's interactive mode said nothing[^(]*?) \(/.exec(err);
+  if (tui) return t("Allowance unavailable: {why}", { why: tui[1].slice(0, 160) });
+  // signed in again in place from the row's Sign in again (blue12345655)
   if (/sign-in has expired/.test(err)) return t("Signed out — choose Sign in again on this account under Providers");
-  // a Copilot account GitHub refused the token of (copilot_lapsed.go), as
-  // its row says it, in English or already in the user's language
+  // Copilot's refused token (copilot_lapsed.go), in either language
   const copilotLapsed = "GitHub refused this Copilot sign-in; sign in again";
   if (err === copilotLapsed || err === t(copilotLapsed)) return t(copilotLapsed);
   // an account whose sign-in its vendor revoked (signin_revoked.go, #1793)
@@ -13440,18 +13443,13 @@ function quotaError(err, q) {
   if (/violation of Terms of Service/i.test(err)) return t("Google has suspended this account — hover for details");
   if (/access token is invalid or expired|didn't take the access token/.test(err)) return t("AiHubMix didn't take the access token — paste a new one in the provider's settings");
   if (/this key has no limit/.test(err)) return t("This key has no limit — add the account's access token in the provider's settings to see its balance");
-  // a Volcengine or Tencent plan whose provider has no access key to read
-  // it with (accessKeyCard, #1821): the card used to be left out unsaid
+  // a Volcengine or Tencent plan with no access key (#1821)
   if (/^this plan's usage is read with the account's access key: give its SecretId/.test(err)) return t("This plan's usage needs the account's SecretId and SecretKey — give them in the provider's settings");
   if (/^this plan's usage is read with the account's access key/.test(err)) return t("This plan's usage needs the account's AccessKey ID and Secret — give them in the provider's settings");
-  // ZCode with no GLM Coding Plan and no Start Plan left: nothing to spend,
-  // not a failed read (#1001). The plugin's card (NO_START, packages/zcode)
-  // names no way out, so it is said here; anchored on the whole sentence so
-  // the sign-in errors and "could not be read" are left alone.
+  // ZCode with no plan left, not a failed read (#1001)
   if (/^this account has no GLM Coding Plan, and ZCode's Start Plan has ended or was never started$/.test(err)) return t("ZCode: no GLM Coding Plan, and no free Start Plan — subscribe to a GLM Coding Plan to use this account");
-  // an OpenCode Go key's windows (planWindows, planquota.go): Go is the
-  // subscribing member's, in their workspace, so a key from anyone else
-  // reads none — said with the way out, as a phone can't hover for it
+  // an OpenCode Go key's windows (planquota.go): only the subscribing
+  // member's key reads them; said with the way out
   if (/^this key has no OpenCode Go subscription/.test(err)) return t("No OpenCode Go on this key — use a key made by the member who subscribed, in that workspace");
   if (/^OpenCode didn't take this key/.test(err)) return t("OpenCode didn't take this key — paste a current one in the provider's settings");
   // a GLM key Zhipu or Z.ai refused (zhipuRefused, planquota.go): the key
@@ -13468,9 +13466,8 @@ function quotaError(err, q) {
   // a remote magpie's gateway key card (#1547, remote_key_limits.go)
   if (/^remote magpie is too old to tell this key's limit/.test(err)) return t("That computer's magpie is too old to tell this key's limit — update magpie there");
   if (/answered its key's limit in a form magpie doesn't read$/.test(err)) return t("That computer answered this key's limit in a form magpie doesn't read — hover for more");
-  // a ClinePass card with its balance but not its limits (#79): the
-  // built-in key card (clineLimitsUnread, cline_usage.go) and the Cline
-  // plugin both begin their error with these words
+  // a ClinePass card with its balance but not its limits (#79): the key
+  // card (cline_usage.go) and the Cline plugin both begin so
   if (/^ClinePass limits couldn't be read/.test(err)) return t("ClinePass limits couldn't be read — hover for why");
   const bal = balanceError(err);
   if (bal) return bal;
@@ -14881,7 +14878,7 @@ function openProtoMenu(anchor, opts, value, choose, head = "Protocol this key sp
     tick(b, o);
     b.onclick = (e) => {
       e.stopPropagation();
-      if (!multi) { closeProtoMenu(); choose(o.v); return; }
+      if (!multi) { closeProtoMenu(); choose(o.v, e); return; }
       if (o.v === "\x00") return;
       if (!o.v) { picked = []; closeProtoMenu(); if (live) choose([]); return; }
       picked = picked.includes(o.v) ? picked.filter((v) => v !== o.v) : [...picked, o.v];
@@ -17749,13 +17746,9 @@ function creditsSwitch(q, cls, on, title, body, label, said) {
   return b;
 }
 
-// checkinRow is a WorkBuddy (China), Trae CN or MiniMax Code account's daily check-in
-// on its Usage card: today's (a Beijing day) done, with the credits and
-// the streak, or why not, or the last day it was; the vendor's first such
-// row also holds the switch, which is Settings' "Daily check-in", and a
-// press for its accounts not in yet today (#694, Dazzle-sys:
-// 卡片显示今日是否已经签到; Hu9956: TRAE cn 也有每天签到送100积分;
-// #811, MiniMax Code's).
+// checkinRow: an account's daily check-in on its Usage card, today's
+// (Beijing) or why not; the vendor's first row holds its switch and press
+// (#694, #811)
 const CHECKINS = {
   "": {
     pref: "workbuddyCheckin", api: "workbuddy-checkin",
@@ -18172,11 +18165,10 @@ function quotaRefresh(q, then) {
     const began = quotaRefreshVersion;
     try {
       const qs = await api("usage/quotas/refresh?provider=" + encodeURIComponent(q.provider) + (q.user ? "&user=" + encodeURIComponent(q.user) : ""), {});
-      const fresh = Array.isArray(qs) && qs.find(x => usageAcctKey(x) === key);
+      let fresh = Array.isArray(qs) && qs.find(x => usageAcctKey(x) === key);
       if (fresh) {
         quotaRefreshVersions.set(key, ++quotaRefreshVersion);
-        // The reply includes every card, but only this one was refreshed.
-        // Another card may have completed its own refresh in the meantime.
+        // only this card was read; others may be newer
         const kept = quotas || [];
         quotas = kept.some(x => usageAcctKey(x) === key) ? kept.map(x => usageAcctKey(x) === key ? fresh : x) : [...kept, fresh];
         quotasAt = Date.now();
@@ -18192,12 +18184,14 @@ function quotaRefresh(q, then) {
         }
         if (!placed) next.push(...replacement);
         quotas = keepRefreshedQuotas(next, began); quotasAt = Date.now();
+        fresh = !q.user && replacement.find(x => x.error && quotas.includes(x));
         // Protect the new identities and the old keys they replaced, so a
         // pending GET can neither erase the new cards nor restore the old.
         const version = ++quotaRefreshVersion;
         for (const x of [q, ...before, ...quotas]) if (belongs(x)) quotaRefreshVersions.set(usageAcctKey(x), version);
       }
       if (then) await then();
+      if (fresh?.error) status(quotaError(fresh.error, fresh), "err");
     } catch (err) {
       statusErr(err);
     } finally {
@@ -19662,8 +19656,8 @@ function renderSettings() {
     $(`#${id}CheckinSegs`).replaceChildren(segs([["off", t("Off")], ["on", t("On")]], s[on] ? "on" : "off", (v) => savePrefs({ ...keep, [on]: v === "on" })));
     sub.textContent = [say, ...ciLines(s[on + "s"])].filter(Boolean).join(" · ");
     sub.title = as;
-    list.querySelectorAll(".ci-acct").forEach((x) => x.remove());
-    list.append(...checkinAccountRows(s, id === "wb" ? "" : id));
+    list.querySelectorAll(".ci-acct, .ci-now-row").forEach((x) => x.remove());
+    list.append(...checkinAccountRows(s, id === "wb" ? "" : id), ...checkinNowRow(s, id === "wb" ? "" : id));
   }
   setWarmTab(warmTab);
   // and the plugins that check in themselves, a row each, their tab shown
@@ -22425,8 +22419,7 @@ async function renderUpdate(r, u) {
   if (kept && !pageShown) kept.remove();
 }
 
-// renderPluginCheckins draws a Daily check-in row for each plugin's
-// provider that checks in itself (auth.checkin), under the Plugins tab.
+// a Daily check-in row per plugin that checks in itself (auth.checkin)
 function renderPluginCheckins(s) {
   const ps = s.checkinPlugins || [];
   $("#warmTab-plugins").hidden = !ps.length;
@@ -22449,13 +22442,21 @@ function renderPluginCheckins(s) {
       }
     }));
     row.append(who, segBox);
-    return [row, ...checkinAccountRows(s, "plugin:" + p.id)];
+    return [row, ...checkinAccountRows(s, "plugin:" + p.id), ...checkinNowRow(s, "plugin:" + p.id)];
   }).flat());
 }
 
-// checkinAccountRows are an Off/On row for each account vendor by checks
-// in (#1902, magicLaLa: 根据每个账号设置是否开启自动签到), under its Daily
-// check-in; none for a vendor of one account, whose switch is its own.
+// one account's Check in now (xiaowu_95660), drawn by checkinnow.js
+function checkinNowRow(s, by) {
+  if (!(s.checkinAccounts || []).some((a) => (a.by || "") === by)) return [];
+  const row = el("div", "row pref warm-now ci-now-row");
+  if (window.ciNowFill) ciNowFill(row, s, by);
+  else { row.hidden = true; import("./checkinnow.js").then(() => ciNowFill(row, s, by), () => {}); }
+  return [row];
+}
+
+// checkinAccountRows: an Off/On row per account under vendor by's Daily
+// check-in when it has two or more (#1902, magicLaLa)
 function checkinAccountRows(s, by) {
   const accts = (s.checkinAccounts || []).filter((a) => (a.by || "") === by);
   if (accts.length < 2) return [];
@@ -24058,10 +24059,12 @@ const accountNames = new Set();
 // words no account is named, lest each is hidden: "api key", "signed in"
 // (and "(2)") name a plugin's nameless account (pluginLabels, outloudvi)
 const NOT_ACCOUNTS = new Set(["default", "own", "desktop", "account", "main", "local", "unknown", "none", "free", "pro", "api key", "signed in"]);
+// one letter is a name past ASCII only: 他 (Shinji_Zl), never "a"
+const nameLike = (s) => [...s].length > 1 || /^(?!\p{ASCII})\p{L}$/u.test(s);
 function noteAccount(s) {
   if (typeof s !== "string") return;
   s = s.trim();
-  if (s.length >= 2 && s.length <= 80 && !/[\n\r]/.test(s)) accountNames.add(s);
+  if (nameLike(s) && s.length <= 80 && !/[\n\r]/.test(s)) accountNames.add(s);
 }
 // noteAccounts: an answer's user, account, or route account (kind account)
 function noteAccounts(x, depth = 0) {
@@ -24085,14 +24088,11 @@ window.noteAccounts = noteAccounts;
   // an address a vendor has half masked itself (Zhipu's abc***gh@…) is one
   // address still, the letters before its stars hidden too
   const EMAIL = /[\w.+*•-]+@[\w*•-]+(?:\.[\w*•-]+)+/g, IS_EMAIL = new RegExp("^" + EMAIL.source + "$");
-  // stand-in letters of the account's shape, the same each time it's drawn:
-  // blurred, they read as a name without being one
+  // stand-in letters of its shape, the same each time: blurred, a name
   const dots = (s) => { let h = 7; return s.replace(/[^@.]/g, (c) => (h = (h * 31 + c.charCodeAt(0)) >>> 0, "aeiounrstlcmdh"[h % 14])); };
   const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // names: the accounts that aren't addresses, longest first so one inside
-  // another is hidden whole; a name that is a provider's, an agent's or a
-  // card's own (WorkBuddy's account with no nickname is "WorkBuddy") is not
-  // one to hide
+  // names: the accounts not addresses, longest first; a provider's, an
+  // agent's or a card's own name ("WorkBuddy") is not one to hide
   function names() {
     const all = new Set(accountNames), not = new Set(NOT_ACCOUNTS);
     for (const p of providers?.providers || []) {
@@ -24110,7 +24110,7 @@ window.noteAccounts = noteAccounts;
       if (q.alias && !q.named && q.alias !== q.seat) all.add(q.alias.trim());
     }
     for (const a of state?.agents || []) for (const n of [a.id, a.name]) if (n) not.add(String(n).toLowerCase());
-    return [...all].filter((n) => n.length >= 2 && !IS_EMAIL.test(n) && !not.has(n.toLowerCase().replace(/ \(\d+\)$/, ""))).sort((a, b) => b.length - a.length);
+    return [...all].filter((n) => nameLike(n) && !IS_EMAIL.test(n) && !not.has(n.toLowerCase().replace(/ \(\d+\)$/, ""))).sort((a, b) => b.length - a.length);
   }
   let findKey = null, find = EMAIL;
   // finder is the pattern of everything to hide now: an address, or a name
@@ -24130,10 +24130,10 @@ window.noteAccounts = noteAccounts;
   // an address always is
   const WORD = /[A-Za-z0-9_]/, JOIN = /[-.]/;
   const joined = (s, i, step) => WORD.test(s[i] || "") || (JOIN.test(s[i] || "") && WORD.test(s[i + step] || ""));
-  // accounts shown while the rest stay hidden (yogurt36), this page's
-  // only: the window and the tray panel are pages of their own, so one
-  // shown in either never shows in the other; kept by provider
-  // (outloudvi: one address on two services showed on both)
+  // a one-letter name stands apart: 他, not the 他 of 其他
+  const inWord = (s, i, end) => /[\p{L}\p{N}]$/u.test(s.slice(0, i)) || /^[\p{L}\p{N}]/u.test(s.slice(end));
+  // accounts shown while the rest hide (yogurt36), this page's only,
+  // kept by provider (outloudvi: one address on two services)
   const shown = new Set(), low = (x) => String(x).trim().toLowerCase(), sk = (p, k) => p + "\n" + low(k);
   // by an eye, its provider's only; elsewhere, shown under any
   const isShown = (k, e) => {
@@ -24147,6 +24147,7 @@ window.noteAccounts = noteAccounts;
       if (isShown(m[0], at)) continue;
       const name = !m[0].includes("@"), end = m.index + m[0].length;
       if (name && ((WORD.test(m[0][0]) && joined(s, m.index - 1, -1)) || (WORD.test(m[0].at(-1)) && joined(s, end, 1)))) continue;
+      if (name && [...m[0]].length < 2 && inWord(s, m.index, end)) continue;
       yield m;
     }
   }
@@ -24181,7 +24182,7 @@ window.noteAccounts = noteAccounts;
       const all = finder(), reOf = (e) => e?.closest(NAMELESS) || e?.closest?.(LABELS) ? EMAIL : all;
       const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), found = [];
       for (let n; (n = walk.nextNode());) {
-        if (n.data.length < 2 || SKIP.has(n.parentElement?.tagName) || n.parentElement?.closest(".pii, " + KEEP)) continue;
+        if (!n.data || SKIP.has(n.parentElement?.tagName) || n.parentElement?.closest(".pii, " + KEEP)) continue;
         const re = reOf(n.parentElement);
         re.lastIndex = 0;
         if (re.test(n.data)) found.push(n);

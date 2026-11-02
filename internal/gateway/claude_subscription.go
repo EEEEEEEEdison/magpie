@@ -342,6 +342,10 @@ type subscriptionRun struct {
 	// the client was told them: a client that names them by ids of its own
 	// (AmpCode) has its results paired with them by position (remap)
 	shown []shownCall
+	// unended is whether the segment's reply has begun (KStart) and not
+	// ended, by its stop or an error, under r.mu: a Claude Code whose
+	// output ends then exited mid-reply (readOutput)
+	unended bool
 
 	// lines is where in its session each call of the client's tools its
 	// replies made was written, by Claude Code's id for the call: a
@@ -1054,6 +1058,10 @@ func (b *subscriptionBridge) startRun(ctx context.Context, req *Request, model, 
 		// theirs to answer for, and the run goes in magpie's
 		// (startTrusted)
 		env = append(env, claudetui.TrustEnv+"=1")
+	}
+	if tui && !client {
+		// a saved account's run in magpie's folder is never asked (#4830)
+		trustWork(binary, configDir, work)
 	}
 	cmd.Env = binary.env(binary.asRoot(env), configDir)
 	if tui {
@@ -2908,6 +2916,7 @@ func (r *subscriptionRun) attach() chan Event {
 	ch := make(chan Event, 64)
 	r.segment = ch
 	r.active = time.Now()
+	r.unended = false
 	return ch
 }
 
@@ -2919,7 +2928,9 @@ func (r *subscriptionRun) emit(ev Event) {
 	if ch != nil {
 		switch ev.Kind {
 		case KStart: // a reply begins
-			r.shown = nil
+			r.shown, r.unended = nil, true
+		case KStop, KError:
+			r.unended = false
 		case KToolStart:
 			r.shown = append(r.shown, shownCall{id: ev.ID, name: ev.Name})
 		case KToolArgs:
@@ -3592,7 +3603,24 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 		failed("and Claude Code stopped")
 	} else if refused {
 		refusal()
+	} else if r.replyUnended() {
+		// Claude Code exited after its reply began, with no message_stop
+		// nor a result: only its message_start, or part of its text, was
+		// heard. Closed as it was, the segment went to the client as a
+		// reply that ended, a 200 with nothing or part of the answer, and
+		// the agent took it as done (#4822). It is a failure: a status
+		// before anything was sent, else the stream's error event
+		r.emit(Event{Kind: KError, Text: "Claude Code " + r.endedBefore("ended its reply").Error(), Status: http.StatusBadGateway, RequestID: reqID})
+		r.endSegment()
 	}
+}
+
+// replyUnended is whether a reply was begun on the run's segment, which
+// is still open, and hasn't ended.
+func (r *subscriptionRun) replyUnended() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.segment != nil && r.unended
 }
 
 // unstreamedQuiet is how long a message told in whole messages is taken
@@ -5935,10 +5963,15 @@ func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name 
 		}
 		col.add(ev)
 	}
-	if col.err != "" && !saidAnything(col.res.Parts) {
+	if col.err != "" {
 		abort()
 		// a status, as in a stream, so another account can take over;
-		// what the reply's start used is the failed try's
+		// what the reply's start used is the failed try's. Words said
+		// before the failure are no answer either: handed whole, they
+		// went as a 200, the turn's end, and the agent took a reply cut
+		// short for a finished one (#4822); nothing has reached the
+		// client yet, so it is told the failure, as a translated reply
+		// cut short is (errEndedShort)
 		usage.add(col.res.Usage)
 		usage.add(Usage{ErrType: col.errCode})
 		code, msg := bridgeFailed(name, col.err, col.errStatus)
