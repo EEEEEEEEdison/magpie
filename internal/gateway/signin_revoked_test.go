@@ -184,7 +184,26 @@ func TestRevokedWordsFromAKeyRestAsBefore(t *testing.T) {
 // not to it again.
 func TestRevokedSignInNotCompactedOnAgain(t *testing.T) {
 	codexSignedIn(t, "spare@example.com", "third@example.com")
+	localFixtureRequests(t)
 	var mu sync.Mutex
+	refreshed := 0
+	tokens := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("刷新请求不是 JSON：%v", err)
+		}
+		if r.Method != http.MethodPost || body["grant_type"] != "refresh_token" || body["refresh_token"] != "r-acct-2" {
+			t.Error("刷新请求没有使用撤销账号的 refresh token")
+		}
+		mu.Lock()
+		refreshed++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":"invalid_grant","error_description":"refresh token has been revoked"}`)
+	}))
+	t.Cleanup(tokens.Close)
+	t.Cleanup(provider.CodexTokenURLForTest(tokens.URL))
 	var tried []string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -229,5 +248,10 @@ func TestRevokedSignInNotCompactedOnAgain(t *testing.T) {
 		if code, asked := compact(); code != 200 || asked != "acct-3" {
 			t.Fatalf("after: %d, asked %s", code, asked)
 		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if refreshed != 1 {
+		t.Fatalf("撤销账号应只刷新一次，实际 %d 次", refreshed)
 	}
 }

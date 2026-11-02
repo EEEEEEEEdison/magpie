@@ -23,16 +23,21 @@ func (folderOnly) OpenFolder(string) error { return nil }
 func sandboxHome(t *testing.T) string {
 	t.Helper()
 	h := t.TempDir()
-	t.Setenv("HOME", h)
-	t.Setenv("USERPROFILE", h)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(h, ".cache"))
-	t.Setenv("PATH", "")
 	for _, v := range agentenv.Vars {
 		t.Setenv(v, "")
 	}
-	t.Setenv("APPDATA", "")
-	t.Setenv("LOCALAPPDATA", "")
+	for name, dir := range map[string]string{
+		"HOME": h, "USERPROFILE": h,
+		"XDG_CONFIG_HOME": filepath.Join(h, ".config"),
+		"XDG_CACHE_HOME":  filepath.Join(h, ".cache"),
+		"XDG_DATA_HOME":   filepath.Join(h, ".local", "share"),
+		"XDG_STATE_HOME":  filepath.Join(h, ".local", "state"),
+		"APPDATA":         filepath.Join(h, "AppData", "Roaming"),
+		"LOCALAPPDATA":    filepath.Join(h, "AppData", "Local"),
+	} {
+		t.Setenv(name, dir)
+	}
+	t.Setenv("PATH", "")
 	return h
 }
 

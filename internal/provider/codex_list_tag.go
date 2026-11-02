@@ -21,7 +21,10 @@ import (
 // codexListTagFor is how long a kept tag is used at most: what the stamp
 // can't see (an account another app signed in to, held in a keychain; a
 // model retired by its date) reaches Codex's list within it.
-var codexListTagFor = time.Minute
+var (
+	codexListTagFor = time.Minute
+	codexListNow    = time.Now
+)
 
 // codexListSettled is how old a stamped file's time must be to tell a
 // later write by: two writes of one size inside a tick of a coarse clock
@@ -73,9 +76,9 @@ var codexListTags struct {
 // moved or codexListTagFor went by.
 func codexListTag(kind string) string {
 	st := codexListStampNow()
-	now := time.Now()
+	now := codexListNow()
 	codexListTags.Lock()
-	if codexListTags.stamp != st || now.Sub(codexListTags.at) >= codexListTagFor {
+	if codexListTags.stamp != st || !sameEnvironment(codexListTags.stamp.env, st.env) || now.Sub(codexListTags.at) >= codexListTagFor {
 		codexListTags.stamp, codexListTags.at, codexListTags.of = st, now, nil
 	}
 	if tag, ok := codexListTags.of[kind]; ok {
@@ -89,7 +92,7 @@ func codexListTag(kind string) string {
 		return tag
 	}
 	codexListTags.Lock()
-	if codexListTags.stamp == st {
+	if codexListTags.stamp == st && sameEnvironment(codexListTags.stamp.env, st.env) {
 		if codexListTags.of == nil {
 			codexListTags.of = map[string]string{}
 		}

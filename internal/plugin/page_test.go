@@ -1,9 +1,12 @@
 package plugin
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"syscall"
 	"testing"
 )
 
@@ -46,10 +49,19 @@ func TestWindowPageStaysInside(t *testing.T) {
 	if _, only := Window(mk("main", `{"name":"m","main":"index.js","magpie":{"page":{"file":"page/index.html"}}}`)); only {
 		t.Error("a plugin with a main is more than its page")
 	}
-	link := mk("link", `{"name":"l","magpie":{"page":{"file":"page/out.html"}}}`)
-	if err := os.Symlink(outside, filepath.Join(link, "page", "out.html")); err != nil {
-		t.Fatal(err)
-	}
+	t.Run("symlink", func(t *testing.T) {
+		link := mk("link", `{"name":"l","magpie":{"page":{"file":"page/out.html"}}}`)
+		if err := os.Symlink(outside, filepath.Join(link, "page", "out.html")); err != nil {
+			// 1314 是 Windows 的 ERROR_PRIVILEGE_NOT_HELD。
+			if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+				t.Skip("当前 Windows 账户无创建符号链接权限:", err)
+			}
+			t.Fatal(err)
+		}
+		if w, _ := Window(link); w != nil {
+			t.Errorf("a symbolic link out of the folder: %+v is a page", w)
+		}
+	})
 	for name, pkg := range map[string]string{
 		"dotdot": `{"name":"d","magpie":{"page":{"file":"../secret.html"}}}`,
 		"abs":    `{"name":"a","magpie":{"page":{"file":"` + filepath.ToSlash(outside) + `"}}}`,
@@ -59,9 +71,6 @@ func TestWindowPageStaysInside(t *testing.T) {
 		if w, _ := Window(mk(name, pkg)); w != nil {
 			t.Errorf("%s: %+v is a page", name, w)
 		}
-	}
-	if w, _ := Window(link); w != nil {
-		t.Errorf("a symbolic link out of the folder: %+v is a page", w)
 	}
 	if f, ok := FileIn(p.Dir, "../package.json"); ok {
 		t.Errorf("FileIn served %s", f)
@@ -136,6 +145,16 @@ func TestWindowPanels(t *testing.T) {
 		w, _ := Window(d)
 		if w == nil || w.Page == nil || w.Page.Replaces != want {
 			t.Errorf("replaces %q: %+v, want %q", replaces, w, want)
+		}
+	}
+
+	// magpie.page.keepAlive is true or not there: a value of another kind
+	// is false, and the page is still read
+	for keep, want := range map[string]bool{`true`: true, `false`: false, `"true"`: false, `1`: false, `{}`: false, `null`: false} {
+		write(`{"name":"p","magpie":{"page":{"file":"ui/page.html","keepAlive":` + keep + `}}}`)
+		w, _ := Window(d)
+		if w == nil || w.Page == nil || w.Page.KeepAlive != want {
+			t.Errorf("keepAlive %s: %+v, want %v", keep, w, want)
 		}
 	}
 }

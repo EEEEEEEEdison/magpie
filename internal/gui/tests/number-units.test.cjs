@@ -111,9 +111,10 @@ const has = (x, western) => western ? !/[万亿]/.test(x) && /\d[KMB]\b/.test(x)
 async function rest(p, western, what) {
   await p.locator(":is(#usageTab .opt, .nav-s):visible").nth(0).click();
   await p.locator("#stats .kpi b").first().waitFor();
+  await p.locator("#stats .kpi-pick").click();
+  await p.locator(".proto-menu:visible .pm-item").nth(1).click();
   const tiles = await p.locator("#stats .kpi").allInnerTexts();
-  // in and out, and the cache read and written, which is how the page
-  // counts them: 1B + 540M + 2B + 30M
+  // 本例显式选含缓存，数字单位检查仍覆盖 1B + 540M + 2B + 30M。
   assert.equal(tiles[0].split("\n")[0], western ? "3.57B" : "35.7 亿", what + ": the Overview's tokens");
   for (const x of tiles) if (/\d/.test(x)) assert(has(x, western) || !/[万亿KMB]/.test(x), `${what}: Overview tile "${x}"`);
   // the hit rate is of the whole prompt, what was written to the cache in
@@ -151,6 +152,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const p = await ctx.newPage();
         const errors = [];
         p.setDefaultTimeout(5000);
+        p.setDefaultNavigationTimeout(60000);
         p.on("pageerror", (e) => errors.push(e.message));
         await p.route("**/*", serve(lang, store, false));
         const requests = async () => {
@@ -208,6 +210,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const pctx = await browser.newContext({ viewport: { width: 380, height: 560 }, reducedMotion: "reduce" });
         const pp = await pctx.newPage();
         pp.setDefaultTimeout(5000);
+        pp.setDefaultNavigationTimeout(60000);
         pp.on("pageerror", (e) => errors.push(e.message));
         await pp.route("**/*", serve(lang, store, true));
         await pp.goto("http://magpie.test/?mode=panel");

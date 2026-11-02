@@ -91,14 +91,12 @@ func TestCodexListTagKeptWhileNothingChanged(t *testing.T) {
 		t.Fatal("the tag isn't the one built afresh")
 	}
 	n, by := measure(func() { CodexListTag(); CodexOwnListTag() })
-	t.Logf("CodexListTag and CodexOwnListTag: %.0f allocs, %.0f bytes a call", n, by)
 	if n > 200 {
 		t.Errorf("with nothing changed, the tags took %.0f allocations (%.0f bytes) a call: the catalog built again", n, by)
 	}
 	release := Hold()
 	n, by = measure(func() { CodexListTag(); CodexOwnListTag() })
 	release()
-	t.Logf("held: %.0f allocs, %.0f bytes a call", n, by)
 	if n > 200 {
 		t.Errorf("held, the tags took %.0f allocations (%.0f bytes) a call", n, by)
 	}
@@ -210,6 +208,15 @@ func TestCodexListTagBuiltAgainAfterItsTime(t *testing.T) {
 func TestCodexListTagNotKeptOverAFreshFile(t *testing.T) {
 	listTagHome(t)
 	writeCodexConfig(t, "model_reasoning_effort = \"high\"\n")
+	// 重建本身可能超过新鲜期；固定被测时钟，不让测量改变前提。
+	now := time.Now()
+	path := filepath.Join(catalog.CodexHome(), "config.toml")
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatal(err)
+	}
+	was := codexListNow
+	codexListNow = func() time.Time { return now }
+	t.Cleanup(func() { codexListNow = was })
 	CodexListTag()
 	if n, _ := measure(func() { CodexListTag() }); n < 1000 {
 		t.Errorf("over a file written just now, the tag took %.0f allocations a call: kept", n)

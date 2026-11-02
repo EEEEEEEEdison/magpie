@@ -33,7 +33,7 @@ func fnmWin(t *testing.T, root, def string, versions ...string) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(filepath.Join(root, "node-versions", def, "installation"), alias); err != nil {
-		if err := os.MkdirAll(alias, 0o755); err != nil {
+		if err := os.CopyFS(alias, os.DirFS(filepath.Join(root, "node-versions", def, "installation"))); err != nil {
 			t.Fatal(err)
 		}
 	}

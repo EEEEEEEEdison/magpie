@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/settings"
@@ -40,7 +39,7 @@ func sessionPriceFixture(t *testing.T) settings.Settings {
 	catalog.Reset()
 	t.Cleanup(catalog.Reset)
 	return settings.Settings{ModelPrices: map[string]settings.ModelPrice{
-		"*/workbuddy2api/deepseek-v4.1-flash": {Input: new(0.15), Output: new(0.6), CacheRead: new(0.003), CacheWrite: new(0.0), TimeZone: new("UTC"), TimeTiers: []settings.TimeTier{{Days: []int{1}, From: "09:00", To: "12:00", Input: new(0.3), Output: new(1.2)}}},
+		"*/workbuddy2api/deepseek-v4.1-flash": {Input: new(0.15), Output: new(0.6), CacheRead: new(0.003), CacheWrite: new(0.0)},
 		"relay/mystery-model":                 {Input: new(99.0), Output: new(99.0), CacheRead: new(0.0), CacheWrite: new(0.0)},
 	}}
 }
@@ -60,12 +59,6 @@ func TestSessionPricesUseKnownModelNamesAndWildcardAliases(t *testing.T) {
 		p, ok := priceOf(prices, tc.model)
 		if !ok || p.Input != tc.input {
 			t.Errorf("%s: price=%+v known=%v, want input=%v", tc.model, p, ok, tc.input)
-		}
-	}
-	if p, ok := priceOf(prices, "deepseek-v4.1-flash"); ok {
-		at := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
-		if got := p.CostSplitAt(at, 1000000, 0, 0, 0, 0); got != 0.3 {
-			t.Errorf("wildcard alias lost peak pricing: %v", got)
 		}
 	}
 	prices.ModelPrices["*/deepseek-v4.1-flash"] = settings.ModelPrice{Input: new(0.0), Output: new(0.0), CacheRead: new(0.0), CacheWrite: new(0.0)}

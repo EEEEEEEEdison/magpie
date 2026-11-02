@@ -31,16 +31,18 @@ const entry = (tok, name, title, reads, file = "index.html") => ({
 const TITLES = { zh: "用量速览", "zh-TW": "用量速覽", ja: "使用量の概要" };
 const pages = [
   { ...entry(GLANCE, "glance", "Usage glance", ["usage:summary"]), titles: TITLES },
-  entry(PROBE, "probe", "Probe", []),
+  // a page with a local service (magpie.page.service), as /api/plugin-pages
+  // lists it to a browser: relative to the page's address
+  { ...entry(PROBE, "probe", "Probe", []), service: "_magpie/service/" },
   entry(OPEN, "open", "Probe without a policy", []),
   entry(BROKEN, "broken", "Broken", []),
 ];
 
-// what pluginpage.go's pagePolicy sends, for this host: the page's folder
-// under each scheme the window is served on
-const policy = (tok) => {
+// 与 pagePolicy 一致：web 不写 scheme，原生窗口仅写当前窗口的 scheme。
+// 两种路径都只允许插件自己的目录，不能用全部 scheme 的并集代替。
+const policy = (tok, scheme = "") => {
   const dir = `magpie.test/_magpie/plugin/${tok}/`;
-  const own = `wails://${dir} http://${dir} https://${dir}`;
+  const own = scheme ? `${scheme}://${dir}` : dir;
   return [
     "sandbox allow-scripts", "default-src 'none'", `script-src ${own}`, `style-src ${own} 'unsafe-inline'`,
     `img-src ${own} data:`, `font-src ${own}`, `media-src ${own}`, "connect-src 'none'", "frame-src 'none'",
@@ -54,6 +56,7 @@ const PROBE_HTML = `<!doctype html><meta charset="utf-8"><script src="_magpie/br
 const PROBE_JS = `(async () => {
   const out = {};
   await magpie.ready;
+  out.service = magpie.service;
   try { const r = await fetch("/api/state?probe=1"); out.fetch = "status " + r.status; } catch (e) { out.fetch = "refused"; }
   try { out.storage = typeof localStorage.length; } catch (e) { out.storage = "refused"; }
   try { out.cookie = document.cookie; } catch (e) { out.cookie = "refused"; }
@@ -102,7 +105,7 @@ function server(lang, seen, plugins) {
     if (m) {
       const [, tok, rel] = m;
       const headers = { "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-cache" };
-      if (tok !== OPEN) headers["Content-Security-Policy"] = policy(tok);
+      if (tok !== OPEN) headers["Content-Security-Policy"] = policy(tok, seen.scheme);
       const type = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml" }[path.extname(rel)];
       let body;
       if (rel === "_magpie/bridge.js") body = await fs.readFile(bridge);
@@ -143,6 +146,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const context = await browser.newContext({ viewport: { width, height: 700 }, reducedMotion: "reduce" });
         const page = await context.newPage();
         page.setDefaultTimeout(8000);
+        page.setDefaultNavigationTimeout(60000);
         const errors = [];
         page.on("pageerror", (e) => errors.push(e.message));
         const seen = { api: [], reads: [], options: [] };
@@ -162,9 +166,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         if (lang === "de") {
           // a new language retitles the tab, and back
           await page.evaluate(() => setLocale("ja"));
-          await page.waitForFunction(() => document.querySelector("#nav button[data-plugin-page] span").textContent === "使用量の概要");
+          await page.waitForFunction(() => document.querySelector("#nav button[data-plugin-page] span")?.textContent === "使用量の概要");
           await page.evaluate(() => setLocale("de"));
-          await page.waitForFunction(() => document.querySelector("#nav button[data-plugin-page] span").textContent === "Usage glance");
+          await page.waitForFunction(() => document.querySelector("#nav button[data-plugin-page] span")?.textContent === "Usage glance");
         }
         // no frame until the page is looked at
         assert.equal(await page.locator("iframe.plugin-frame").count(), 0, `${where}: nothing loaded unseen`);
@@ -173,16 +177,17 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.evaluate(() => show("plugin-glance"));
         const glance = await frameReady(page, GLANCE);
         assert.equal(await page.locator("#view-plugin-glance iframe").getAttribute("sandbox"), "allow-scripts", where);
-        await glance.waitForFunction(() => document.getElementById("cost").textContent === "$0.50");
+        // 等消息和数据状态，不依赖 WebKit 对 iframe 的绘制调度。
+        await glance.waitForFunction(() => document.getElementById("cost")?.textContent === "$0.50", null, { polling: 50 });
         assert.equal(await glance.locator("#calls").textContent(), "12 calls, 1234 tokens", where);
         assert.deepEqual(seen.reads.map((r) => [r.spec, r.read]), [["/x/glance", "usage:summary"]], where);
         assert.equal(await glance.evaluate(() => document.documentElement.lang), lang, `${where}: the window's language`);
         assert.equal(await glance.evaluate(() => document.documentElement.dataset.theme), "light", where);
         await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
-        await glance.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+        await glance.waitForFunction(() => document.documentElement.dataset.theme === "dark", null, { polling: 50 });
         assert.ok((await glance.evaluate(() => document.documentElement.style.getPropertyValue("--magpie-bg"))).length > 0, `${where}: the tokens`);
         await glance.locator("#hide").click();
-        await glance.waitForFunction(() => document.getElementById("cost").textContent === "");
+        await glance.waitForFunction(() => document.getElementById("cost")?.textContent === "", null, { polling: 50 });
         assert.deepEqual(seen.options.map((o) => [o.spec, o.options.hideCost]), [["/x/glance", true]], `${where}: its own options`);
         // the frame fits the window
         assert.ok(await page.evaluate(() => { const v = document.querySelector("#view-plugin-glance"); const f = v.querySelector("iframe"); return f.getBoundingClientRect().width <= v.clientWidth + 1 && v.scrollWidth <= v.clientWidth + 1 && f.getBoundingClientRect().height > 200; }), `${where}: fits`);
@@ -201,6 +206,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.equal(probe.read2, "Probe doesn't ask to read providers:list", where);
           assert.equal(seen.api.length, 0, `${where}: nothing reached /api`);
           assert.equal(seen.reads.length, 1, `${where}: an undeclared read never reached the server`);
+          // its service, where the window's server serves it: an absolute
+          // address under the page's own
+          assert.match(probe.service, new RegExp(`^https?://[^/]+/_magpie/plugin/${PROBE}/_magpie/service/$`), `${where}: magpie.service`);
           // a page with no stylesheet of its own reads as part of the window
           const win = await page.evaluate(() => {
             const d = document.createElement("div");
@@ -226,6 +234,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.equal(open.fetch.startsWith("status") || open.fetch === "refused", true, where);
           assert.equal(seen.api.length, 1, `${where}: the fetch went out`);
           assert.equal(seen.api[0].origin, "null", `${where}: as Origin: null`);
+          assert.equal(open.service, "", `${where}: a page with no service has no magpie.service`);
           assert.ok(!seen.api[0].cookie, `${where}: without a cookie`);
 
           // a message from another frame naming a page is nothing
@@ -272,6 +281,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const where = `${engine} ${lang}`;
       const page = await (await browser.newContext({ viewport: { width: 980, height: 820 } })).newPage();
       page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
       const errors = [];
       page.on("pageerror", (e) => errors.push(e.message));
       const mine = structuredClone(plugins);
@@ -309,6 +319,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const where = `${engine} ${lang} ${width}`;
         const page = await (await browser.newContext({ viewport: { width, height: 820 } })).newPage();
         page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
         const errors = [];
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", server(lang, { api: [], reads: [], options: [] }, plugins));
@@ -335,5 +346,29 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.context().close();
       }
     }
+  });
+
+  // 浏览器不能解析 wails://；这里验证 Windows 原生窗口的 http:// 策略。
+  // macOS 的真实窗口由 pluginpage_webkit_darwin_test.go 验证。
+  test(`${engine}: a page under the native window's policy draws and stays shut in`, async (t) => {
+    const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+    t.after(() => browser.close());
+    const page = await (await browser.newContext({ viewport: { width: 1100, height: 700 } })).newPage();
+    page.setDefaultTimeout(8000);
+    page.setDefaultNavigationTimeout(60000);
+    const seen = { api: [], reads: [], options: [], scheme: "http" };
+    await page.route("**/*", server("en", seen, plugins));
+    await page.goto("http://magpie.test/");
+    await page.evaluate(() => {
+      window.__probe = null;
+      addEventListener("message", (e) => { if (e.data?.probe) window.__probe = e.data.probe; });
+    });
+    // 页签注册后再真实点击，不能与启动时的页面列表读取竞速。
+    await page.locator('#nav button[data-view="plugin-probe"]').click();
+    await page.waitForFunction(() => window.__probe, undefined, { timeout: 8000 });
+    const probe = await page.evaluate(() => window.__probe);
+    assert.equal(probe.fetch, "refused", "the policy stops a fetch of /api");
+    assert.equal(seen.api.length, 0, "nothing reached /api");
+    await page.context().close();
   });
 }

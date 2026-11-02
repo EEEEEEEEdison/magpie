@@ -24,14 +24,10 @@ func TestRemoveFoundSkill(t *testing.T) {
 	// the shared folder is Goose's too: it goes with Goose's backups
 	shared := filepath.Join(h, ".agents/skills/pdf")
 	skill(t, shared, "pdf", "PDFs")
-	if err := os.Symlink(shared, filepath.Join(claude, "pdf")); err != nil {
-		t.Fatal(err)
-	}
+	folderLink(t, shared, filepath.Join(claude, "pdf"))
 	dev := filepath.Join(h, "src/dev")
 	skill(t, dev, "dev", "Work in progress")
-	if err := os.Symlink(dev, filepath.Join(claude, "dev")); err != nil {
-		t.Fatal(err)
-	}
+	folderLink(t, dev, filepath.Join(claude, "dev"))
 
 	for _, name := range []string{"notes", "pdf", "dev"} {
 		ok(t)(RemoveFoundSkill(name))

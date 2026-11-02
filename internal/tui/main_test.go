@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"net"
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/testenv"
 )
 
@@ -12,6 +14,8 @@ import (
 // here, before any test starts a goroutine: a test that swapped it would race
 // the gateway's loops an earlier test left running, which read time.Local.
 func TestMain(m *testing.M) {
+	// 测试仅使用显式夹具提供的网络，不监听本机 WSL 网卡。
+	gateway.WSLNets = func() []*net.IPNet { return nil }
 	time.Local = time.UTC
 	testenv.Main(m)
 }

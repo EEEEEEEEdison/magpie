@@ -105,6 +105,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const context = await browser.newContext({ viewport: { width, height: 760 }, reducedMotion: "reduce" });
         const page = await context.newPage();
         page.setDefaultTimeout(8000);
+        page.setDefaultNavigationTimeout(60000);
         const errors = [];
         page.on("pageerror", (e) => errors.push(e.message));
         const seen = { reads: [], options: [], broken: lang === "en" && width === 1100 };
@@ -163,7 +164,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // the end of Usage: what it declared it reads
         await page.evaluate(() => show("usage"));
         const spend = await frameReady(page, SPEND);
-        await spend.waitForFunction(() => document.querySelectorAll("#top li").length === 2);
+        // 面板在折叠区或视口外时 WebKit 可暂停 RAF；消息状态不等待绘制帧。
+        await spend.waitForFunction(() => document.querySelectorAll("#top li").length === 2, null, { polling: 50 });
         assert.equal(await spend.locator("#top li").first().textContent(), "gpt-5: 9 calls", where);
         assert.ok(seen.reads.some((r) => r.spec === "/x/magpie-provider-notes" && r.read === "usage:summary"), where);
         assert.equal(await spend.evaluate(() => document.documentElement.lang), lang, `${where}: the window's language`);
@@ -174,12 +176,26 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.ok(await spendHead.isVisible(), `${where}: the panel's heading shows`);
 
         // a provider's editor: the note panel knows which provider it is in
-        await page.evaluate(() => show("providers"));
-        await page.waitForFunction(() => providers?.providers?.length === 1);
-        await page.evaluate(() => openModal(renderEditor(providers.providers[0])));
+        // show 只发起刷新；捕获并等待它的实际读取，缓存列表的 length 不是完成信号。
+        await page.evaluate(async () => {
+          const load = loadProviders;
+          let reading;
+          loadProviders = (...args) => (reading = load(...args));
+          try { await show("providers"); await reading; }
+          finally { loadProviders = load; }
+          openModal(renderEditor(providers.providers[0]));
+        });
         const notes = await frameReady(page, NOTES);
         assert.equal(await page.locator('#modal .plugin-slot[data-slot="provider"] iframe').getAttribute("sandbox"), "allow-scripts", where);
-        await notes.waitForFunction(() => window.magpie.context?.provider?.id === "openai");
+        try {
+          await notes.waitForFunction(() => window.magpie.context?.provider?.id === "openai", null, { polling: 50 });
+        } catch (error) {
+          const node = await page.locator('#modal iframe[src*="' + NOTES + '"]').elementHandle();
+          const active = await node?.contentFrame();
+          const state = (frame) => frame?.evaluate(() => ({ url: location.href, ready: document.readyState, context: window.magpie?.context, text: document.body.innerText })).catch((e) => ({ error: e.message }));
+          console.log("PANEL_CONTEXT_FAILURE", where, JSON.stringify({ same: active === notes, selected: await state(notes), active: await state(active), frames: page.frames().map((f) => ({ url: f.url(), detached: f.isDetached() })) }));
+          throw error;
+        }
         assert.equal(await notes.evaluate(() => magpie.context.provider.name), "OpenAI", where);
         await notes.locator("#note").fill("work account");
         await notes.locator("#saved").filter({ hasText: "Saved" }).waitFor();
@@ -201,8 +217,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const sets = await frameReady(page, SETS);
         // drawn when the window opened, before the note was written
         await sets.locator("#count").filter({ hasText: /^\d+ notes?$/ }).waitFor();
-        await page.waitForTimeout(1100); // options are set once a second at most
+        // 初始值可能已经是 0 notes；等待这次保存的响应，不能把旧值当成保存完成。
+        const cleared = page.waitForResponse((res) => {
+          if (new URL(res.url()).pathname !== "/api/plugin-pages/options") return false;
+          const b = res.request().postDataJSON();
+          return b?.spec === "/x/magpie-provider-notes" && b.options?.notes && Object.keys(b.options.notes).length === 0;
+        });
         await sets.locator("#clear").click();
+        const savedClear = await cleared;
+        assert.equal(savedClear.status(), 200, `${where}: clear saved`);
+        assert.deepEqual((await savedClear.json()).notes, {}, `${where}: saved options`);
         await sets.locator("#count").filter({ hasText: "0 notes" }).waitFor();
         assert.deepEqual(seen.options.at(-1).options.notes, {}, `${where}: cleared`);
         assert.ok(await page.locator("#setPage-plugins").isVisible(), where);
@@ -232,6 +256,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     t.after(() => browser.close());
     const page = await (await browser.newContext({ viewport: { width: 980, height: 700 } })).newPage();
     page.setDefaultTimeout(5000);
+    page.setDefaultNavigationTimeout(60000);
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.route("**/*", server("en", { reads: [], options: [] }, { panels: allPanels.filter((p) => p.slot !== "settings"), pages: [] }));
@@ -260,6 +285,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const where = `${engine} ${lang} ${width}`;
         const page = await (await browser.newContext({ viewport: { width, height: 820 } })).newPage();
         page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
         const errors = [];
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", server(lang, { reads: [], options: [] }, { panels: [], pages: [], plugins }));

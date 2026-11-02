@@ -231,6 +231,9 @@ func asFromLoopback(r *http.Request) *http.Request {
 // with wsl --shutdown, often on another address.
 var wslWatch = 10 * time.Second
 
+// wslListen 默认使用本机 listener；生命周期测试用阻塞退出的 listener 验证等待。
+var wslListen = net.Listen
+
 // serveWSL serves srv on each address Windows has on a WSL network, while
 // the gateway listens on loopback alone, until ctx ends.
 func (s *Server) serveWSL(ctx context.Context, srv *http.Server) {
@@ -238,10 +241,12 @@ func (s *Server) serveWSL(ctx context.Context, srv *http.Server) {
 		return
 	}
 	lns := map[string]net.Listener{}
+	var workers sync.WaitGroup
 	defer func() {
 		for _, ln := range lns {
 			ln.Close()
 		}
+		workers.Wait()
 	}()
 	look := func() {
 		want := map[string]bool{}
@@ -260,13 +265,17 @@ func (s *Server) serveWSL(ctx context.Context, srv *http.Server) {
 			if lns[a] != nil {
 				continue
 			}
-			ln, err := net.Listen("tcp", a)
+			ln, err := wslListen("tcp", a)
 			if err != nil {
 				log.Printf("gateway: can't listen for WSL at %s: %v", a, err)
 				continue
 			}
 			lns[a] = ln
-			go srv.Serve(ln)
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				srv.Serve(ln)
+			}()
 		}
 	}
 	look()

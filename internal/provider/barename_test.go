@@ -222,6 +222,24 @@ func TestEffortsOfARunningTagInTheModelName(t *testing.T) {
 	if strings.Join(e.Efforts, ",") != "low,medium,high" || !e.Reasoning {
 		t.Errorf("entryFor(gemini-3.8-flash-high): efforts %v reasoning %v; want low,medium,high true", e.Efforts, e.Reasoning)
 	}
+	for _, tc := range []struct {
+		model catalog.Model
+		want  bool
+	}{
+		{catalog.Model{ID: "mimo-v2.6-flash-free"}, true},
+		{catalog.Model{ID: "unknown-model-high"}, false},
+		{catalog.Model{ID: "always", AlwaysThinks: true}, true},
+	} {
+		e := entryFor(Provider{ID: "cpa", Chat: "https://cpa.example/v1"}, tc.model, settings.Settings{})
+		if e.Reasoning != tc.want || len(e.Efforts) != 0 {
+			t.Errorf("entryFor(%s): reasoning %v efforts %v; want %v and no levels", tc.model.ID, e.Reasoning, e.Efforts, tc.want)
+		}
+	}
+	s := settings.Settings{ModelReasonless: map[string]bool{"cpa/mimo-v2.6-flash-free": true}}
+	e = entryFor(Provider{ID: "cpa"}, catalog.Model{ID: "mimo-v2.6-flash-free", AlwaysThinks: true}, s)
+	if e.Reasoning || e.AlwaysThinks || len(e.Efforts) != 0 || !e.Reasonless {
+		t.Errorf("reasonless override: %+v", e)
+	}
 }
 
 // When the user has configured a price under one specific provider's relay name
@@ -412,11 +430,9 @@ func TestFreeChannelVariantsResolveToMakerOfficialPrice(t *testing.T) {
 	}
 }
 
-// A model a plugin lists carries the plugin's own provider id, which the
-// catalog doesn't know: it gave no word on levels, so the model's own are
-// read, as for a relay added by its endpoint. One a catalog provider lists
-// without levels still takes none.
-func TestEffortsOfAModelAPluginLists(t *testing.T) {
+// 列表已说出的 levels（包括没有）优先；只有没有来源的自定义模型才借用。
+// 插件的 thinking/variants 规则由 TestPluginThinkingModelBorrowsEfforts 覆盖。
+func TestEffortsOfAListedModelKeepsTheSourcesWord(t *testing.T) {
 	priceHome(t)
 	if err := os.MkdirAll(filepath.Dir(catalog.CachePath()), 0o755); err != nil {
 		t.Fatal(err)
@@ -437,18 +453,17 @@ func TestEffortsOfAModelAPluginLists(t *testing.T) {
 	t.Cleanup(catalog.Reset)
 
 	for _, tc := range []struct {
-		id, provider, want string
+		model catalog.Model
+		want  string
 	}{
-		// a plugin's id the catalog doesn't know: the model's levels
-		{"deepseek-v4.1-flash-free", "opencode-zen-free", "low,high,max"},
-		// a vendor's own word stands: xiaomi's switch alone gives no levels
-		{"mimo-v2.6-flash-free", "opencode-zen-free", ""},
-		// a catalog provider listing the model without levels says it takes none
-		{"deepseek-v4.1-flash", "azure", ""},
+		{catalog.Model{ID: "deepseek-v4.1-flash-free"}, "low,high,max"},
+		{catalog.Model{ID: "deepseek-v4.1-flash-free", Provider: "opencode-zen-free"}, ""},
+		{catalog.Model{ID: "deepseek-v4.1-flash-free", Provider: "opencode-zen-free", Efforts: []string{"high"}}, "high"},
+		{catalog.Model{ID: "mimo-v2.6-flash-free"}, ""},
+		{catalog.Model{ID: "deepseek-v4.1-flash", Provider: "azure"}, ""},
 	} {
-		m := catalog.Model{ID: tc.id, Provider: tc.provider}
-		if got := strings.Join(effortsOf(m), ","); got != tc.want {
-			t.Errorf("effortsOf(%s at %s) = %q, want %q", tc.id, tc.provider, got, tc.want)
+		if got := strings.Join(effortsOf(tc.model), ","); got != tc.want {
+			t.Errorf("effortsOf(%s at %s) = %q, want %q", tc.model.ID, tc.model.Provider, got, tc.want)
 		}
 	}
 }

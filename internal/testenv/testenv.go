@@ -111,6 +111,12 @@ func Isolate() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	for _, k := range append(slices.Clone(agentenv.Vars), agentenv.ClaudeProviders...) {
+		if err := os.Unsetenv(k); err != nil {
+			return "", err
+		}
+	}
+	// XDG_STATE_HOME 同时属于 agent 变量，须先清理再设置沙箱路径。
 	for k, v := range map[string]string{
 		"HOME": home, "USERPROFILE": home,
 		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
@@ -122,11 +128,6 @@ func Isolate() (string, error) {
 		Marker:            home,
 	} {
 		if err := os.Setenv(k, v); err != nil {
-			return "", err
-		}
-	}
-	for _, k := range append(slices.Clone(agentenv.Vars), agentenv.ClaudeProviders...) {
-		if err := os.Unsetenv(k); err != nil {
 			return "", err
 		}
 	}
@@ -187,8 +188,12 @@ func SetHome(t testing.TB, dir string) {
 
 // tools are the programs a test must never reach for real: the system
 // keychains (macOS' security, Linux's secret-tool), which hold the user's
-// sign-ins outside any home, and the agents' CLIs.
-var tools = []string{"security", "secret-tool", "claude", "codex", "cursor-agent", "devin", "grok", "kiro-cli"}
+// sign-ins outside any home, the agents' CLIs, and wsl.exe, which opens
+// the WSL distros' homes: a home of its own doesn't cover those, and a
+// test on Windows listed the real distro's Codex sessions beside its
+// fixtures (#4177). A test of the real WSL puts System32 before the
+// stand-in itself.
+var tools = []string{"security", "secret-tool", "claude", "codex", "cursor-agent", "devin", "grok", "kiro-cli", "wsl.exe"}
 
 // inertTools puts a failing stand-in for each of tools first on PATH, in
 // home/bin. Tests can still put their own fakes before it.

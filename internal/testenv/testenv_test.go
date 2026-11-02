@@ -62,9 +62,34 @@ func TestIsolate(t *testing.T) {
 	if _, ok := os.LookupEnv("CODEX_HOME"); ok {
 		t.Error("CODEX_HOME is still set")
 	}
+	if state := os.Getenv("XDG_STATE_HOME"); state == "" || !within(state, home) {
+		t.Errorf("state folder %q is outside the test home %s", state, home)
+	}
 	remove(home)
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Errorf("the test home is still there: %v", err)
+	}
+}
+
+// wsl.exe, which magpie runs by that name to list and open the WSL
+// distros, is a failing stand-in under Isolate: the distros' homes lie
+// outside the test home, and a Windows test read the real one's Codex
+// sessions (#4177).
+func TestIsolateStandsInForWSL(t *testing.T) {
+	for _, k := range append(folderVars, "PATH", Marker) {
+		t.Setenv(k, os.Getenv(k)) // restored after the test
+	}
+	home, err := Isolate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { remove(home) })
+	got, err := exec.LookPath("wsl.exe")
+	if err != nil || !within(got, home) {
+		t.Fatalf("wsl.exe is %q (%v), not a stand-in in %s", got, err, home)
+	}
+	if out, err := exec.Command(got, "-l", "-q").Output(); err == nil || len(out) > 0 {
+		t.Fatalf("the stand-in listed distros: %q, %v", out, err)
 	}
 }
 

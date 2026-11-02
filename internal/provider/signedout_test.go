@@ -57,7 +57,7 @@ func TestSavedButSignedOut(t *testing.T) {
 		}
 		return nil
 	}
-	defer func(k keychain, here bool) { codexKeychain, codexKeychainHere = k, here }(codexKeychain, codexKeychainHere)
+	codexOnMacKeychain(t, &fakeKeychain{})
 	for _, store := range []string{"keyring", "auto"} {
 		config := "model = \"gpt-5.6\"\ncli_auth_credentials_store = \"" + store + "\"\n\n[profiles.x]\nmodel = \"o3\"\n"
 		os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte(config), 0o600)

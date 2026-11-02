@@ -15,17 +15,20 @@ func DesktopAliasNumber(id string) string {
 }
 
 // DesktopAlias resolves only magpie's compatibility aliases, including the
-// older spellings and Claude Code's context suffix. Unknown ids stay unknown.
+// older spellings, Claude Science's and Claude Code's context suffix:
+// anthropic/magpie-<number>, mythos-magpie-<number>, claude-magpie-<number>
+// or magpie-<number>.anthropic.<claude model>. Unknown ids stay unknown.
 func DesktopAlias(id string) (string, bool) {
 	id = strings.TrimSuffix(id, "[1m]")
 	var number string
-	for _, prefix := range []string{"anthropic/magpie-", "mythos-magpie-", "claude-magpie-"} {
-		if n, ok := strings.CutPrefix(id, prefix); ok {
-			number = n
-			break
-		}
-	}
-	if rest, ok := strings.CutPrefix(id, "magpie-"); ok {
+	if n, ok := strings.CutPrefix(id, "anthropic/magpie-"); ok {
+		number = n
+	} else if n, ok := strings.CutPrefix(id, "mythos-magpie-"); ok {
+		number = n
+	} else if n, ok := strings.CutPrefix(id, "claude-magpie-"); ok {
+		// Claude Science's (gateway/science.go)
+		number = n
+	} else if rest, ok := strings.CutPrefix(id, "magpie-"); ok {
 		if i := strings.Index(rest, ".anthropic."); i > 0 {
 			number = rest[:i]
 		}
@@ -33,7 +36,10 @@ func DesktopAlias(id string) (string, bool) {
 	if len(number) != 10 {
 		return "", false
 	}
-	for _, e := range Catalog() {
+	// the catalog Desktop and Science are listed from: a signed-in
+	// subscription's model a group listing alone keeps out of Catalog
+	// is still theirs (SubscriptionKept)
+	for _, e := range CatalogOf("claude-desktop") {
 		if DesktopAliasNumber(e.ID) == number {
 			return e.ID, true
 		}

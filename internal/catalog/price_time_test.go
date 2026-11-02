@@ -1,163 +1,43 @@
 package catalog
 
 import (
-	"encoding/json"
-	"math"
 	"testing"
 	"time"
 )
 
-// deepseek is a price as the user states DeepSeek's: off-peak in the base
-// parts, on-peak in two windows of the working week, a holiday billed at
-// off-peak whatever the weekday.
-const deepseek = `{
-	"input": 1.5, "output": 4.5, "cache_read": 0.05, "cache_write": 0,
-	"time_zone": "Asia/Shanghai",
-	"time_tiers": [
-		{"days": [1, 2, 3, 4, 5], "from": "09:00", "to": "12:00", "input": 3, "output": 9, "cache_read": 0.1},
-		{"days": [1, 2, 3, 4, 5], "from": "14:00", "to": "18:00", "input": 3, "output": 9, "cache_read": 0.1}
-	],
-	"off_dates": ["2026-01-01", "2026-10-01"]
-}`
-
-func shanghai(t *testing.T) *time.Location {
-	t.Helper()
-	where, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatalf("Asia/Shanghai: %v", err)
-	}
-	return where
-}
-
-func TestAtTimePicksTheWindow(t *testing.T) {
-	var p Price
-	if err := json.Unmarshal([]byte(deepseek), &p); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(p.TimeTiers) != 2 || p.TimeZone != "Asia/Shanghai" || len(p.OffDates) != 2 {
-		t.Fatalf("read back: %+v", p)
-	}
-	// the second window leaves cache_write out, which is the base's 0
-	if p.TimeTiers[1].CacheWrite != 0 || p.TimeTiers[1].CacheWrite1h != 0 {
-		t.Fatalf("a part left out took the base's: %+v", p.TimeTiers[1])
-	}
-	where := shanghai(t)
-	cases := []struct {
-		at   time.Time
-		peak bool
-	}{
-		{time.Date(2026, 10, 20, 8, 59, 0, 0, where), false},  // a Tuesday, before 9
-		{time.Date(2026, 10, 20, 9, 0, 0, 0, where), true},    // 9:00 is in
-		{time.Date(2026, 10, 20, 11, 59, 0, 0, where), true},  //
-		{time.Date(2026, 10, 20, 12, 0, 0, 0, where), false},  // 12:00 is out
-		{time.Date(2026, 10, 20, 13, 59, 0, 0, where), false}, //
-		{time.Date(2026, 10, 20, 14, 0, 0, 0, where), true},   // the second window
-		{time.Date(2026, 10, 20, 17, 59, 0, 0, where), true},  //
-		{time.Date(2026, 10, 20, 18, 0, 0, 0, where), false},  //
-		{time.Date(2026, 10, 24, 10, 0, 0, 0, where), false},  // a Saturday
-		{time.Date(2026, 10, 1, 10, 0, 0, 0, where), false},   // a holiday, a Thursday
-		{time.Date(2026, 10, 22, 10, 0, 0, 0, where), true},   // a Thursday
-	}
-	for _, c := range cases {
-		got := p.AtTime(c.at)
-		want := catalogPrice(1.5, 4.5, 0.05)
-		if c.peak {
-			want = catalogPrice(3, 9, 0.1)
-		}
-		if !got.At(0).Same(want) {
-			t.Errorf("at %s: got %+v, want %+v", c.at.Format("2006-01-02 15:04 Mon"), got.At(0), want)
-		}
-		if in := p.InTimeTier(c.at); in != c.peak {
-			t.Errorf("at %s: InTimeTier %v, want %v", c.at.Format("2006-01-02 15:04 Mon"), in, c.peak)
-		}
-	}
-}
-
-// catalogPrice is a flat price of input, output and cache read.
-func catalogPrice(input, output, cacheRead float64) Price {
-	return Price{Input: input, Output: output, CacheRead: cacheRead}
-}
-
+// Peak scales the size tiers with the base price, and CostSplit does not
+// apply the same peak a second time.
 func TestAtTimeKeepsTheSizeTier(t *testing.T) {
-	p := Price{Input: 1, Output: 2, CacheRead: 0.1, TimeZone: "UTC",
-		TimeTiers: []TimeTier{{From: "09:00", To: "12:00", Input: 2, Output: 4, CacheRead: 0.2}},
-		Tiers:     []Tier{{Above: 1000, Input: 5, Output: 10, CacheRead: 0.5}}}
-	at := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
-	if got := p.AtTime(at).At(2000); got.Input != 5 {
-		t.Errorf("a peak request over the size tier: %+v, want the tier's 5", got)
+	p := Price{Input: 1, Output: 2, CacheRead: 0.1, Peak: PeakWeekdays,
+		Tiers: []Tier{{Above: 1000, Input: 5, Output: 10, CacheRead: 0.5}}}
+	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	if got := p.AtTime(at).At(2000); got.Input != 10 {
+		t.Errorf("a peak request over the size tier: %+v, want the scaled tier's 10", got)
 	}
 	if got := p.AtTime(at).At(10); got.Input != 2 {
-		t.Errorf("a peak request under the size tier: %+v, want the window's 2", got)
+		t.Errorf("a peak request under the size tier: %+v, want the scaled base's 2", got)
 	}
-	if got := p.CostSplitAt(at, 1000000, 0, 0, 0, 0); math.Abs(got-5) > 1e-9 {
-		t.Errorf("a million input tokens at peak: %v, want the size tier's 5", got)
-	}
-}
-
-func TestAtTimeWithoutATime(t *testing.T) {
-	var p Price
-	if err := json.Unmarshal([]byte(deepseek), &p); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	// no time told: the base price, as a price of no windows is
-	if got := p.AtTime(time.Time{}); !got.At(0).Same(catalogPrice(1.5, 4.5, 0.05)) {
-		t.Errorf("no time: %+v", got.At(0))
-	}
-	if p.InTimeTier(time.Time{}) {
-		t.Error("no time is in a window")
-	}
-	if (Price{Input: 1}).InTimeTier(time.Now()) {
-		t.Error("a price of no windows holds a request")
+	if got := p.AtTime(at).CostSplit(1000000, 0, 0, 0, 0); got != 10 {
+		t.Errorf("a million input tokens at peak: %v, want the scaled size tier's 10", got)
 	}
 }
 
-func TestTimeTierWindowsWrapMidnight(t *testing.T) {
-	p := Price{Input: 1, TimeZone: "UTC", TimeTiers: []TimeTier{{From: "22:00", To: "02:00", Input: 2}}}
-	for _, c := range []struct {
-		hour int
-		peak bool
-	}{{21, false}, {22, true}, {23, true}, {0, true}, {1, true}, {2, false}, {12, false}} {
-		at := time.Date(2026, 10, 20, c.hour, 0, 0, 0, time.UTC)
-		if got := p.InTimeTier(at); got != c.peak {
-			t.Errorf("at %d:00: %v, want %v", c.hour, got, c.peak)
-		}
-	}
-}
-
-func TestTimeTierLeftOutWhenUnreadable(t *testing.T) {
-	cases := []string{
-		`{"input": 1, "time_tiers": [{"from": "9am", "to": "12:00"}]}`,
-		`{"input": 1, "time_tiers": [{"from": "09:00", "to": "09:00"}]}`,
-		`{"input": 1, "time_tiers": [{"from": "09:00", "to": "12:00", "input": 2, "days": [8]}]}`,
-		`{"input": 1, "time_tiers": [{"from": "24:30", "to": "12:00"}]}`,
-	}
-	for _, c := range cases {
-		var p Price
-		if err := json.Unmarshal([]byte(c), &p); err != nil {
-			t.Fatalf("%s: %v", c, err)
-		}
-		if len(p.TimeTiers) != 0 {
-			t.Errorf("%s: kept %+v", c, p.TimeTiers)
-		}
-	}
-}
-
-func TestTimesAndSameKeepTheWindows(t *testing.T) {
-	var p Price
-	if err := json.Unmarshal([]byte(deepseek), &p); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
+func TestTimesAndSameKeepDatedTiers(t *testing.T) {
+	p := Price{Input: 1.5, Output: 3, Peak: PeakWeekdays,
+		Tiers: []Tier{{Above: 1000, Input: 3, Output: 6, From: "2026-09-01", To: "2026-09-30"}}}
 	half := p.Times(0.5)
-	if half.TimeTiers[0].Input != 1.5 || half.Input != 0.75 || half.TimeZone != p.TimeZone || len(half.OffDates) != len(p.OffDates) {
+	if half.Tiers[0].Input != 1.5 || half.Input != 0.75 || half.Peak != p.Peak ||
+		half.Tiers[0].From != p.Tiers[0].From || half.Tiers[0].To != p.Tiers[0].To {
 		t.Fatalf("half: %+v", half)
 	}
 	if p.Same(half) || !p.Same(p) {
 		t.Error("Same")
 	}
 	other := p
-	other.OffDates = []string{"2026-01-01"}
+	other.Tiers = append([]Tier(nil), p.Tiers...)
+	other.Tiers[0].To = "2026-09-29"
 	if p.Same(other) {
-		t.Error("a shorter OffDates is not the same price")
+		t.Error("a tier with another last day is not the same price")
 	}
 }
 
@@ -166,9 +46,9 @@ func TestTimesAndSameKeepTheWindows(t *testing.T) {
 // them the price above, and one of no time told the tier, as a price read
 // without a time has only the file's word.
 func TestADatedTierHoldsOnItsDays(t *testing.T) {
-	p := Price{Input: 1, Output: 2, CacheRead: 0.1, TimeZone: "UTC",
+	p := Price{Input: 1, Output: 2, CacheRead: 0.1,
 		Tiers: []Tier{{Above: 272000, Input: 20, Output: 75, CacheRead: 2, From: "2026-09-01", To: "2026-09-30"}}}
-	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 12, 0, 0, 0, time.UTC) }
+	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 12, 0, 0, 0, time.Local) }
 	for _, c := range []struct {
 		at   time.Time
 		want float64
@@ -210,45 +90,5 @@ func TestNoTiersBillsThePriceAbove(t *testing.T) {
 	}
 	if p.Same(kept) {
 		t.Error("Same reads NoTiers")
-	}
-}
-
-// A window that wraps past midnight is the day it opens on: Monday's
-// 22:00-02:00 holds Monday night and Tuesday's small hours, and Monday's
-// own small hours are Sunday's window's, or no window's.
-func TestWrappedWindowBelongsToTheDayItOpens(t *testing.T) {
-	p := Price{Input: 1, TimeZone: "UTC",
-		TimeTiers: []TimeTier{{Days: []int{1}, From: "22:00", To: "02:00", Input: 2}}}
-	// 2026-10-19 is a Monday, 2026-10-20 a Tuesday, 2026-10-18 a Sunday.
-	cases := []struct {
-		at   time.Time
-		peak bool
-	}{
-		{time.Date(2026, 10, 19, 21, 0, 0, 0, time.UTC), false}, // Monday before it
-		{time.Date(2026, 10, 19, 22, 0, 0, 0, time.UTC), true},  // Monday, it opens
-		{time.Date(2026, 10, 19, 23, 59, 0, 0, time.UTC), true}, // Monday night
-		{time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC), true},   // Tuesday, its tail
-		{time.Date(2026, 10, 20, 1, 59, 0, 0, time.UTC), true},  // Tuesday, its last minute
-		{time.Date(2026, 10, 20, 2, 0, 0, 0, time.UTC), false},  // Tuesday, it closes
-		{time.Date(2026, 10, 19, 0, 30, 0, 0, time.UTC), false}, // Monday's own small hours: Sunday's window at best
-		{time.Date(2026, 10, 20, 22, 0, 0, 0, time.UTC), false}, // Tuesday night: not Monday's
-	}
-	for _, c := range cases {
-		if got := p.InTimeTier(c.at); got != c.peak {
-			t.Errorf("%s: InTimeTier %v, want %v", c.at.Format("2006-01-02 15:04 Mon"), got, c.peak)
-		}
-	}
-	// Sunday's window wraps into Monday's small hours, which Monday's own
-	// window must not claim
-	q := Price{Input: 1, TimeZone: "UTC",
-		TimeTiers: []TimeTier{{Days: []int{7}, From: "22:00", To: "02:00", Input: 3}}}
-	if !q.InTimeTier(time.Date(2026, 10, 19, 0, 30, 0, 0, time.UTC)) {
-		t.Error("Monday 00:30 is Sunday's window's tail")
-	}
-	if got := q.AtTime(time.Date(2026, 10, 19, 0, 30, 0, 0, time.UTC)).Input; got != 3 {
-		t.Errorf("Sunday's tail at Monday 00:30: input %v, want 3", got)
-	}
-	if q.InTimeTier(time.Date(2026, 10, 19, 23, 0, 0, 0, time.UTC)) {
-		t.Error("Monday night is not Sunday's window")
 	}
 }

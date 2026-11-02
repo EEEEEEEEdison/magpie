@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -694,20 +695,18 @@ func TestCallKind(t *testing.T) {
 	}
 }
 
-// The ChatGPT backend serves a model only to a Codex that knows it: a turn
-// signed by the pool says it comes from a Codex CLI at least as new as the
-// one that sent it, in the User-Agent and the version header alike, so a
-// model Codex CLI reaches on its own isn't refused through magpie
-// (Discord: "The 'gpt-6.1-sol' model is not supported when using Codex
-// with a ChatGPT account"). 0.161.0 is newer than any installed here or
-// magpie's own fallback, so only the client's own version can pass.
+// 账号池的 User-Agent 和 version 必须一致，且不能比客户端或此前见过的
+// 客户端旧。其他测试可能已经见过更新版本，不能要求恰等于 0.161.0。
 func TestCodexPoolSaysTheClientsVersion(t *testing.T) {
 	codexSignedIn(t, "spare@example.com")
+	var mu sync.Mutex
 	var uas, vers []string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		ua := r.Header.Get("User-Agent")
+		mu.Lock()
 		uas, vers = append(uas, ua), append(vers, r.Header.Get("version"))
+		mu.Unlock()
 		v, _, _ := strings.Cut(strings.TrimPrefix(ua, "codex_cli_rs/"), " ")
 		if modelOf(b) == "gpt-6.1-sol" && (!strings.HasPrefix(ua, "codex_cli_rs/") || older(v, "0.161.0")) {
 			w.WriteHeader(400)
@@ -725,20 +724,30 @@ func TestCodexPoolSaysTheClientsVersion(t *testing.T) {
 	t.Cleanup(func() { provider.CodexBase = was })
 
 	s := New()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", CodexPath+"/responses", strings.NewReader(`{"model":"gpt-6.1-sol","stream":true,"input":"ping"}`))
-	req.Header.Set("Authorization", "Bearer chatgpt-token")
-	req.Header.Set("chatgpt-account-id", "acct-1")
-	req.Header.Set("originator", "codex_cli_rs")
-	req.Header.Set("User-Agent", "codex_cli_rs/0.161.0 (Mac OS 26.6.0; arm64) ghostty/1.2.0")
-	req.Header.Set("version", "0.161.0")
-	s.Handler().ServeHTTP(rec, req)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pong") {
-		t.Fatalf("status %d: %s (User-Agent %q, version %q)", rec.Code, rec.Body.String(), uas, vers)
+	for _, version := range []string{"0.161.0", "0.150.0"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", CodexPath+"/responses", strings.NewReader(`{"model":"gpt-6.1-sol","stream":true,"input":"ping"}`))
+		req.Header.Set("Authorization", "Bearer chatgpt-token")
+		req.Header.Set("chatgpt-account-id", "acct-1")
+		req.Header.Set("originator", "codex_cli_rs")
+		req.Header.Set("User-Agent", "codex_cli_rs/"+version+" (Mac OS 26.6.0; arm64) ghostty/1.2.0")
+		req.Header.Set("version", version)
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pong") {
+			t.Fatalf("client %s: status %d: %s", version, rec.Code, rec.Body.String())
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(uas) != 2 {
+		t.Fatalf("upstream requests %d, want 2", len(uas))
 	}
 	for i := range uas {
-		if !strings.HasPrefix(uas[i], "codex_cli_rs/0.161.0 (") || vers[i] != "0.161.0" {
-			t.Errorf("request %d: User-Agent %q, version %q", i, uas[i], vers[i])
+		if !strings.HasPrefix(uas[i], "codex_cli_rs/"+vers[i]+" (") || vers[i] == "" || older(vers[i], "0.161.0") {
+			t.Errorf("request %d: User-Agent %q, version %q; want matching versions at least 0.161.0", i, uas[i], vers[i])
+		}
+		if i > 0 && older(vers[i], vers[i-1]) {
+			t.Errorf("older client downgraded the pool from %s to %s", vers[i-1], vers[i])
 		}
 	}
 }

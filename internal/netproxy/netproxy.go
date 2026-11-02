@@ -253,6 +253,10 @@ func For(u *url.URL) (*url.URL, error) {
 	default:
 		return Parse(s)
 	}
+	// 绕过是明确的直连选择，不是“环境没有代理”后再退回系统设置。
+	if noProxy(u.Hostname(), envOf("NO_PROXY", "no_proxy")) {
+		return nil, nil
+	}
 	if p, err := fromEnv(u); p != nil || err != nil {
 		return p, err
 	}

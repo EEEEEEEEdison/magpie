@@ -141,6 +141,11 @@ type Session struct {
 	Unpriced int     `json:"unpriced"` // models that spent tokens but have no known price
 	Resume   string  `json:"resume"`   // the command that picks the session up again
 	Path     string  `json:"path"`     // its (main) file
+	// App is the agent the session ran in when it isn't the one whose files
+	// hold it: claude-desktop for a Claude Code session Claude Desktop's Code
+	// tab ran (its entrypoint, desktopEntrypoint). Usage counts the session
+	// under App; the key, resume and transcript stay Agent's.
+	App string `json:"app,omitempty"`
 	// Carry are the other agents that can carry the session on, reading its
 	// file as it is (carry.go)
 	Carry []Carry `json:"carry,omitempty"`
@@ -158,6 +163,14 @@ type Session struct {
 	// Copies are the ids of the sessions that are copies of its
 	// conversation, not listed apart from it (ccCopies)
 	Copies []string `json:"-"`
+	// Subs are the ids its subagents' and advisor's own files name
+	// themselves by (omp), each one the session its requests tell the
+	// gateway, while their tokens are counted in this session (subIDs)
+	Subs []string `json:"-"`
+	// BranchOf is the main file of the session a Claude-format session
+	// is a branch of (ccFamily): it is listed under that one, and read
+	// from that one's start up to where it went its own way
+	BranchOf string `json:"-"`
 }
 
 // PriceOf is the effective price of a model as a session names it, at the
@@ -180,6 +193,8 @@ const All = 5000
 
 // state is what one file's parse has come to, enough to read on from Off.
 type state struct {
+	// the agent whose file it is, for its parseVersions
+	Agent                 string            `json:"agent,omitempty"`
 	Codex                 *codexUsageState  `json:"-"`
 	Claude                *claudeUsageState `json:"claude,omitempty"`
 	DBRevision            string            `json:"db_revision,omitempty"`
@@ -209,6 +224,9 @@ type state struct {
 	// Days is Models again, split by the local date each message was
 	// written on: a session that runs past midnight counts on both days.
 	Days named[*day] `json:"days,omitempty"`
+	// Claude Code: the entrypoint its first line naming one says, which
+	// tells a session Claude Desktop's Code tab ran (desktopEntrypoint)
+	Entry string `json:"entry,omitempty"`
 	// Claude Code: the message last counted, whose later lines repeat it,
 	// and the day it was counted on
 	Msg      string `json:"msg,omitempty"`
@@ -423,54 +441,18 @@ func hourAt(key string) time.Time {
 	return at
 }
 
-// hourCost is what tokens cost at a price, each hour's at the price of the
-// window that hour is in, and whatever no hour holds at the price itself.
+// hourCost 按每小时的峰谷倍率估算会话合计；未知单次请求长度，只用基础档。
+// 没有小时的部分按基础价估算，不猜测峰谷或长上下文档。
 func hourCost(hours map[string]Tokens, total Tokens, p catalog.Price) float64 {
 	cost, rest := 0.0, total
 	for key, t := range hours {
-		cost += hourPrice(p, hourAt(key), t)
+		f := p.At(0).In(hourAt(key))
+		cost += f.CostSplit(t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h)
 		rest.sub(t)
 	}
 	if !rest.zero() {
-		cost += p.CostSplitAt(time.Time{}, rest.Input, rest.Output, rest.CacheRead, rest.CacheWrite, rest.CacheWrite1h)
-	}
-	return cost
-}
-
-// hourPrice is what t, the tokens of the hour start opens, cost at p: the
-// hour whole at the price of the window it is in, and an hour that straddles
-// a window's end split by the minutes it spends on each side.
-//
-// A zone whose offset from UTC is not a whole hour puts a window's ends
-// inside an hour rather than on it: India's +05:30 has a 09:00 window's
-// start at 03:30 UTC, so the hour keyed 03 holds half an hour either side of
-// it, and the hour billed whole at either end's price bills half of it
-// wrong. A zone on the hour, with windows on the hour, keeps one price for
-// the hour and takes no splitting.
-func hourPrice(p catalog.Price, start time.Time, t Tokens) float64 {
-	if t.zero() {
-		return 0
-	}
-	at := func(m int) catalog.Price { return p.AtTime(start.Add(time.Duration(m) * time.Minute)) }
-	// a window's ends fall on a whole minute, so a price that holds at the
-	// hour's start, at its middle and at its last minute holds all through:
-	// a window narrower than half an hour between two of them is the one
-	// case this misses, and no vendor bills by such a window
-	whole := at(0)
-	if whole.Same(at(30)) && whole.Same(at(59)) {
-		return whole.CostSplit(t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h)
-	}
-	// the hour's price changes inside it: each run of minutes at its own
-	// window's price, its share of the hour's tokens with it
-	cost := 0.0
-	for m := 0; m < 60; {
-		pr := at(m)
-		n := 1
-		for m+n < 60 && pr.Same(at(m+n)) {
-			n++
-		}
-		cost += pr.CostSplit(t.Input, t.Output, t.CacheRead, t.CacheWrite, t.CacheWrite1h) * float64(n) / 60
-		m += n
+		f := p.At(0)
+		cost += f.CostSplit(rest.Input, rest.Output, rest.CacheRead, rest.CacheWrite, rest.CacheWrite1h)
 	}
 	return cost
 }
@@ -547,6 +529,9 @@ type file struct {
 	mod      time.Time
 	main     bool // the session's own file, not a subagent's
 	readOnly bool
+	// noDesktopApp: another CLI file is explicitly owned by Desktop, so an
+	// entrypoint alone doesn't assign this one to it (desktopCodeFiles).
+	noDesktopApp bool
 	// cold: the WSL distro the file is in isn't running, and the file, as
 	// last listed, is not to be opened (that would start the distro)
 	cold bool
@@ -677,6 +662,9 @@ func statFiles(files []file, follow bool) []file {
 			f.size, f.mod, ok[i] = fi.Size(), fi.ModTime(), true
 		}
 	})
+	for i, l := range listed {
+		l.Done(order[i])
+	}
 	kept := files[:0]
 	for i, f := range files {
 		if ok[i] {
@@ -729,12 +717,23 @@ func parallel(n, per int, one func(i int)) {
 // its workflows (ultracode) in <id>/subagents/workflows/<run>/agent-*.jsonl
 // — beside each run's journal.jsonl, which isn't a transcript.
 func ccFiles(agent, dir string) []file {
+	if !Reads(agent) {
+		return nil
+	}
 	return heldFiles("cc\x00"+agent+"\x00"+dir, func() []file { return listCCFiles(agent, dir) })
 }
 
+// ccListed is how many files each folder's last listCCFiles found: its
+// listing grown from none, a file at a time, was ~35 MB of a minute of the
+// page's polls over 13 GB of Claude Code history (#2278).
+var ccListed sync.Map // dir → int
+
 func listCCFiles(agent, dir string) []file {
 	projects := filepath.Join(dir, "projects")
-	var out []file
+	n, _ := ccListed.Load(dir)
+	last, _ := n.(int)
+	out := make([]file, 0, last+last/8)
+	defer func() { ccListed.Store(dir, len(out)) }()
 	for _, project := range readDirectory(projects) {
 		if !dirent.IsFolder(projects, project) {
 			continue
@@ -782,13 +781,61 @@ func allFiles() []file {
 	if filesHook != nil {
 		filesHook()
 	}
-	var out []file
-	for _, fs := range [][]file{callFiles(), openCodeFiles(), piFiles(),
-		wslFiles("pi", "omp", "kimi"), zcodeFiles(), dshFiles(), clineFiles(), ccFiles("qoder", QoderDir("qoder")), ccFiles("qoder-cn", QoderDir("qoder-cn")),
-		grokFiles(), workbuddyFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), kimiFiles(), agyFiles()} {
-		out = append(out, fs...)
+	// each lister asked Reads already; a file listed under another
+	// agent's name is held to that agent too
+	return allowed(distinctOf(append(callFileLists(codexFiles()), openCodeFiles(), piFiles(), raftFiles(), cindyFiles(),
+		wslFiles("pi", "raft", "omp", "kimi"), zcodeFiles(), dshFiles(), clineFiles(), ccFiles("qoder", QoderDir("qoder")), ccFiles("qoder-cn", QoderDir("qoder-cn")),
+		grokFiles(), workbuddyFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), kimiFiles(), agyFiles())...))
+}
+
+// distinctOf is lists one after another with each path kept once, the
+// first time it is listed (distinctPaths), in one slice and one set made
+// at their size: a file is ~200 bytes, and the call files were copied and
+// a set of them made once, then copied and a set made again with the
+// other agents' (allFiles, callSources), ~10 MB on each of a poll's
+// several passes over ~34k sessions (#2278).
+func distinctOf(lists ...[]file) []file {
+	n := 0
+	for _, fs := range lists {
+		n += len(fs)
 	}
-	return distinctPaths(out)
+	return distinctInto(make([]file, 0, n), lists...)
+}
+
+// distinctInto is distinctOf appended to out.
+func distinctInto(out []file, lists ...[]file) []file {
+	seen := pathSet()
+	defer putPathSet(seen)
+	for _, fs := range lists {
+		for _, f := range fs {
+			if _, ok := seen[f.path]; !ok {
+				seen[f.path] = struct{}{}
+				out = append(out, f)
+			}
+		}
+	}
+	return out
+}
+
+// pathSets are sets of paths made for one pass over a listing and given
+// back after it: a set of every session file's path, made new on each of
+// a poll's several passes (distinctOf, refresh, pruneCalls), was ~100 MB
+// of what a minute of polls allocated over ~34k files (#2278). A set
+// keeps its room when cleared. They are kept on a shelf: a poll collects
+// garbage about twice a second, which emptied a sync.Pool of them before
+// the next pass.
+var pathSets shelf[map[string]struct{}]
+
+func pathSet() map[string]struct{} {
+	if m, ok := pathSets.take(nil); ok {
+		return m
+	}
+	return map[string]struct{}{}
+}
+
+func putPathSet(m map[string]struct{}) {
+	clear(m)
+	pathSets.give(m, nil)
 }
 
 // distinctPaths is fs with each path kept once, the first time it is
@@ -796,11 +843,12 @@ func allFiles() []file {
 // holds twice under one id (a TEXT and a BLOB row, #2932), or a folder
 // two agents are told to share, would otherwise be counted twice.
 func distinctPaths(fs []file) []file {
-	seen := make(map[string]bool, len(fs))
+	seen := pathSet()
+	defer putPathSet(seen)
 	out := fs[:0]
 	for _, f := range fs {
-		if !seen[f.path] {
-			seen[f.path] = true
+		if _, ok := seen[f.path]; !ok {
+			seen[f.path] = struct{}{}
 			out = append(out, f)
 		}
 	}
@@ -816,6 +864,7 @@ func Dirs() []string {
 	for _, d := range []struct{ dir, sessions string }{
 		{OpenCodeDir(), OpenCodeDir()},
 		{PiDir(), PiDir()},
+		{SlockDir(), filepath.Join(SlockDir(), "agents")},
 		{ZCodeDir(), zcodeDB()},
 		{DshDir(), filepath.Join(DshDir(), "sessions")},
 		{ClineSessionDir(), ClineSessionDir()},
@@ -847,6 +896,13 @@ func Dirs() []string {
 		}
 		out = append(out, d.dir)
 	}
+	// Cindy's Pi sessions, by their own folder: Cindy's is the app's
+	// whole data
+	for _, d := range cindySessionDirs() {
+		if _, err := os.Stat(d); err == nil {
+			out = append(out, d)
+		}
+	}
 	out = append(out, HermesDirs()...)
 	out = append(out, wslDirs()...)
 	return out
@@ -865,16 +921,19 @@ const zstSuffix = ".zst"
 // reading CodexDir alone left out every other account's sessions and
 // calls (phantom3792 on X).
 func codexFiles() []file {
+	if !Reads("codex") {
+		return nil
+	}
 	if !quiet() {
 		return heldFiles("codex", listCodexFiles)
 	}
 	warmListing.Lock()
 	defer warmListing.Unlock()
 	if warmListing.files != nil && time.Since(warmListing.at) < warmListingFor {
-		return slices.Clone(warmListing.files)
+		return warmListing.files // only read, as heldFiles' are
 	}
-	files := listCodexFiles()
-	warmListing.at, warmListing.files = time.Now(), slices.Clone(files)
+	files := slices.Clip(listCodexFiles())
+	warmListing.at, warmListing.files = time.Now(), files
 	return files
 }
 
@@ -945,6 +1004,9 @@ func walkLinked(root string, fn fs.WalkDirFunc) error {
 
 // codexFilesIn are the rollouts in a Codex folder.
 func codexFilesIn(dir string) []file {
+	if !Reads("codex") {
+		return nil
+	}
 	var out []file
 	for _, folder := range []string{"sessions", "archived_sessions"} {
 		root := filepath.Join(dir, folder)
@@ -990,6 +1052,12 @@ func codexFilesIn(dir string) []file {
 // rolloutsListed is how many rollouts each root's last listing found.
 var rolloutsListed sync.Map
 
+// rolloutsSeen are each folder's rollouts as its last listing found them,
+// in name order: their paths and keys, made again for each of ~20k
+// rollouts on every listing, were ~50 MB of a minute of the page's polls
+// (#2278).
+var rolloutsSeen sync.Map // shown folder → []file
+
 // listedRollouts are the rollouts under root, in walkLinked's order and
 // with their sizes and times, read with one listing a folder
 // (dirent.Stats) rather than a listing and an lstat() a file: Codex's day
@@ -1023,18 +1091,40 @@ func listedRollouts(root string) (out []file, ok bool) {
 		if !ok {
 			return false
 		}
+		defer entries.Done(real)
+		prev, _ := rolloutsSeen.Load(shown)
+		seen, _ := prev.([]file)
+		start, made, leaf := len(out), false, true
 		for _, e := range entries {
 			name := e.Name
 			switch e.Mode {
 			case fs.ModeDir:
+				leaf = false
 				if !in(filepath.Join(real, name), filepath.Join(shown, name)) {
 					return false
 				}
 			case 0:
+				// both in name order: a rollout listed before keeps its
+				// path and key, and only its size and time are new
+				for len(seen) > 0 && filepath.Base(seen[0].path) < name {
+					seen = seen[1:]
+				}
+				if len(seen) > 0 && filepath.Base(seen[0].path) == name {
+					f := seen[0]
+					f.size, f.mod = e.Size, e.Mod
+					out = append(out, f)
+					continue
+				}
 				if m := rolloutName.FindStringSubmatch(name); m != nil {
 					out = append(out, file{agent: "codex", key: "codex:" + m[1], path: filepath.Join(shown, name), main: true, size: e.Size, mod: e.Mod})
+					made = true
 				}
 			}
+		}
+		// a day folder's only: in a folder with folders in it, out has
+		// their rollouts among its own
+		if n, _ := prev.([]file); leaf && (made || len(out)-start != len(n)) {
+			rolloutsSeen.Store(shown, slices.Clone(out[start:]))
 		}
 		return true
 	}
@@ -1098,13 +1188,28 @@ func CachePath() string { return filepath.Join(filepath.Dir(catalog.CachePath())
 // 22: dsh's gateway conversation ids (Convs).
 // 23: Claude Code's first and last message uuids (Root, Leaf).
 // 24: Claude Code's compact summaries' uuids (Compacts).
-// 25: each day's tokens by the hour they were spent in, which a vendor
-// billing its hours differently is priced by.
-const cacheVersion = 25
+// 25: the skills Codex calls up by reading their SKILL.md.
+// 26: Grok Build's tool calls and skills.
+// 27: Factory Droid's skills (its Skill tool and /<name> prompts).
+// 28: OpenCode 2's, Cline's and dsh's tool calls and skills.
+// 29: Claude Code's entrypoint (Entry), Desktop's Code tab apart.
+// 30: each day's tokens by the hour they were spent in.
+//
+// A change to how one agent's files are read raises that agent's
+// parseVersions instead: a raise of cacheVersion reads every file of every
+// agent again, minutes of CPU for a long history after each update (#2278).
+const cacheVersion = 30
+
+// parseVersions is cacheVersion for one agent's parses, 0 when not listed:
+// raised, the parses of that agent's files kept by an older magpie are read
+// again, and the rest stand.
+var parseVersions = map[string]int{}
 
 type cacheFile struct {
-	Version int               `json:"version"`
-	Zone    string            `json:"zone"` // the time zone its days are dates in
+	Version int    `json:"version"`
+	Zone    string `json:"zone"` // the time zone its days are dates in
+	// Parsers is parseVersions as the parses were made
+	Parsers map[string]int    `json:"parsers,omitempty"`
 	Files   map[string]*state `json:"files"`
 }
 
@@ -1139,19 +1244,32 @@ func loadCache() {
 // parse starts from a clone), so a copy of the map is a snapshot; saves in a
 // row are folded into the latest, and one is written saveGap after the
 // last at the soonest.
-func saveCache() {
-	snap := save{cacheFile{Version: cacheVersion, Zone: zone(), Files: maps.Clone(cache)}, CachePath()}
+func saveCache() { saveCacheWithin(saveGap) }
+
+// saveCacheWithin is saveCache written gap after the last save at the
+// soonest; saves folded into one wait the shortest gap any of them asked.
+func saveCacheWithin(gap time.Duration) {
+	snap := save{cacheFile{Version: cacheVersion, Zone: zone(), Parsers: parseVersions, Files: savable()}, CachePath()}
 	saving.Lock()
 	defer saving.Unlock()
+	if saving.next == nil || gap < saving.gap {
+		saving.gap = gap
+	}
 	saving.next = &snap
 	if saving.running {
+		if gap < saveGap {
+			select { // a save waiting out a longer gap looks again
+			case saveNow <- struct{}{}:
+			default:
+			}
+		}
 		return
 	}
 	saving.running = true
 	go func() {
 		for {
 			saving.Lock()
-			wait := saveGap - time.Since(saving.wrote)
+			wait := saving.gap - time.Since(saving.wrote)
 			if saving.hurry {
 				wait = 0
 			}
@@ -1160,6 +1278,7 @@ func saveCache() {
 				select {
 				case <-time.After(wait):
 				case <-saveNow:
+					continue // hurried, or a shorter gap asked: look again
 				}
 			}
 			saving.Lock()
@@ -1192,6 +1311,18 @@ func saveCache() {
 // read again then. Saved does not wait it out.
 var saveGap = time.Minute
 
+// A refresh that reads scanFiles files or more is a scan (a first start, a
+// lost or outdated index), not a poll catching up with a live session. Its
+// checkpoints wait scanSaveGap, not saveGap, and its last save waits for
+// nothing: under saveGap a scan's later checkpoints and its end waited a
+// minute after its first checkpoint, and a magpie quit or updated within
+// it kept a few hundred of 17,000 files, so each start read 22 GB of
+// rollouts again (15 to 28 s before Sessions showed, 70 to 94 s of CPU).
+var (
+	scanFiles   = 32
+	scanSaveGap = 15 * time.Second
+)
+
 // saveNow wakes a save waiting out saveGap once saving.hurry is set.
 var saveNow = make(chan struct{}, 1)
 
@@ -1200,8 +1331,9 @@ var saving struct {
 	*sync.Cond
 	running bool
 	next    *save
-	wrote   time.Time // when the last save was written
-	hurry   bool      // Saved is waiting: no save waits out saveGap
+	gap     time.Duration // the shortest gap the saves folded into next asked
+	wrote   time.Time     // when the last save was written
+	hurry   bool          // Saved is waiting: no save waits out saveGap
 }
 
 type save struct {
@@ -1265,11 +1397,12 @@ func writeCache(c *save) {
 func refresh(want, all []file) {
 	defer func() { trimSummaryRevisions(time.Now()) }()
 	var todo, waits []file
+	named := false
 	for _, f := range want {
 		if f.cold {
 			continue // in a stopped WSL distro: what was read of it stands
 		}
-		if s := cache[f.path]; s == nil || s.Size != f.size || s.Mod != f.mod.UnixNano() || (f.agent == "hermes" && (f.m().hermes == nil || f.m().rev == "" || s.DBRevision != f.m().rev)) || ((f.agent == "alma" || f.agent == "cursor" || f.agent == "agy") && s.DBRevision != f.m().rev) {
+		if s := parsed(f.path); s == nil || s.Size != f.size || s.Mod != f.mod.UnixNano() || (f.agent == "hermes" && (f.m().hermes == nil || f.m().rev == "" || s.DBRevision != f.m().rev)) || ((f.agent == "alma" || f.agent == "cursor" || f.agent == "agy") && s.DBRevision != f.m().rev) {
 			if parsing[f.path] != nil {
 				// a refresh is reading it, another or this one (a path
 				// listed twice): its last parse stands until that one is
@@ -1284,6 +1417,13 @@ func refresh(want, all []file) {
 			// publish closed a nil channel (#2932)
 			parsing[f.path] = make(chan struct{})
 			todo = append(todo, f)
+		} else if s.Agent != f.agent && parsing[f.path] == nil {
+			// kept by a magpie that didn't name the agent: named now, so
+			// a raise of another agent's parseVersions keeps it
+			n := *s
+			n.Agent = f.agent
+			cache[f.path] = &n
+			named = true
 		}
 	}
 	if len(waits) > 0 {
@@ -1291,12 +1431,13 @@ func refresh(want, all []file) {
 	}
 	gone := false
 	if len(cache) > 0 && all != nil {
-		on := make(map[string]bool, len(all))
+		on := pathSet()
+		defer putPathSet(on)
 		for _, f := range all {
-			on[f.path] = true
+			on[f.path] = struct{}{}
 		}
 		for p := range cache {
-			if !on[p] {
+			if _, ok := on[p]; !ok {
 				delete(cache, p)
 				gone = true
 			}
@@ -1304,7 +1445,7 @@ func refresh(want, all []file) {
 	}
 	trimSummaryRevisions(time.Now())
 	if len(todo) == 0 {
-		if gone {
+		if gone || named {
 			saveCache()
 		}
 		return
@@ -1330,7 +1471,7 @@ func refresh(want, all []file) {
 	}
 	jobs := make([]job, len(todo))
 	for i, f := range todo {
-		jobs[i] = job{f: f, old: cache[f.path]}
+		jobs[i] = job{f: f, old: parsed(f.path)}
 	}
 	generation := cacheGeneration
 	mu.Unlock()
@@ -1351,6 +1492,11 @@ func refresh(want, all []file) {
 				j.parsed = parseWith(j.f, j.old, calls)
 				end()
 				release()
+				if j.parsed.Agent != j.f.agent {
+					n := *j.parsed // a parser may hand back old, which readers hold
+					n.Agent = j.f.agent
+					j.parsed = &n
+				}
 				if (j.parsed.Claude != nil && !windows[j.f.path]) || (j.parsed.Claude == nil && !recentRevision(j.parsed.Mod, j.parsed.revisionWeight(), time.Now())) {
 					j.parsed = j.parsed.withoutRevisions()
 				}
@@ -1371,7 +1517,7 @@ func refresh(want, all []file) {
 	publish := func(i int) {
 		j := &jobs[i]
 		// A concurrent read may already have published a newer parse.
-		if generation == cacheGeneration && cache[j.f.path] == j.old {
+		if generation == cacheGeneration && parsed(j.f.path) == j.old {
 			cache[j.f.path] = j.parsed
 		}
 		close(parsing[j.f.path])
@@ -1381,6 +1527,10 @@ func refresh(want, all []file) {
 	// end: a first read of a long history on a slow disk runs for minutes,
 	// and a magpie quit before the end (its CPU full, #1665) kept nothing
 	// of it, so the next start read it all again.
+	checkpointGap, endGap := saveGap, saveGap
+	if len(jobs) >= scanFiles {
+		checkpointGap, endGap = min(scanSaveGap, saveGap), 0
+	}
 	tick := time.NewTicker(checkpointEvery)
 	defer tick.Stop()
 	unsaved := false
@@ -1398,7 +1548,7 @@ func refresh(want, all []file) {
 			}
 			mu.Lock()
 			if generation == cacheGeneration {
-				saveCache()
+				saveCacheWithin(checkpointGap)
 			}
 			mu.Unlock()
 			unsaved = false
@@ -1407,7 +1557,7 @@ func refresh(want, all []file) {
 	mu.Lock()
 	progress.finish()
 	if generation == cacheGeneration {
-		saveCache()
+		saveCacheWithin(endGap)
 	}
 }
 
@@ -1545,28 +1695,49 @@ func Reset() {
 	wslReset()
 	forgetHermesPrints()
 	forgetAgySummaries()
+	forgetBehind()
 	mu.Lock()
 	defer mu.Unlock()
 	saved()
 	cache, loaded = nil, false
 	cacheGeneration++
+	forgetKeptStats()
+	forgetKeptList()
 }
 
 // List reads the latest sessions of every agent, the most recently active
 // first, at most limit of them (Limit when 0).
 func List(limit int) []Session {
+	out, _, _ := ListUnless(limit, -1)
+	return out
+}
+
+// ListUnless is List, and a number for its listing that changes whenever
+// the listing is made again: at least once a listing has stood
+// listKeptFor. When that number is made, the listing is still the one
+// the caller had it with, and no copy of it is given (same). The Sessions
+// page asks for every session each 15 s, and an unchanged list was
+// copied, rowed, encoded and hashed again, only to answer X-Magpie-Same.
+func ListUnless(limit, made int) (out []Session, now int, same bool) {
 	// read before the locks: it reads settings.json
 	alias := provider.UsageAlias()
-	out := listSessions(limit)
+	out, now, same = listing(limit, made)
 	if alias != nil {
 		for i := range out {
 			aliasSession(&out[i], alias)
 		}
 	}
-	return out
+	return out, now, same
 }
 
 func listSessions(limit int) []Session {
+	out, _, _ := listing(limit, -1)
+	return out
+}
+
+// listing is the listing at limit, kept or made now, and keptList.made
+// for it: none when the kept one is made, the number the caller had.
+func listing(limit, made int) ([]Session, int, bool) {
 	storeMu.RLock()
 	defer storeMu.RUnlock()
 	if limit <= 0 {
@@ -1578,8 +1749,20 @@ func listSessions(limit int) []Session {
 
 	defer useDBs()()
 	files := allFiles()
+	// every changed file, not just the latest sessions': the first read
+	// indexes them all in one run the page can show, and the stats read
+	// after it has nothing left to do
+	refresh(files, files)
+	price, titles := pricer(), codexTitleOf()
+	if out, ok := keptListing(files, limit, price, titles); ok {
+		if keptList.made == made {
+			return nil, made, true
+		}
+		return slices.Clone(out), keptList.made, false
+	}
+	price, titles = keepListing(files, limit, price, titles)
 	groups := byKey(files, nil)
-	latest := map[string]time.Time{}
+	latest := make(map[string]time.Time, len(groups))
 	for _, f := range files {
 		if f.mod.After(latest[f.key]) {
 			latest[f.key] = f.mod
@@ -1598,24 +1781,21 @@ func listSessions(limit int) []Session {
 	// the keys are not truncated yet: assemble below drops an empty
 	// session, and a nonempty one must take its place rather than the
 	// page going short - an empty file is not a session (#1320)
-	// every changed file, not just the latest sessions': the first read
-	// indexes them all in one run the page can show, and the stats read
-	// after it has nothing left to do
-	refresh(files, files)
 	identities := codexIdentitySnapshot(files)
 	taskTitles := codexSubagentTaskTitles(files)
 
-	copies := ccCopies(files)
+	copies, branches := ccFamily(files)
 	copyIDs := copiesByKeeper(copies, groups)
 
-	price, titles := pricer(), codexTitleOf()
-	out := []Session{}
+	// made for the page at once, not grown an append at a time (#2278)
+	out := make([]Session, 0, min(limit, len(keys)))
 	for _, k := range keys {
 		if copies[k] != "" {
 			continue
 		}
 		if s, ok := assemble(groups[k], price, titles); ok {
 			s.Copies = copyIDs[k]
+			setBranch(&s, branches[k], groups)
 			setSessionCodexIdentity(&s, identities)
 			setSessionCodexTaskTitle(&s, taskTitles)
 			out = append(out, s)
@@ -1625,7 +1805,8 @@ func listSessions(limit int) []Session {
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Last.After(out[j].Last) })
-	return out
+	keepList(out)
+	return out, keptList.made, false
 }
 
 // sortSessionFiles puts a session's own file first; for Codex the earliest
@@ -1650,6 +1831,26 @@ func sessionID(fs []file) string {
 		}
 	}
 	return id
+}
+
+// subIDs are the ids a session's other files (an omp subagent's or
+// advisor's) give in their own header, other than its own id. Each of
+// those files is an agent of its own to its vendor: omp sends its id as
+// the request's session (x-session-affinity), so the gateway records the
+// subagent's calls under that id, while this session counts the same
+// calls from the file. GatewayKeys keeps the gateway from counting them
+// a second time.
+func subIDs(fs []file, id string) []string {
+	var out []string
+	for _, f := range fs {
+		if f.main || !idInFile(f.agent) {
+			continue
+		}
+		if st := cache[f.path]; st != nil && st.ID != "" && st.ID != id && !slices.Contains(out, st.ID) {
+			out = append(out, st.ID)
+		}
+	}
+	return out
 }
 
 // assemble puts a session together from its files' parses.
@@ -1680,6 +1881,7 @@ func assembleListed(fs []file, price func(string) *catalog.Price, codexTitle fun
 		s.ReadOnly = s.ReadOnly || f.readOnly
 	}
 	s.ID = sessionID(fs)
+	s.Subs = subIDs(fs, s.ID)
 	var custom, named, first string
 	models := map[string]*Model{}
 	// hours is each model's tokens by the hour they were spent in, which a
@@ -1706,6 +1908,9 @@ func assembleListed(fs []file, price func(string) *catalog.Price, codexTitle fun
 			}
 			if first == "" {
 				first = st.First
+			}
+			if s.Agent == "claude" && s.App == "" && !f.noDesktopApp && desktopEntrypoint(st.Entry) {
+				s.App = "claude-desktop"
 			}
 			s.Convs = append(s.Convs, st.Convs...)
 		}
@@ -1754,10 +1959,9 @@ func assembleListed(fs []file, price func(string) *catalog.Price, codexTitle fun
 	for _, name := range slices.Sorted(maps.Keys(models)) {
 		m := models[name]
 		if p := price(m.Model); p != nil {
-			// a sum of the session's calls of the model, each hour at the
-			// price of the window it was made in (a vendor billing its hours
-			// differently), and what no hour holds at the base price: which
-			// call went over a long-context tier isn't known here
+			// a sum of the session's calls of the model, each hour at its own
+			// price, and what no hour holds at the base price: which call went
+			// over a long-context tier isn't known here
 			m.Cost, m.Priced = hourCost(hours[m.Model], m.Tokens, *p), true
 			s.Cost += m.Cost
 		} else {
@@ -1817,7 +2021,7 @@ func parserFor(agent string) sessionParser {
 		return sessionParser{whole: parseCursor}
 	case "codex":
 		return sessionParser{line: codexBody}
-	case "pi", "omp":
+	case "pi", "raft", "cindy", "omp":
 		return sessionParser{line: piParse}
 	case "workbuddy", "codebuddy":
 		return sessionParser{line: workbuddyLine}
@@ -1832,9 +2036,11 @@ func parse(f file, old *state) *state { return parseWith(f, old, nil) }
 // parseWith is parse with calls, when not nil, reading the file's calls on
 // the same pass.
 func parseWith(f file, old *state, calls *callsRide) *state {
-	if calls != nil {
-		defer calls.release()
-	}
+	defer func() {
+		if calls != nil {
+			calls.release()
+		}
+	}()
 	// Summary caches contain aggregates only. After a restart, a changed
 	// Codex file rebuilds its transient response index from the source.
 	if f.agent == "codex" && old != nil && old.Codex == nil {
@@ -1869,6 +2075,10 @@ func parseWith(f file, old *state, calls *callsRide) *state {
 	line := func(b []byte, _, _ int64) bool {
 		parser.line(s, b, f.main)
 		return true
+	}
+	if calls != nil && s.Off != 0 {
+		calls.release() // the summary reads on from where it was
+		calls = nil
 	}
 	if calls != nil {
 		head, line = calls.ride(head, line)
@@ -2287,13 +2497,51 @@ func (z *zstdFile) Close() error {
 	return z.f.Close()
 }
 
+// lastIndex is bytes.LastIndex(b, key), found going forward. LastIndex
+// goes back a byte at a time (Rabin-Karp), and over Claude Code's lines,
+// one holding a tool's whole output, it was ~8 s of a first start's CPU
+// on a 14 GB history (#2278); Index skips ahead with the CPU's vector
+// instructions. The line's tail is looked at first, where Claude Code
+// writes the timestamp.
+func lastIndex(b, key []byte) int {
+	const tail = 1 << 10
+	if len(key) == 0 {
+		return len(b)
+	}
+	if len(b) > tail {
+		if i := forwardLast(b[len(b)-tail:], key); i >= 0 {
+			return len(b) - tail + i
+		}
+	}
+	return forwardLast(b, key)
+}
+
+// forwardLast is the last key in b, found by Index from each one before;
+// even a 1 KB tail took LastIndex ~1 µs.
+func forwardLast(b, key []byte) int {
+	last := -1
+	for off := 0; off < len(b); {
+		i := bytes.Index(b[off:], key)
+		if i < 0 {
+			break
+		}
+		last = off + i
+		off = last + 1
+	}
+	return last
+}
+
 // tsAt reads the time of a line from its first (or last) "timestamp" key,
 // without decoding the rest of it.
 func tsAt(b []byte, last bool) time.Time {
 	key := []byte(`"timestamp":"`)
-	i := bytes.Index(b, key)
+	// the first is looked for only when it is the one asked: found before
+	// each last one too, it was ~2 s of a first start's CPU (#2278)
+	var i int
 	if last {
-		i = bytes.LastIndex(b, key)
+		i = lastIndex(b, key)
+	} else {
+		i = bytes.Index(b, key)
 	}
 	if i < 0 {
 		return time.Time{}
@@ -2360,7 +2608,11 @@ func priceOf(s settings.Settings, model string) (catalog.Price, bool) {
 		return catalog.Price{}, false
 	}
 	if pid, rest, ok := strings.Cut(m, "/"); ok {
-		if pr, ok := provider.EffectivePriceIn(s, pid, rest); ok {
+		// without a rate window's rate (#2463): a session sums its calls by
+		// model, not by time, so the window of the hour it is read in
+		// would price all of them at it, and the same session read 3× at
+		// the peak and 1× off it
+		if pr, ok, _ := provider.BasePriceIn(s, pid, rest); ok {
 			return pr, true
 		}
 	}
@@ -2369,16 +2621,16 @@ func priceOf(s settings.Settings, model string) (catalog.Price, bool) {
 	// only price a bare id, or one models.dev has stopped listing, can take
 	// from them
 	if pr, ok := provider.AnyModelPriceIn(s, bare); ok {
+		catalog.OneHourFor(bare, &pr)
 		return pr, true
 	}
-	// These ids are the same model under another name. Read a price stated
-	// for the canonical name too, before falling back to its maker's list.
 	canonical := bare
 	if c := provider.CanonicalModel(bare); c != "" {
 		canonical = c
 	}
 	if canonical != bare {
 		if pr, ok := provider.AnyModelPriceIn(s, canonical); ok {
+			catalog.OneHourFor(canonical, &pr)
 			return pr, true
 		}
 	}
@@ -2390,8 +2642,6 @@ func priceOf(s settings.Settings, model string) (catalog.Price, bool) {
 			return pr, true
 		}
 	}
-	// Antigravity encodes Gemini's reasoning level in its model id.
-	// Prefer an explicitly priced variant before its family's API price.
 	if strings.HasPrefix(bare, "gemini-") {
 		if family := provider.EffortFamily(bare); family != bare {
 			if pr, ok := catalog.PricedBy(makers(family), family); ok {
@@ -2657,5 +2907,35 @@ func get(key string) (s Session, ok, found bool) {
 	s, ok = assemble(fs, pricer(), codexTitleOf())
 	setSessionCodexIdentity(&s, identities)
 	setSessionCodexTaskTitle(&s, taskTitles)
+	if parserFor(fs[0].agent).claude {
+		// judged with the files of its agent cache has read, as the
+		// listing judges them
+		var mine []file
+		groups := map[string][]file{}
+		for _, f := range files {
+			if f.agent == fs[0].agent {
+				mine = append(mine, f)
+				groups[f.key] = append(groups[f.key], f)
+			}
+		}
+		_, branches := ccFamily(mine)
+		setBranch(&s, branches[key], groups)
+	}
 	return s, ok, true
+}
+
+// setBranch marks s a branch of the session by the key head (ccFamily):
+// nested under it, and read from its start (TranscriptOf). "" leaves s.
+func setBranch(s *Session, head string, groups map[string][]file) {
+	g := groups[head]
+	if head == "" || len(g) == 0 {
+		return
+	}
+	s.Role, s.ParentSession = "branch", sessionID(g)
+	for _, f := range g {
+		if f.main {
+			s.BranchOf = f.path
+			break
+		}
+	}
 }

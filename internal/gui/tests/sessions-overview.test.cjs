@@ -67,7 +67,7 @@ function serve(lang, seen, ctl = {}) {
       return json({ count: cwd ? 7 : 42, median: 120000, p90: 880000, days: days.map((d) => d.usage.length ? 2 : 0),
         // the last by cost: a Pi subagent's session seen only through the
         // gateway, with no folder and no prompt recorded (#2285)
-        top: { tokens: tops, tokens_with_cache: [tops[1], tops[0], tops[2]], cost: [...tops].reverse().concat({ ...top(9, ""), key: "pi:sub-9", agent: "pi", id: "sub-9", title: "", gateway: true, cost: 0.5, models: ["deepseek-v4-pro"] }), active: tops.slice(0, 2) },
+        top: { tokens: tops, cost: [...tops].reverse().concat({ ...top(9, ""), key: "pi:sub-9", agent: "pi", id: "sub-9", title: "", gateway: true, cost: 0.5, models: ["deepseek-v4-pro"] }), active: tops.slice(0, 2) },
         messages: days.map((d) => d.usage.length ? 30 : 0), output: days.map(() => 0),
         shape: {
           messages: { edges: [1, 6, 16, 31, 61, 121], counts: [3, 10, 14, 9, 4, 2], total: 42 },
@@ -123,6 +123,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const context = await browser.newContext({ viewport: { width: 1100, height: 760 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" });
       const page = await context.newPage();
       page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
       const errors = [], seen = [], ctl = {};
       page.on("pageerror", (e) => errors.push(e.message));
       await page.route("**/*", serve(lang, seen, ctl));
@@ -156,7 +157,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const alphaCache = sum("cache_read", "/work/alpha") + sum("cache_write", "/work/alpha");
         const tile = page.locator("#sessStats .kpi").nth(1);
         const bar = page.locator("#sessProjects .sess-bar").first();
-        // with the cache in, which is how the page counts them
+        // 默认不含缓存；显式选含缓存后，排序和各项合计一起改变。
+        assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
+        assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].tokens);
+        assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha));
+        await tile.locator(".kpi-pick").click();
+        await page.locator(".proto-menu:visible .pm-item").nth(1).click();
         assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io + cache));
         assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].withCache);
         assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha + alphaCache));

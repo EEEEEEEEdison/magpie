@@ -9,12 +9,26 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/testenv"
 )
+
+// desktopProgram 放置宿主能识别的沙箱命令；测试只解析命令，不启动它。
+func desktopProgram(t *testing.T, path string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		path += ".cmd"
+		writeAt(t, path, "@exit /b 0\r\n")
+	} else {
+		testenv.Program(t, path, "#!/bin/sh\nexit 0\n")
+	}
+	return path
+}
 
 func TestLodyLink(t *testing.T) {
 	for _, base := range []string{"http://127.0.0.1:3425", "http://localhost:4567", "http://[::1]:4567"} {
@@ -260,8 +274,16 @@ func TestOpenLodyRunsItsDesktopEntry(t *testing.T) {
 	var ran []string
 	startErr := error(nil)
 	startLody = func(cmd *exec.Cmd) error {
+		args := cmd.Args
+		if runtime.GOOS == "windows" {
+			prefix := []string{cmd.Path, "/d", "/e:ON", "/v:OFF", "/s", "/c"}
+			if !strings.EqualFold(filepath.Base(cmd.Path), "cmd.exe") || len(args) <= len(prefix) || !reflect.DeepEqual(args[:len(prefix)], prefix) {
+				t.Fatalf("batch command = %q, want cmd.exe with %q", args, prefix[1:])
+			}
+			args = args[len(prefix):]
+		}
 		if startErr == nil {
-			ran = cmd.Args
+			ran = args
 		}
 		return startErr
 	}
@@ -269,15 +291,7 @@ func TestOpenLodyRunsItsDesktopEntry(t *testing.T) {
 	open := func(u string) error { opened = u; return nil }
 	link := LodyLink("http://127.0.0.1:3425")
 
-	program := func(path string) string {
-		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0755); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
+	program := func(path string) string { return desktopProgram(t, path) }
 	entry := func(dir, name, execLine string) string {
 		p := filepath.Join(dir, "applications", name)
 		if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
@@ -308,13 +322,13 @@ func TestOpenLodyRunsItsDesktopEntry(t *testing.T) {
 
 	try(nil) // no Lody entry: opened as before
 
-	appImage := program(filepath.Join(home, "Apps $1", `Lody "x".AppImage`))
+	appImage := program(filepath.Join(home, "Apps $1", "Lody 'x' `y` %2.AppImage"))
 	stable := entry(data, "ai.lody.desktop.desktop", `"`+strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`", "%", "%%").Replace(appImage)+`" "--no-sandbox" %U`)
 	try([]string{appImage, "--no-sandbox", link})
 
 	// the .deb's entry, under XDG_DATA_DIRS, counts only after the user's own
 	deb := program(filepath.Join(home, "opt", "Lody", "lodyDesktop"))
-	entry(sys, "ai.lody.desktop.desktop", deb+" %U")
+	entry(sys, "ai.lody.desktop.desktop", `"`+strings.ReplaceAll(deb, `\`, `\\`)+`" %U`)
 	try([]string{appImage, "--no-sandbox", link})
 	// an AppImage deleted since Lody wrote its entry runs nothing, and the
 	// system's entry of that name doesn't stand in for it
@@ -332,7 +346,7 @@ func TestOpenLodyRunsItsDesktopEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	nightly := program(filepath.Join(home, "nightly", "lody"))
-	entry(data, "ai.lody.desktop.nightly.desktop", nightly+" --no-sandbox")
+	entry(data, "ai.lody.desktop.nightly.desktop", `"`+strings.ReplaceAll(nightly, `\`, `\\`)+`" --no-sandbox`)
 	try([]string{nightly, "--no-sandbox", link})
 
 	// a Lody that won't start: the link is opened as before
@@ -348,24 +362,38 @@ func TestOpenLodyRunsItsDesktopEntry(t *testing.T) {
 }
 
 func TestDesktopExec(t *testing.T) {
-	sh := "/bin/sh"
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	if runtime.GOOS == "windows" {
+		t.Setenv("PATHEXT", ".CMD")
+	}
+	program := desktopProgram(t, filepath.Join(bin, "lody"))
+	quote := func(s string) string {
+		return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "$", `\$`, "`", "\\`", "%", "%%").Replace(s) + `"`
+	}
 	for _, c := range []struct {
 		entry string
 		want  []string
 	}{
-		{"[Desktop Entry]\nExec=/bin/sh -c 'x' %U\n", []string{sh, "-c", "'x'", "L"}},
-		{"[Desktop Entry]\nExec=\"/bin/sh\" \"100%%\" %u %f %i\n", []string{sh, "100%", "L"}},
-		{"[Desktop Action new]\nExec=/bin/false\n[Desktop Entry]\nExec=sh %U\n", []string{sh, "L"}},
+		{"[Desktop Entry]\nExec=" + quote(program) + " -c 'x' %U\n", []string{program, "-c", "'x'", "L"}},
+		{"[Desktop Entry]\nExec=" + quote(program) + " \"100%%\" %u %f %i\n", []string{program, "100%", "L"}},
+		{"[Desktop Action new]\nExec=not-this\n[Desktop Entry]\nExec=lody %U\n", []string{program, "L"}},
+		{"[Desktop Entry]\nExec=" + quote(program) + ` "quote \"x\" \\ \$ \` + "`" + ` %%" %U` + "\n", []string{program, "quote \"x\" \\ $ ` %", "L"}},
 		{"[Desktop Entry]\nName=Lody\n", nil},
-		{"[Desktop Entry]\nExec=/no/such/lody %U\n", nil},
+		{"[Desktop Entry]\nExec=" + quote(filepath.Join(bin, "gone")) + " %U\n", nil},
+		{"[Desktop Entry]\nExec=" + quote(bin) + " %U\n", nil},
 		{"[Desktop Entry]\nExec=no-such-lody-program %U\n", nil},
 	} {
-		got := desktopExec(c.entry, "L")
-		if len(got) > 0 && got[0] != sh && filepath.Base(got[0]) == "sh" {
-			got[0] = sh // sh found on PATH
-		}
-		if !reflect.DeepEqual(got, c.want) {
+		if got := desktopExec(c.entry, "L"); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%q: %q, want %q", c.entry, got, c.want)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(program, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := desktopExec("[Desktop Entry]\nExec="+quote(program)+" %U\n", "L"); got != nil {
+			t.Fatalf("non-executable program accepted: %q", got)
 		}
 	}
 }

@@ -1,16 +1,21 @@
 package gui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 // pagePlugins writes plugins.json with the example page plugin
@@ -18,14 +23,8 @@ import (
 // their specs.
 func pagePlugins(t *testing.T) (on, off string) {
 	t.Helper()
-	h := t.TempDir()
-	t.Setenv("HOME", h)
-	t.Setenv("USERPROFILE", h)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(h, ".cache"))
-	t.Setenv("XDG_DATA_HOME", filepath.Join(h, ".local", "share"))
+	h := sandboxHome(t)
 	t.Setenv("MAGPIE_BUN", "")
-	t.Setenv("PATH", "")
 	copyDir := func(to string) {
 		t.Helper()
 		err := filepath.WalkDir("testdata/page-plugin", func(p string, d os.DirEntry, err error) error {
@@ -49,12 +48,19 @@ func pagePlugins(t *testing.T) (on, off string) {
 	on, off = filepath.Join(h, "src", "glance"), filepath.Join(h, "src", "glance-off")
 	copyDir(on)
 	copyDir(off)
-	// a file of the plugin's own, but out of its page's folder, and one out
-	// of the plugin, which a link in the page's folder points to
-	if err := os.WriteFile(filepath.Join(h, "secret.txt"), []byte("SECRET"), 0o644); err != nil {
+	// 页面外的秘密文件：Unix 通过文件 symlink，Windows 通过目录 junction。
+	private := filepath.Join(h, "private")
+	if err := os.MkdirAll(private, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(h, "secret.txt"), filepath.Join(on, "page", "link.txt")); err != nil {
+	secret := filepath.Join(private, "secret.txt")
+	if err := os.WriteFile(secret, []byte("SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(on, "page", "link.txt")
+	if runtime.GOOS == "windows" {
+		testenv.FolderLink(t, private, link)
+	} else if err := os.Symlink(secret, link); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(settings.Dir(), 0o755); err != nil {
@@ -69,7 +75,7 @@ func pagePlugins(t *testing.T) (on, off string) {
 
 func pageMux() http.Handler {
 	mux := http.NewServeMux()
-	pluginPageRoutes(mux)
+	pluginPageRoutes(mux, false)
 	mux.HandleFunc("GET /api/state", func(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, map[string]string{"secret": "the window's"})
 	})
@@ -129,6 +135,7 @@ func TestPluginPageServedShutIn(t *testing.T) {
 	for _, path := range []string{
 		pluginPagePrefix + tok + "/../package.json",
 		pluginPagePrefix + tok + "/link.txt",
+		pluginPagePrefix + tok + "/link.txt/secret.txt",
 		pluginPagePrefix + pageToken(off) + "/index.html",
 		pluginPagePrefix + strings.Repeat("0", 32) + "/index.html",
 		pluginPagePrefix + tok,
@@ -136,7 +143,7 @@ func TestPluginPageServedShutIn(t *testing.T) {
 		r := httptest.NewRequest("GET", "/", nil)
 		r.URL.Path = path
 		w := httptest.NewRecorder()
-		servePluginPage(w, r)
+		servePluginPage(w, r, false)
 		if w.Code == 200 || strings.Contains(w.Body.String(), "SECRET") || strings.Contains(w.Body.String(), `"name"`) {
 			t.Errorf("%s: %d %s", path, w.Code, w.Body)
 		}
@@ -146,6 +153,10 @@ func TestPluginPageServedShutIn(t *testing.T) {
 // What a page didn't declare it reads is refused by the server too, not
 // only by the window; a page sets its own options and no other plugin's.
 func TestPluginPageReadsWhatItDeclared(t *testing.T) {
+	// 同一进程重跑时，上一轮为限流断言留下的未来时间不能进入这一轮。
+	pageSets.Lock()
+	pageSets.at = map[string]time.Time{}
+	pageSets.Unlock()
 	on, off := pagePlugins(t)
 	h := pageMux()
 	post := func(path, body string) *httptest.ResponseRecorder {
@@ -185,6 +196,99 @@ func TestPluginPageReadsWhatItDeclared(t *testing.T) {
 	}
 	if !pageSetAllowed("x", time.Now()) || pageSetAllowed("x", time.Now()) || !pageSetAllowed("x", time.Now().Add(2*time.Second)) {
 		t.Error("pageSetAllowed")
+	}
+}
+
+// A page whose plugin has a part for the host too has the host up before
+// its HTML is served: Magiczerowxy/magpie-chat's page sends its frame to
+// the chat server that part starts, and with the host stopped (after a
+// Restart, nothing else asking) WebKit left the frame on "connecting…"
+// for good (guesssssssswhat on X). A page-only plugin starts no host,
+// nor does any other file of the page, and a host slower than
+// pageHostWait doesn't hold the page past it.
+func TestPluginPageStartsItsHost(t *testing.T) {
+	on, _ := pagePlugins(t)
+	hosted := filepath.Join(filepath.Dir(on), "chat")
+	if err := os.CopyFS(hosted, os.DirFS("testdata/page-plugin")); err != nil {
+		t.Fatal(err)
+	}
+	pkg := `{"name": "page-chat", "main": "./index.mjs", "magpie": {"page": {"title": "Chat", "file": "page/index.html"}}}`
+	if err := os.WriteFile(filepath.Join(hosted, "package.json"), []byte(pkg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hosted, "index.mjs"), []byte("export default {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(map[string]any{"plugins": []map[string]any{{"spec": on}, {"spec": hosted}}})
+	if err := os.WriteFile(filepath.Join(settings.Dir(), "plugins.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	warmed := 0
+	hold := make(chan struct{})
+	warmHost = func(ctx context.Context) error {
+		mu.Lock()
+		warmed++
+		mu.Unlock()
+		<-hold
+		return nil
+	}
+	t.Cleanup(func() { warmHost = plugin.Warm })
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return warmed
+	}
+
+	pages := pluginPages()
+	if len(pages) != 2 {
+		t.Fatalf("pages: %+v", pages)
+	}
+	glance, chat := pages[0], pages[1]
+	h := pageMux()
+	// the page-only plugin's page: no host
+	if w := do(h, httptest.NewRequest("GET", glance.URL, nil)); w.Code != 200 || count() != 0 {
+		t.Fatalf("a page-only plugin's page: %d, host started %d times", w.Code, count())
+	}
+	// the hosted plugin's page waits for its host
+	served := make(chan *httptest.ResponseRecorder, 1)
+	go func() { served <- do(h, httptest.NewRequest("GET", chat.URL, nil)) }()
+	for deadline := time.Now().Add(5 * time.Second); count() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("opening the hosted plugin's page didn't start its host")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case w := <-served:
+		t.Fatalf("the page was served (%d) before its host was up", w.Code)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(hold)
+	if w := <-served; w.Code != 200 || !strings.Contains(w.Body.String(), "Usage glance") {
+		t.Fatalf("the hosted page: %d %s", w.Code, w.Body)
+	}
+	// its other files ask nothing of the host
+	n := count()
+	tok := strings.Split(strings.TrimPrefix(chat.URL, pluginPagePrefix), "/")[0]
+	for _, f := range []string{"style.css", "app.js", pluginBridgePath} {
+		if w := do(h, httptest.NewRequest("GET", pluginPagePrefix+tok+"/"+f, nil)); w.Code != 200 || count() != n {
+			t.Errorf("%s: %d, host started %d times", f, w.Code, count()-n)
+		}
+	}
+	// a host that never comes up holds the page pageHostWait, no longer
+	stuck := make(chan struct{})
+	defer close(stuck)
+	warmHost = func(ctx context.Context) error { <-stuck; return nil }
+	old := pageHostWait
+	pageHostWait = 100 * time.Millisecond
+	t.Cleanup(func() { pageHostWait = old })
+	start := time.Now()
+	if w := do(h, httptest.NewRequest("GET", chat.URL, nil)); w.Code != 200 {
+		t.Fatalf("the page with its host stuck: %d", w.Code)
+	}
+	if d := time.Since(start); d < 100*time.Millisecond || d > 3*time.Second {
+		t.Errorf("the page with its host stuck waited %v; want pageHostWait (100ms)", d)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/fx"
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/testenv"
 )
 
@@ -25,5 +26,8 @@ func TestMain(m *testing.M) {
 		l.Close() // refused at once from here on
 		fx.SetRateURL("http://" + addr + "/")
 	}
+	// 测试仅使用显式夹具提供的网络，不监听本机 WSL 网卡。
+	gateway.WSLNets = func() []*net.IPNet { return nil }
+	testenv.Offline()
 	os.Exit(testenv.Run(m))
 }

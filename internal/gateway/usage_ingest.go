@@ -70,10 +70,9 @@ var ingestEarliest = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // ingestFields are the fields a reported record may carry, of the ones
 // usage.jsonl has: what a client can know of a call it made itself.
-// first_text_ms and flow_ms (#2637) are what a reply's speed is told by
-// (usage.DecodeOf): without first_text_ms a reply that reasoned tells
-// none, and without flow_ms one its vendor held and let go in a burst
-// isn't told apart from one that streamed.
+// 速度由整轮 out / ms 得出，包含 reasoning 和首 token 等待（usage.DecodeOf）。
+// first_text_ms 仍校验并保留，但缺省不排除测速；flow_ms 用来识别末尾突发，
+// 缺省时无法区分供应商暂存后集中放行与正常流式回复。
 var ingestFields = []string{"t", "agent", "provider", "model", "in", "out", "cache_read", "cache_write", "cache_write_1h", "reasoning", "ms", "ttft_ms", "first_text_ms", "flow_ms", "status", "rid", "cost", "effort", "session", "err"}
 
 // ingestFault is what is wrong with one record of a post.

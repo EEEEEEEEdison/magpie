@@ -45,6 +45,30 @@ function serve(lang, posts) {
   };
 }
 
+// 启动从 show 和 load 读取列表；load.done 先于列表重绘。
+// 每份响应读取后再过一个任务，等渲染的 microtasks 执行完，不以固定时长猜测。
+async function watchProviderReads(page) {
+  await page.addInitScript(() => {
+    const reads = window.__providerReads = { asked: 0, drawn: 0 };
+    const fetch0 = window.fetch;
+    window.fetch = function (input, init) {
+      const result = fetch0.apply(this, arguments);
+      const url = new URL(typeof input === "string" ? input : input.url, location.href);
+      if (url.pathname !== "/api/providers" || (init?.method || "GET") !== "GET") return result;
+      reads.asked++;
+      const drawn = () => setTimeout(() => reads.drawn++);
+      return result.then((response) => {
+        const text = response.text;
+        response.text = function () { return text.call(this).finally(drawn); };
+        return response;
+      }, (error) => { drawn(); throw error; });
+    };
+  });
+}
+
+const providersDrawn = (page) => page.waitForFunction(() => load.done && providers && !providers.last &&
+  __providerReads.asked > 0 && __providerReads.asked === __providerReads.drawn, null, { polling: 50 });
+
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   for (const lang of ["en", "zh"]) {
     test(`${engine} ${lang}: decimals, a 1-hour cache write and a long-context price`, async (t) => {
@@ -58,10 +82,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await browser.close();
       });
       page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
       const errors = [], posts = [];
       page.on("pageerror", (e) => errors.push(e.message));
+      await watchProviderReads(page);
       await page.route("**/*", serve(lang, posts));
       await page.goto("http://magpie.test/?view=providers");
+      await providersDrawn(page);
       const zh = lang === "zh";
       const L = { names: zh ? "名称与推理档位" : "Names & levels", input: zh ? "输入" : "Input", output: zh ? "输出" : "Output", cacheRead: zh ? "缓存读取" : "Cache read",
         oneHour: zh ? "1 小时缓存写入" : "Cache write 1h", long: zh ? "长上下文价格" : "Long-context price", over: zh ? "超过的输入 token 数" : "Over input tokens",
@@ -72,6 +99,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         none: zh ? "无长上下文价格" : "No long-context price", noneSaid: zh ? "长上下文价格：无" : "Long-context price: none" };
       await page.locator('.row.provider[data-id="relay"]').click();
       if (!(await page.locator(".mnames:not([hidden])").count())) await page.getByRole("button", { name: L.names, exact: true }).click();
+      await page.locator(".mprice").first().waitFor();
       const row = (id) => page.locator(".mname", { has: page.locator("code", { hasText: id }) });
       const base = (id) => row(id).locator(".mprice > .mpart input");
       const tier = (id) => row(id).locator(".mtier input");
@@ -176,4 +204,45 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(errors, []);
     });
   }
+}
+
+// Price controls load only when opened; finishing a cancelled load cannot reopen them.
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  test(`${engine}: price controls load on demand without reviving a cancelled editor`, async (t) => {
+    const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: process.env.PLAYWRIGHT_CHANNEL || "chromium" }));
+    let release;
+    const gate = new Promise((done) => { release = done; });
+    t.after(async () => { release(); await browser.close(); });
+    const page = await browser.newPage({ viewport: { width: 900, height: 900 }, reducedMotion: "reduce" });
+    page.setDefaultTimeout(5000);
+    const errors = [], posts = [];
+    let loads = 0;
+    page.on("pageerror", (e) => errors.push(e.message));
+    const fixtures = serve("en", posts);
+    await watchProviderReads(page);
+    await page.route("**/*", async (route) => {
+      if (new URL(route.request().url()).pathname === "/modelprice.js") { loads++; await gate; }
+      await fixtures(route);
+    });
+    await page.goto("http://magpie.test/?view=providers");
+    await providersDrawn(page);
+    await page.locator('.row.provider[data-id="relay"]').click();
+    assert.equal(loads, 0, "a closed Names & levels does not load price controls");
+    await Promise.all([
+      page.waitForRequest((r) => new URL(r.url()).pathname === "/modelprice.js", { timeout: 5000 }),
+      page.getByRole("button", { name: "Names & levels", exact: true }).click(),
+    ]);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector(".mnames"));
+    release();
+    await page.waitForFunction(() => typeof window.modelPrice === "function");
+    assert.equal(await page.locator(".mnames").count(), 0, "a late module cannot revive the cancelled editor");
+    await page.locator('.row.provider[data-id="relay"]').click();
+    await page.getByRole("button", { name: "Names & levels", exact: true }).click();
+    await page.locator(".mprice").first().waitFor();
+    assert.equal(loads, 1, "reopening uses the loaded module");
+    assert.equal(await page.locator(".mprice").count(), 3, "all selected models retain their price controls");
+    assert.deepEqual(posts, [], "opening or cancelling saves no price");
+    assert.deepEqual(errors, []);
+  });
 }

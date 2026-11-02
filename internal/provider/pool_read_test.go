@@ -14,6 +14,12 @@ import (
 func TestUsageReadAndReadAgain(t *testing.T) {
 	signIn(t)
 	resets := time.Now().Add(3 * time.Hour)
+	// A coarse clock can give two readings in a row the same timestamp.
+	// Each newer good reading must still move UsageRead's time forward.
+	fixed := time.Now().Add(time.Second)
+	wasNow := loginUsageNow
+	loginUsageNow = func() time.Time { return fixed }
+	t.Cleanup(func() { loginUsageNow = wasNow })
 	var meFails atomic.Bool
 	LoginUsageVia(func(context.Context, string) map[string]SubscriptionQuota {
 		me := SubscriptionQuota{Windows: []QuotaWindow{{Span: 5 * time.Hour, Used: 40, ResetsAt: &resets}}}

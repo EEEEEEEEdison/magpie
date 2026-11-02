@@ -137,9 +137,13 @@ func TestServeWSLListensBesideLoopback(t *testing.T) {
 	t.Cleanup(func() { cancel(); <-done; srv.Close() })
 
 	at := "http://" + net.JoinHostPort("::1", Port()) + "/"
+	// 每次检查都新建连接；旧的 keep-alive 不能证明监听器仍在接收。
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DisableKeepAlives = true
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Timeout: time.Second, Transport: transport}
 	answers := func() bool {
-		c := &http.Client{Timeout: time.Second}
-		res, err := c.Get(at)
+		res, err := client.Get(at)
 		if err != nil {
 			return false
 		}

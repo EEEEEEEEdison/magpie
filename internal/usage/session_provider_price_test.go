@@ -59,3 +59,31 @@ func TestASessionFilesProviderPricesItsCalls(t *testing.T) {
 		t.Fatalf("priced at %v; want unpriced: nothing prices the model for a provider that isn't one", pr)
 	}
 }
+
+// Codex 的 openai 是保留默认名，不证明调用了用户同名的 API provider。
+func TestCodexDefaultProviderIsNotAnOpenAIAPIKey(t *testing.T) {
+	sessionHome(t)
+	if err := provider.Save(provider.Provider{ID: "openai", Name: "OpenAI API", Key: "k", Chat: "https://api.openai.com/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	s := settings.Load()
+	s.ModelPrices = map[string]settings.ModelPrice{
+		"openai/model-only-api-prices": {Input: new(99.0), Output: new(199.0)},
+	}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	c := sessions.Call{Time: time.Now(), Agent: "codex", Upstream: "openai", Model: "model-only-api-prices",
+		Tokens: sessions.Tokens{Input: 1_000_000}}
+	r := logRecord(c)
+	if r.Provider != UnknownProvider {
+		t.Errorf("Codex default was attributed to %q, want %s", r.Provider, UnknownProvider)
+	}
+	if p := Pricer()(r); p != nil {
+		t.Errorf("Codex default inherited the API-only tariff: %+v", p)
+	}
+	c.Agent = "pi"
+	if r := logRecord(c); r.Provider != "openai" {
+		t.Errorf("Pi's explicit API provider became %q", r.Provider)
+	}
+}

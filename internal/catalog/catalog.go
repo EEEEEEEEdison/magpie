@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/filememo"
@@ -77,6 +79,14 @@ type Model struct {
 	// provider after it (magpie_label): the name Provider in model names
 	// Off has here (ARNO on Discord).
 	Plain string `json:",omitempty"`
+	// Apart, in a list magpie hands Codex, is what tells the model from
+	// another entry Codex's picker would call the same (two providers
+	// named Codex each serving GPT-6.1-Sol, nb5p on Discord): its
+	// provider's id. Said in the entry's display_name alone
+	// (codexcat.Entries), which stays in Codex's picker; never in its
+	// description or Name, which go upstream in spawn_agent's list of
+	// models. Kept in the list's tag, so a change has Codex ask again.
+	Apart string `json:",omitempty"`
 	// Fast is set on a model Codex may ask for priority processing (its
 	// Fast mode): one a ChatGPT account serves.
 	Fast bool `json:",omitempty"`
@@ -124,6 +134,18 @@ type Model struct {
 	// Reasoning is set on a model that thinks, whether or not it takes
 	// levels: mimo-v2.6-flash thinks with a switch alone (#402).
 	Reasoning bool `json:",omitempty"`
+	// AlwaysThinks is set on a model its vendor's list says always thinks,
+	// with no way to turn it off: Kimi Code's supports_thinking_type
+	// "only" (reasoning.type). Kimi Code is told always_thinking for it.
+	AlwaysThinks bool `json:",omitempty"`
+	// DynamicTools is set on a model its vendor's list says loads tools
+	// mid-conversation: Kimi Code's supports_dynamic_tools
+	// (tools.dynamic_load). Kimi Code is told dynamically_loaded_tools.
+	DynamicTools bool `json:",omitempty"`
+	// DefaultEffort is the effort the vendor's list says the model thinks
+	// at when none is asked: Kimi Code's think_efforts.default_effort
+	// (reasoning.effort.default). "" is not said.
+	DefaultEffort string `json:",omitempty"`
 	// WebSearch is how another magpie (a Remote magpie) searches the web
 	// for the model when a web search tool is offered: "native", its own
 	// provider by itself, or "magpie", with that magpie's searcher; "" it
@@ -174,8 +196,38 @@ func imageInput(modalities []string) *bool {
 	if modalities == nil {
 		return nil
 	}
-	yes := slices.Contains(modalities, "image")
+	yes := slices.Contains(Kinds(modalities), "image")
 	return &yes
+}
+
+// Kinds is a list's modalities as models.dev words them (text, image,
+// audio, video, pdf), each once and in the order first met. A vendor may
+// list the media types it takes instead: OpenCode Go's /models gives
+// deepseek-v4.1-flash ["text","image/jpeg","image/png","image/gif",
+// "image/webp"] and Gemini's application/pdf, which read word for word
+// were no "image", so every model there that sees was taken for
+// text-only (zeo9901 on Discord). An unknown word is kept as it is; nil
+// stays nil, a list that said nothing.
+func Kinds(modalities []string) []string {
+	if modalities == nil {
+		return nil
+	}
+	out := make([]string, 0, len(modalities))
+	for _, m := range modalities {
+		k := strings.ToLower(strings.TrimSpace(m))
+		if typ, _, ok := strings.Cut(k, "/"); ok {
+			switch {
+			case typ == "image" || typ == "video" || typ == "audio" || typ == "text":
+				k = typ
+			case k == "application/pdf":
+				k = "pdf"
+			}
+		}
+		if k != "" && !slices.Contains(out, k) {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // Price is what a model costs, in USD per million tokens.
@@ -195,19 +247,11 @@ type Price struct {
 	// output above 272K), lowest first. models.dev lists them as "tiers" of
 	// type "context".
 	Tiers []Tier `json:"tiers,omitempty"`
-	// TimeZone is the zone TimeTiers' days and hours and OffDates' days are
-	// in, an IANA name ("Asia/Shanghai"); "" is this computer's.
-	TimeZone string `json:"time_zone,omitempty"`
-	// TimeTiers are the prices a request is billed at, whole, when it is
-	// made in a window of the week (DeepSeek's peak hours, twice its
-	// others); the rest of the week is billed at the price above. The first
-	// window that holds it bills it. A request at a time no window holds,
-	// or on a day of OffDates, is billed at the price above.
-	TimeTiers []TimeTier `json:"time_tiers,omitempty"`
-	// OffDates are days billed at the price above whatever TimeTiers say,
-	// "2006-01-02" in TimeZone: a holiday on which a window holds but the
-	// vendor charges its other price.
-	OffDates []string `json:"off_dates,omitempty"`
+	// Peak, when set, says this is an off-peak price, billed at PeakFactor
+	// times it in Peak's hours (Price.In): a DeepSeek model's list price at
+	// a provider that bills by DeepSeek's hours. A price the user set has
+	// none.
+	Peak Peak `json:"peak,omitempty"`
 	// NoTiers says the model has no long-context price at all, whatever
 	// Tiers a list gave it: the user's word (settings.ModelPrice), as a
 	// surcharge a vendor stopped charging is no longer billed. A price of
@@ -225,90 +269,13 @@ type Tier struct {
 	CacheRead    float64 `json:"cache_read"`
 	CacheWrite   float64 `json:"cache_write"`
 	CacheWrite1h float64 `json:"cache_write_1h,omitempty"`
-	// From and To are the days the tier holds on, "2006-01-02" in the
-	// price's TimeZone, From in and To out; neither is every day. A
+	// From and To are the days the tier holds on, "2006-01-02" in this
+	// computer's zone, both included; neither is every day. A
 	// surcharge a vendor charges for a while — OpenAI's long-context price
 	// from the day it started to the day it ended — is a tier with both,
 	// and a request outside them is billed at the price above.
 	From string `json:"from,omitempty"`
 	To   string `json:"to,omitempty"`
-}
-
-// TimeTier is a price in effect during a window of the week: what a request
-// made then costs, whole, as a Tier's price is once its input is over a
-// size. A part left out is the base price's.
-type TimeTier struct {
-	// Days are the days of the week it holds on, 1 Monday to 7 Sunday;
-	// empty is every day. A window that wraps past midnight is the day it
-	// opens on: Monday's "22:00" to "02:00" holds Monday 22:00 up to
-	// Tuesday 02:00, not Monday's own small hours.
-	Days []int `json:"days,omitempty"`
-	// From and To are the window's ends in the day, "HH:MM", From in and
-	// To out: "09:00" to "12:00" is 9:00 up to 12:00. A To before From
-	// wraps past midnight ("22:00" to "02:00").
-	From         string  `json:"from"`
-	To           string  `json:"to"`
-	Input        float64 `json:"input"`
-	Output       float64 `json:"output"`
-	CacheRead    float64 `json:"cache_read"`
-	CacheWrite   float64 `json:"cache_write"`
-	CacheWrite1h float64 `json:"cache_write_1h,omitempty"`
-}
-
-// same is whether two time tiers bill the same, in every part and window.
-func (t TimeTier) same(o TimeTier) bool {
-	return slices.Equal(t.Days, o.Days) && t.From == o.From && t.To == o.To &&
-		t.Input == o.Input && t.Output == o.Output && t.CacheRead == o.CacheRead &&
-		t.CacheWrite == o.CacheWrite && t.CacheWrite1h == o.CacheWrite1h
-}
-
-// Window is whether the tier's From and To are the ends of a window: "HH:MM"
-// each, and not the same time of day (a window that holds nothing).
-func (t TimeTier) Window() bool {
-	from, fromOK := parseClock(t.From)
-	to, toOK := parseClock(t.To)
-	return fromOK && toOK && from != to
-}
-
-// DaysOK is whether the tier's Days are days of the week, 1 Monday to 7
-// Sunday, or none at all (every day).
-func (t TimeTier) DaysOK() bool {
-	_, ok := clockDays(t.Days)
-	return ok
-}
-
-// Days are the days of the week a time tier holds on, 1 Monday to 7 Sunday,
-// sorted and without a repeat: ok is false for one that isn't a day, which
-// leaves the tier out.
-func clockDays(days []int) (out []int, ok bool) {
-	for _, d := range days {
-		if d < 1 || d > 7 {
-			return nil, false
-		}
-		if !slices.Contains(out, d) {
-			out = append(out, d)
-		}
-	}
-	slices.Sort(out)
-	return out, true
-}
-
-// parseClock is "HH:MM" as minutes from midnight, 9:00 as 540: ok is false
-// for a time that isn't one, which leaves the window out.
-func parseClock(s string) (int, bool) {
-	h, m, found := strings.Cut(strings.TrimSpace(s), ":")
-	if !found {
-		return 0, false
-	}
-	hh, err := strconv.Atoi(strings.TrimSpace(h))
-	if err != nil || hh < 0 || hh > 24 {
-		return 0, false
-	}
-	mm, err := strconv.Atoi(strings.TrimSpace(m))
-	if err != nil || mm < 0 || mm > 59 || hh == 24 && mm != 0 {
-		return 0, false
-	}
-	return hh*60 + mm, true
 }
 
 // UnmarshalJSON reads a price as magpie writes it, and as models.dev does,
@@ -326,21 +293,13 @@ func (p *Price) UnmarshalJSON(b []byte) error {
 			CacheRead    *float64 `json:"cache_read"`
 			CacheWrite   *float64 `json:"cache_write"`
 			CacheWrite1h *float64 `json:"cache_write_1h"`
+			From         string   `json:"from"`
+			To           string   `json:"to"`
 			Tier         *struct {
 				Type string `json:"type"`
 				Size int    `json:"size"`
 			} `json:"tier"`
 		} `json:"tiers"`
-		TimeTiers []struct {
-			Days         []int    `json:"days"`
-			From         string   `json:"from"`
-			To           string   `json:"to"`
-			Input        *float64 `json:"input"`
-			Output       *float64 `json:"output"`
-			CacheRead    *float64 `json:"cache_read"`
-			CacheWrite   *float64 `json:"cache_write"`
-			CacheWrite1h *float64 `json:"cache_write_1h"`
-		} `json:"time_tiers"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
@@ -365,21 +324,10 @@ func (p *Price) UnmarshalJSON(b []byte) error {
 			continue
 		}
 		p.Tiers = append(p.Tiers, Tier{Above: above, Input: or(t.Input, p.Input), Output: or(t.Output, p.Output),
-			CacheRead: or(t.CacheRead, p.CacheRead), CacheWrite: or(t.CacheWrite, p.CacheWrite), CacheWrite1h: or(t.CacheWrite1h, 0)})
+			CacheRead: or(t.CacheRead, p.CacheRead), CacheWrite: or(t.CacheWrite, p.CacheWrite), CacheWrite1h: or(t.CacheWrite1h, 0),
+			From: t.From, To: t.To})
 	}
 	slices.SortFunc(p.Tiers, func(a, b Tier) int { return a.Above - b.Above })
-	p.TimeTiers = nil
-	for _, t := range raw.TimeTiers {
-		days, daysOK := clockDays(t.Days)
-		from, fromOK := parseClock(t.From)
-		to, toOK := parseClock(t.To)
-		if !daysOK || !fromOK || !toOK || from == to {
-			continue
-		}
-		p.TimeTiers = append(p.TimeTiers, TimeTier{Days: days, From: t.From, To: t.To,
-			Input: or(t.Input, p.Input), Output: or(t.Output, p.Output), CacheRead: or(t.CacheRead, p.CacheRead),
-			CacheWrite: or(t.CacheWrite, p.CacheWrite), CacheWrite1h: or(t.CacheWrite1h, p.CacheWrite1h)})
-	}
 	return nil
 }
 
@@ -404,44 +352,31 @@ func OneHourFor(id string, p *Price) {
 // Times is the price at r times each of its parts.
 func (p Price) Times(r float64) Price {
 	out := Price{Input: p.Input * r, Output: p.Output * r, CacheRead: p.CacheRead * r, CacheWrite: p.CacheWrite * r, CacheWrite1h: p.CacheWrite1h * r,
-		TimeZone: p.TimeZone, OffDates: slices.Clone(p.OffDates), NoTiers: p.NoTiers}
+		Peak: p.Peak, NoTiers: p.NoTiers}
 	for _, t := range p.Tiers {
 		out.Tiers = append(out.Tiers, Tier{Above: t.Above, Input: t.Input * r, Output: t.Output * r, CacheRead: t.CacheRead * r, CacheWrite: t.CacheWrite * r, CacheWrite1h: t.CacheWrite1h * r,
 			From: t.From, To: t.To})
 	}
-	for _, t := range p.TimeTiers {
-		out.TimeTiers = append(out.TimeTiers, TimeTier{Days: slices.Clone(t.Days), From: t.From, To: t.To,
-			Input: t.Input * r, Output: t.Output * r, CacheRead: t.CacheRead * r, CacheWrite: t.CacheWrite * r, CacheWrite1h: t.CacheWrite1h * r})
-	}
 	return out
 }
 
-// Same is whether two prices are the same in every part, tier and window.
+// Same is whether two prices are the same in every part and tier.
 func (p Price) Same(q Price) bool {
-	if p.Input != q.Input || p.Output != q.Output || p.CacheRead != q.CacheRead || p.CacheWrite != q.CacheWrite ||
-		p.CacheWrite1h != q.CacheWrite1h || !slices.Equal(p.Tiers, q.Tiers) || p.TimeZone != q.TimeZone ||
-		!slices.Equal(p.OffDates, q.OffDates) || len(p.TimeTiers) != len(q.TimeTiers) || p.NoTiers != q.NoTiers {
-		return false
-	}
-	for i := range p.TimeTiers {
-		if !p.TimeTiers[i].same(q.TimeTiers[i]) {
-			return false
-		}
-	}
-	return true
+	return p.Input == q.Input && p.Output == q.Output && p.CacheRead == q.CacheRead && p.CacheWrite == q.CacheWrite &&
+		p.CacheWrite1h == q.CacheWrite1h && slices.Equal(p.Tiers, q.Tiers) && p.Peak == q.Peak && p.NoTiers == q.NoTiers
 }
 
 // At is the flat price a request whose input, cached and cache-written
 // tokens included, comes to prompt tokens is billed at: that of the highest
 // tier it is over, else the base price. OpenAI counts a request's input
 // with its cached tokens in it, and bills the whole request at the tier.
-// It reads every tier, as a caller with no time of the request has to: AtTime
-// drops the dated ones a call of t is outside.
+// It reads every tier, as a caller with no time of the request has to:
+// AtTime drops the dated ones a call of t is outside.
 func (p Price) At(prompt int) Price {
-	flat := Price{Input: p.Input, Output: p.Output, CacheRead: p.CacheRead, CacheWrite: p.CacheWrite, CacheWrite1h: p.CacheWrite1h}
+	flat := Price{Input: p.Input, Output: p.Output, CacheRead: p.CacheRead, CacheWrite: p.CacheWrite, CacheWrite1h: p.CacheWrite1h, Peak: p.Peak}
 	for _, t := range p.tiers() {
 		if prompt > t.Above {
-			flat = Price{Input: t.Input, Output: t.Output, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite, CacheWrite1h: t.CacheWrite1h}
+			flat = Price{Input: t.Input, Output: t.Output, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite, CacheWrite1h: t.CacheWrite1h, Peak: p.Peak}
 		}
 	}
 	return flat
@@ -456,12 +391,12 @@ func (p Price) tiers() []Tier {
 	return p.Tiers
 }
 
-// tiersOn are the size tiers that hold on the day t is, in p's zone: one
-// with From, To or both holds only within them; one with neither holds every
-// day. A zero t keeps them all, as a caller that can't tell the time of the
-// request has only the price as the file states it. The day is read only
-// where a tier is dated: this runs for every call counted, and a price of no
-// dated tier must cost what it did before them.
+// tiersOn are the size tiers that hold on the day t is, this computer's
+// zone: one with From, To or both holds only within them; one with neither
+// holds every day. A zero t keeps them all, as a caller that can't tell the
+// time of the request has only the price as the file states it. The day is
+// read only where a tier is dated: this runs for every call counted, and a
+// price of no dated tier must cost what it did before them.
 func (p Price) tiersOn(t time.Time) []Tier {
 	ts := p.tiers()
 	if t.IsZero() || len(ts) == 0 {
@@ -477,7 +412,7 @@ func (p Price) tiersOn(t time.Time) []Tier {
 	if !dated {
 		return ts
 	}
-	day := t.In(p.zone()).Format("2006-01-02")
+	day := t.In(time.Local).Format("2006-01-02")
 	out := make([]Tier, 0, len(ts))
 	for _, x := range ts {
 		if x.From != "" && day < x.From || x.To != "" && day > x.To {
@@ -488,109 +423,13 @@ func (p Price) tiersOn(t time.Time) []Tier {
 	return out
 }
 
-// AtTime is p with the parts of the window t is in, its day of the week and
-// hour of the day in TimeZone, and its size tiers still cutting the request:
-// what one made then is billed at. A day in OffDates, or a time no TimeTier
-// holds, keeps the base price, and so does a zero t, or a price of no
-// windows, which is p itself. A size tier dated outside t is dropped: a
-// surcharge the vendor charges only for a while is not billed before or
-// after it.
+// AtTime is p as a call made at t is billed: its size tiers are the ones
+// that hold on t's day (tiersOn), and its parts the ones Peak's hours bill
+// (In). A zero t keeps every tier and no peak, as a caller that can't tell
+// the time of the request has only the price as the file states it.
 func (p Price) AtTime(t time.Time) Price {
-	out := p
-	out.Tiers = p.tiersOn(t)
-	tier, ok := p.timeTierAt(t)
-	if !ok {
-		return out
-	}
-	out.Input, out.Output, out.CacheRead, out.CacheWrite, out.CacheWrite1h =
-		tier.Input, tier.Output, tier.CacheRead, tier.CacheWrite, tier.CacheWrite1h
-	return out
-}
-
-// InTimeTier is whether t is billed at a window's price rather than the base
-// price's, which is what a caller that can't tell the time of a request has
-// to know: its cost is only the base one's.
-func (p Price) InTimeTier(t time.Time) bool {
-	_, ok := p.timeTierAt(t)
-	return ok
-}
-
-// timeTierAt is the time tier t is in, if one holds it.
-func (p Price) timeTierAt(t time.Time) (TimeTier, bool) {
-	if t.IsZero() || len(p.TimeTiers) == 0 {
-		return TimeTier{}, false
-	}
-	at := t.In(p.zone())
-	if day := at.Format("2006-01-02"); slices.Contains(p.OffDates, day) {
-		return TimeTier{}, false
-	}
-	minutes := at.Hour()*60 + at.Minute()
-	for _, tier := range p.TimeTiers {
-		from, fromOK := parseClock(tier.From)
-		to, toOK := parseClock(tier.To)
-		if !fromOK || !toOK {
-			continue
-		}
-		// from < to is a window in the day; from > to wraps past midnight,
-		// and the hours after midnight are the day the window opened on:
-		// Monday's 22:00-02:00 runs into Tuesday morning, and Monday's
-		// own small hours belong to Sunday's window (or, with no window of
-		// Sunday's, to none)
-		start := at
-		held := from < to && minutes >= from && minutes < to
-		if from > to && minutes < to {
-			start = at.AddDate(0, 0, -1)
-			held = true
-		} else if from > to && minutes >= from {
-			held = true
-		}
-		if !held {
-			continue
-		}
-		if len(tier.Days) > 0 {
-			weekday := int(start.Weekday())
-			if weekday == 0 {
-				weekday = 7
-			}
-			if !slices.Contains(tier.Days, weekday) {
-				continue
-			}
-		}
-		return tier, true
-	}
-	return TimeTier{}, false
-}
-
-// zones holds the locations prices name, read once: a ledger pages through
-// thousands of requests, each of which asks for one.
-var zones sync.Map // zone name to *time.Location
-
-// zone is where p's windows and off days are: TimeZone, this computer's when
-// it names none or names one that can't be read (catalog/price_test.go).
-func (p Price) zone() *time.Location {
-	if p.TimeZone == "" || p.TimeZone == "Local" {
-		return time.Local
-	}
-	if known, ok := zones.Load(p.TimeZone); ok {
-		return known.(*time.Location)
-	}
-	where := time.Local
-	if loaded, err := time.LoadLocation(p.TimeZone); err == nil {
-		where = loaded
-	}
-	zones.Store(p.TimeZone, where)
-	return where
-}
-
-// CostSplitAt is CostSplit for a call made at t: billed at the price of the
-// window it falls in, its size tier still cutting it.
-func (p Price) CostSplitAt(t time.Time, input, output, cacheRead, cacheWrite, cacheWrite1h int) float64 {
-	return p.AtTime(t).CostSplit(input, output, cacheRead, cacheWrite, cacheWrite1h)
-}
-
-// CostAt is Cost for a call made at t, every cache write a 5-minute one.
-func (p Price) CostAt(t time.Time, input, output, cacheRead, cacheWrite int) float64 {
-	return p.CostSplitAt(t, input, output, cacheRead, cacheWrite, 0)
+	p.Tiers = p.tiersOn(t)
+	return p.In(t)
 }
 
 // OneHour is what a 1-hour cache write costs at this flat price: the price
@@ -804,12 +643,19 @@ var (
 	// under, which no catalog lists by it. One is a model as a listed one
 	// is, so it is never taken for another either (renamed)
 	canonical map[string]bool
+	// normal is the spelling, of the bare ids models.dev knows (listed,
+	// canonical or a lab's), that a model's SameModel name is looked up
+	// by when no spelling matches as given: kimi-k3.1-pro for Volcengine
+	// Ark's kimi-k3-1-pro-261024 (xyenon on Discord). Of several
+	// spellings, the one the most entries give (kimi-k3.1-pro over
+	// Venice's kimi-k3-1-pro); a tie goes to the first in order.
+	normal map[string]string
 
 	syncCh = make(chan struct{}, 1)
 )
 
 // CachePath is where `magpie sync` stores the models.dev catalog.
-func CachePath() string { return filepath.Join(appdir.Cache(), "models.json") }
+func CachePath() string { return appdir.Join(appdir.Cache(), "models.json") }
 
 func opencodeCache() string {
 	home, _ := os.UserHomeDir()
@@ -852,6 +698,7 @@ func loadGen() (map[string]mdProvider, int) {
 					sizes, outs := map[string]map[int]int{}, map[string]map[int]int{}
 					levels := map[string]map[string]int{}
 					voted := map[string]bool{}
+					spelt := map[string]int{}
 					listed = map[string]bool{}
 					canonical = map[string]bool{}
 					// vote is what one entry says of a model, counted for
@@ -862,6 +709,7 @@ func loadGen() (map[string]mdProvider, int) {
 					// deepinfra/…, xiaomi/…) votes its levels once, not
 					// once a host.
 					vote := func(who, own, by string, x mdModel) {
+						spelt[who]++
 						if x.Name != "" && x.Name != own && x.Name != who {
 							if named[who] == nil {
 								named[who] = map[string]int{}
@@ -968,6 +816,13 @@ func loadGen() (map[string]mdProvider, int) {
 					for id, by := range levels {
 						efforts[id] = strings.Split(mostListed(by), ",")
 					}
+					normal = map[string]string{}
+					for id, n := range spelt {
+						k := SameModel(id)
+						if was, ok := normal[k]; !ok || n > spelt[was] || n == spelt[was] && id < was {
+							normal[k] = id
+						}
+					}
 					names = map[string]string{}
 					for id, by := range named {
 						names[id] = mostNamed(by)
@@ -1002,7 +857,7 @@ func Reset() {
 	loaded = false
 	built = nil
 	gen++
-	mdev, images, windows, outputs, efforts, thinks, names, listed, canonical, labs = nil, nil, nil, nil, nil, nil, nil, nil, nil, nil
+	mdev, images, windows, outputs, efforts, thinks, names, listed, canonical, labs, normal = nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil
 	loadMu.Unlock()
 	if Forget != nil {
 		Forget()
@@ -1096,6 +951,10 @@ func PriceOf(providerID, modelID string) (Price, bool) {
 // (DeepSeek's deepseek-flash is deepseek-v4.1-flash).
 func PricedBy(providers []string, id string) (Price, bool) {
 	all, at := loadGen()
+	return pricedOnce(at, 'p', providers, id, func() (Price, bool) { return pricedBy(all, at, providers, id) })
+}
+
+func pricedBy(all map[string]mdProvider, at int, providers []string, id string) (Price, bool) {
 	for _, pid := range providers {
 		if m, ok := all[pid].Models[id]; ok && m.Cost != nil {
 			return *m.Cost, true
@@ -1250,9 +1109,154 @@ func canonicallyPriced(all map[string]mdProvider, at int, providers []string, b 
 	return Price{}, false
 }
 
+// madeBy is who a model is, by models.dev's canonical_model_id: the labs
+// that make it, and the providers that list it as their own (ownAPI).
+type madeBy struct{ makers, owners []string }
+
+// makerOwners are, by bare id and by that id with its dots as dashes, the
+// makers of the models models.dev's providers list and those of the
+// providers that are a maker's own API, for the Reset count gen: an entry
+// whose canonical_model_id names the provider listing it, or one it is an
+// API of, as its maker (deepseek's deepseek-flash, deepseek/deepseek-v4.1-flash-1017;
+// meta's muse-spark-1.2; stepfun-ai's step-5-preview), under the entry's
+// id and its canonical's. An entry at $0 counts for neither: a maker's
+// free tier (nvidia's) is not what the model costs.
+var makerOwners struct {
+	sync.Mutex
+	gen int
+	by  map[string]*madeBy
+}
+
+// ownAPI is whether the models.dev provider pid is maker's own API: its
+// id, or its id and a region or edition (stepfun-ai is StepFun's global
+// API, alibaba-cn Alibaba's in China). A plan's catalog ("-plan") is not:
+// it lists what a membership charges, not the model's price.
+func ownAPI(pid, maker string) bool {
+	pid, maker = strings.ToLower(pid), strings.ToLower(maker)
+	return (pid == maker || strings.HasPrefix(pid, maker+"-")) && !strings.Contains(pid, "-plan")
+}
+
+// madeByOf is who the bare id b is made and listed as their own by, nil
+// when no provider lists it as its own.
+func madeByOf(all map[string]mdProvider, at int, b string) *madeBy {
+	makerOwners.Lock()
+	defer makerOwners.Unlock()
+	if makerOwners.by == nil || makerOwners.gen != at {
+		by := map[string]*madeBy{}
+		add := func(k, maker, pid string) {
+			for _, k := range []string{k, dashed(k)} {
+				x := by[k]
+				if x == nil {
+					x = &madeBy{}
+					by[k] = x
+				}
+				if !slices.Contains(x.makers, maker) {
+					x.makers = append(x.makers, maker)
+				}
+				if !slices.Contains(x.owners, pid) {
+					x.owners = append(x.owners, pid)
+				}
+			}
+		}
+		for pid, p := range all {
+			for key, m := range p.Models {
+				maker, _, ok := strings.Cut(m.Canonical, "/")
+				if !ok || !ownAPI(pid, maker) || m.Cost == nil || m.Cost.Same(Price{}) {
+					continue
+				}
+				maker = strings.ToLower(maker)
+				add(bareID(key), maker, pid)
+				add(bareID(m.Canonical), maker, pid)
+			}
+		}
+		for _, x := range by {
+			slices.Sort(x.makers)
+			slices.Sort(x.owners)
+		}
+		makerOwners.gen, makerOwners.by = at, by
+	}
+	if x := makerOwners.by[b]; x != nil {
+		return x
+	}
+	return makerOwners.by[dashed(b)]
+}
+
+// MakerPriced is the list price the model's own maker gives it: priced by
+// PricedBy at one provider alone, the first of prefer that is an API of
+// the model's maker (ownAPI), else the first by id of the providers that
+// list it as their own (madeByOf). A model a lab sells itself is costed at
+// the lab's price rather than a reseller's that a maker catalog asked
+// before it lists: Mistral sells DeepSeek's deepseek-v4.1-flash-1017 at
+// $0.30/$1.20, DeepSeek's own price is $0.15/$0.60 (bestony on Discord: a
+// Command Code call costed at the model's official price), and Meta's
+// muse-spark-1.2 and Sakana's fugu-ultra, which no maker preset lists, are
+// priced too. False when no provider lists it as its own, or none of
+// those prices it.
+func MakerPriced(prefer []string, id string) (Price, bool) {
+	all, at := loadGen()
+	return pricedOnce(at, 'm', prefer, id, func() (Price, bool) { return makerPriced(all, at, prefer, id) })
+}
+
+func makerPriced(all map[string]mdProvider, at int, prefer []string, id string) (Price, bool) {
+	b := bareID(id)
+	if r, ok := unprofiled(b); ok {
+		b = r
+	}
+	x := madeByOf(all, at, b)
+	if x == nil {
+		return Price{}, false
+	}
+	var asked []string
+	for _, pid := range prefer {
+		if slices.ContainsFunc(x.makers, func(mk string) bool { return ownAPI(pid, mk) }) {
+			asked = append(asked, pid)
+		}
+	}
+	for _, pid := range append(asked, x.owners...) {
+		if pr, ok := PricedBy([]string{pid}, id); ok {
+			return pr, true
+		}
+	}
+	return Price{}, false
+}
+
 // dashed is an id with its dots as dashes: the spelling two ids are compared
 // in when one vendor writes a model's version 4.6 and another 4-6.
 func dashed(id string) string { return strings.ReplaceAll(id, ".", "-") }
+
+// undated is an id without the date a vendor appends to a snapshot of it:
+// YYYYMMDD, or the six digits Ark and DeepSeek write (deepseek's
+// "deepseek/deepseek-v4.1-flash-1017" is 2026-10-17). A four-digit release
+// (qwen's -2507) is a model of its own and stays.
+func undated(id string) string {
+	if i := strings.LastIndexAny(id, "-@"); i > 0 && snapshotDay(id[i+1:]) {
+		return id[:i]
+	}
+	return id
+}
+
+// snapshotDay is whether s is the date a snapshot is named by: YYYYMMDD from
+// 2000 on, YYMMDD from 2023 on, or a bare MMDD (DeepSeek's -1017 is
+// 2026-10-17), with a month and a day that are one. A version that reads as
+// neither (qwen's -2507, a 2025-07 release) is not one.
+func snapshotDay(s string) bool {
+	if strings.Trim(s, "0123456789") != "" {
+		return false
+	}
+	switch len(s) {
+	case 8:
+		return strings.HasPrefix(s, "20")
+	case 6:
+		yy, mm, dd := twoDigits(s[0:2]), twoDigits(s[2:4]), twoDigits(s[4:6])
+		return yy >= 23 && yy <= 39 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31
+	case 4:
+		mm, dd := twoDigits(s[0:2]), twoDigits(s[2:4])
+		return mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31
+	}
+	return false
+}
+
+func twoDigits(s string) int { return int(s[0]-'0')*10 + int(s[1]-'0') }
 
 // APIOf is the API a models.dev provider's model is served on, when the
 // catalog says it's one of its own: "responses", "anthropic" or "gemini"
@@ -1365,6 +1369,16 @@ func NameOf(id string) string {
 	return n
 }
 
+// Spelling is the spelling models.dev gives a model most, of every bare
+// id it knows that is the same model (SameModel): glm-5.3-flash for
+// glm-5-3-flash, GLM-5.3-Flash or Ark's glm-5-3-flash-260828, as most of
+// its providers spell it (the normal index normalFor reads). Lowercase,
+// without a vendor's prefix; "" when it knows the model by no spelling.
+func Spelling(id string) string {
+	load()
+	return normal[SameModel(id)]
+}
+
 // Named gives a model the list names by its id alone the name models.dev
 // knows it by (NameOf), so one model reads the same under every provider:
 // a GLM Coding Plan's glm-5-turbo, which Zhipu's catalog doesn't list, is
@@ -1423,8 +1437,26 @@ func fillNames(ms []Model, fallback []string, reserved ...Model) {
 
 // Knows reports whether models.dev lists a model of this id at all, under
 // any provider, as ContextOf and EffortsOf match it.
+//
+// A model it lists under another spelling alone (normalFor) counts.
 func Knows(id string) bool {
 	return ContextOf(id) > 0 || len(EffortsOf(id)) > 0 || Thinks(id)
+}
+
+// KnowsAsWritten is Knows without another spelling (normalFor): the
+// usage report sends a model's id only when models.dev knows it as
+// written, so an id a user typed that only folds into a known one
+// ("Kimi K3.1 Pro 261024") is not sent.
+func KnowsAsWritten(id string) bool {
+	if contextAs(id, false) > 0 {
+		return true
+	}
+	load()
+	if e, _ := lookupAs(id, efforts, false); len(e) > 0 {
+		return true
+	}
+	v, _ := lookupAs(id, thinks, false)
+	return v
 }
 
 // Lists reports whether models.dev lists a model by this very id (its
@@ -1455,18 +1487,46 @@ func SeesImages(id string) bool {
 // A relay's rename of a model it knows (renamed) that names its window
 // ("[1M]", "[200K]", Claude Code's "[1m]") has the window it names: what
 // the relay serves it at, as Claude Code takes claude-opus-5[1m] for 1M.
-func ContextOf(id string) int {
+//
+// Last, a model it lists under another spelling (normalFor): Volcengine
+// Ark's kimi-k3-1-pro-261024 has kimi-k3.1-pro's window. A window the
+// vendor's own list gives is read before this, by the caller, and stays.
+func ContextOf(id string) int { return contextAs(id, true) }
+
+// contextAs is ContextOf, with another spelling (normalFor), the model
+// the user said it is the same as (UserSame) and a tag in brackets taken
+// off (untagged) only when spellings is true.
+func contextAs(id string, spellings bool) int {
 	load()
-	b := bareID(id)
+	return contextIn(bareID(id), spellings, spellings)
+}
+
+// contextIn is contextAs for a bare id, the user's word (UserSame) heard
+// only with user: the model it names is looked up as any other, but not
+// sent to the user's word again.
+func contextIn(b string, spellings, user bool) int {
 	if w, ok := found(b, windows); ok {
 		return w
+	}
+	if s, ok := userSame(b, user); ok {
+		if w := contextIn(s, true, false); w > 0 {
+			return w
+		}
 	}
 	if r, w, ok := renamed(b); ok {
 		if w > 0 {
 			return w
 		}
-		w, _ = found(r, windows)
+		if w, ok := found(r, windows); ok {
+			return w
+		}
+	}
+	if n, ok := normalFor(b); spellings && ok {
+		w, _ := found(n, windows)
 		return w
+	}
+	if t, ok := untagged(b); spellings && ok {
+		return contextIn(t, true, user)
 	}
 	return 0
 }
@@ -1492,19 +1552,121 @@ func EffortsOf(id string) []string {
 }
 
 // lookup is what table holds for a model of this id: as found finds it,
-// else as the relay's rename of a model found finds (renamed). Every
-// capability is looked up the same way, so a model the catalog knows has
-// all of them or none.
+// else as the relay's rename of a model found finds (renamed), else as
+// the spelling models.dev lists it by (normalFor). Every capability is
+// looked up the same way, so a model the catalog knows has all of them
+// or none.
 func lookup[T any](id string, table map[string]T) (T, bool) {
-	b := bareID(id)
+	return lookupAs(id, table, true)
+}
+
+// lookupAs is lookup, with another spelling (normalFor), the model the
+// user said it is the same as (UserSame) and a tag in brackets taken off
+// (untagged) only when spellings is true.
+func lookupAs[T any](id string, table map[string]T, spellings bool) (T, bool) {
+	return lookupIn(bareID(id), table, spellings, spellings)
+}
+
+// lookupIn is lookupAs for a bare id, the user's word heard only with
+// user, as contextIn.
+func lookupIn[T any](b string, table map[string]T, spellings, user bool) (T, bool) {
 	if v, ok := found(b, table); ok {
 		return v, true
 	}
+	if s, ok := userSame(b, user); ok {
+		if v, ok := lookupIn(s, table, true, false); ok {
+			return v, true
+		}
+	}
 	if r, _, ok := renamed(b); ok {
-		return found(r, table)
+		if v, ok := found(r, table); ok {
+			return v, true
+		}
+	}
+	if n, ok := normalFor(b); spellings && ok {
+		return found(n, table)
+	}
+	if t, ok := untagged(b); spellings && ok {
+		return lookupIn(t, table, true, user)
 	}
 	var zero T
 	return zero, false
+}
+
+// UserSame, when set, is the model the user said a model of this bare id
+// (lowercase, without a vendor's prefix) is the same as, by the id any
+// vendor spells it with (settings' ModelSameAs; the settings package sets
+// it). A model models.dev lists by its very id is that model; one it
+// doesn't is looked up as the model the user named, before any guess of
+// magpie's (renamed, normalFor): a relay's rename no rule can read,
+// "ds.4.1(WB)" for deepseek-v4.1-flash (pinmmis on X), has that model's
+// window, reply limit, levels and images.
+var UserSame func(bare string) (string, bool)
+
+// userSame is UserSame's answer for b, as a bare id, when user is true
+// and it names a model other than b.
+func userSame(b string, user bool) (string, bool) {
+	if !user || UserSame == nil {
+		return "", false
+	}
+	s, ok := UserSame(b)
+	if s = bareID(strings.TrimSpace(s)); !ok || s == "" || s == b {
+		return "", false
+	}
+	return s, true
+}
+
+// tagPairs are the brackets a relay or a user puts a channel's tag in,
+// before or after a model's id: "deepseek-v4.1-flash (WB)", "[WB]
+// deepseek-v4.1-flash", and their full-width forms.
+var tagPairs = [][2]string{{"(", ")"}, {"[", "]"}, {"（", "）"}, {"【", "】"}, {"「", "」"}}
+
+// untagged is b without a tag in brackets at its start or its end, and
+// whether it had one: "deepseek-v4.1-flash (wb)" is deepseek-v4.1-flash.
+// A "[...]" written onto the end of the id with no space before it is not
+// a tag ("deepseek-v4.1-flash[fast]" may be a variant). A window mark ("[1m]", renamed's) is not a tag, nor is what is left
+// with no letter in it.
+func untagged(b string) (string, bool) {
+	t := strings.TrimSpace(b)
+	if r, _ := unmarked(t); r != t {
+		return "", false
+	}
+	for _, p := range tagPairs {
+		if strings.HasSuffix(t, p[1]) {
+			// "[fast]" written onto the id may be a variant's
+			// (TestRenameNeverTakesAModelForAnother): only one set
+			// apart by a space is a tag
+			if i := strings.LastIndex(t, p[0]); i > 0 && (p[0] != "[" || t[i-1] == ' ') {
+				t = strings.TrimSpace(t[:i])
+				break
+			}
+		}
+		if strings.HasPrefix(t, p[0]) {
+			if i := strings.Index(t, p[1]); i > 0 && i+len(p[1]) < len(t) {
+				t = strings.TrimSpace(t[i+len(p[1]):])
+				break
+			}
+		}
+	}
+	t = strings.Trim(t, " -_·.")
+	if t == b || t == "" || !strings.ContainsFunc(t, unicode.IsLetter) {
+		return "", false
+	}
+	return t, true
+}
+
+// normalFor is the bare id models.dev knows a model by when it knows it
+// under another spelling alone: the same SameModel name, so a version's
+// dot or dash ("kimi-k3.1-pro", "kimi-k3-1-pro"), case and gaps, and a
+// snapshot date (Ark's six digits, "-261024"; "-20260801") don't keep
+// them apart, while a variant does (-pro-max is not -pro, -mini not the
+// model, k3.1 not k3). False for an id it knows as given, or none.
+func normalFor(b string) (string, bool) {
+	n, ok := normal[SameModel(b)]
+	if !ok || n == b {
+		return "", false
+	}
+	return n, true
 }
 
 // found is what table holds for a bare id: by the id itself, a Bedrock
@@ -1681,7 +1843,7 @@ func ListedByBorrowed(providers []string, id string) ([]string, bool) {
 }
 
 func listedBy(providers []string, id string, providerOverrides bool) ([]string, bool) {
-	all := load()
+	all, at := loadGen()
 	b := bareID(id)
 	if r, _, ok := renamed(b); ok {
 		b = r
@@ -1689,23 +1851,86 @@ func listedBy(providers []string, id string, providerOverrides bool) ([]string, 
 	if r, ok := unprofiled(b); ok {
 		b = r
 	}
+	pick := func(pid string, m mdModel) ([]string, bool) {
+		providerID := ""
+		if providerOverrides {
+			providerID = pid
+		}
+		if e := all[pid].levels(m, providerID); len(e) > 0 || !m.budgeted() {
+			return slices.Clone(e), true
+		}
+		return nil, false
+	}
 	for _, want := range []string{b, cutAt(b, '('), cutAt(b, ':')} {
 		for _, pid := range providers {
-			for key, m := range all[pid].Models {
-				if bareID(key) != want {
-					continue
-				}
-				providerID := ""
-				if providerOverrides {
-					providerID = pid
-				}
-				if e := all[pid].levels(m, providerID); len(e) > 0 || !m.budgeted() {
-					return slices.Clone(e), true
+			for _, key := range levelIndexOf(all, at, pid).bare[want] {
+				if e, ok := pick(pid, all[pid].Models[key]); ok {
+					return e, true
 				}
 			}
 		}
 	}
+	// and last under another spelling (SameModel), only where no provider
+	// lists it as given, and only for a name models.dev knows (normal): Ark
+	// lists glm-5.3 on its plan, glm-5-3-flash-260828 pay-as-you-go. Of a
+	// provider's several such entries, the first in key order.
+	n := SameModel(b)
+	if _, ok := normal[n]; !ok {
+		return nil, false
+	}
+	for _, pid := range providers {
+		for _, key := range levelIndexOf(all, at, pid).same[n] {
+			if e, ok := pick(pid, all[pid].Models[key]); ok {
+				return e, true
+			}
+		}
+	}
 	return nil, false
+}
+
+// levelIndex is a provider's model keys by what listedBy looks them up
+// by, each in key order: their id without a path or case (bare), and
+// SameModel's spelling of it (same). listedBy, asked for every model's
+// levels on each look at the providers, read every vendor's every model
+// through SameModel's regexp each time: 0.28 GB of the 2.6 GB a real
+// config allocated over 20 polls. KinEfforts looks its thinking models up
+// by their versionless shape (kin), where it split and joined every key
+// on each ask: 66 MB of 1.4 GB.
+type levelIndex struct {
+	bare, same, kin map[string][]string
+}
+
+var levelIndexes struct {
+	sync.Mutex
+	gen int
+	by  map[string]*levelIndex
+}
+
+// levelIndexOf is pid's levelIndex in all, the catalog loaded at Reset
+// count at.
+func levelIndexOf(all map[string]mdProvider, at int, pid string) *levelIndex {
+	levelIndexes.Lock()
+	defer levelIndexes.Unlock()
+	if levelIndexes.by == nil || levelIndexes.gen != at {
+		levelIndexes.gen, levelIndexes.by = at, map[string]*levelIndex{}
+	}
+	if x, ok := levelIndexes.by[pid]; ok {
+		return x
+	}
+	x := &levelIndex{bare: map[string][]string{}, same: map[string][]string{}, kin: map[string][]string{}}
+	for _, key := range slices.Sorted(maps.Keys(all[pid].Models)) {
+		b := bareID(key)
+		x.bare[b] = append(x.bare[b], key)
+		n := SameModel(b)
+		x.same[n] = append(x.same[n], key)
+		if m := all[pid].Models[key]; (m.Thinks || len(m.efforts("")) > 0) && !m.budgeted() {
+			if s, ok := versionless(b); ok {
+				x.kin[s] = append(x.kin[s], key)
+			}
+		}
+	}
+	levelIndexes.by[pid] = x
+	return x
 }
 
 // variantSuffix is a word a proxy puts after a model's id to name the
@@ -1732,7 +1957,7 @@ func Unsuffixed(id string) (string, bool) {
 // from mimo-v2.6-flash): a model newer than the catalog on this machine
 // offers its line's levels, not none. False when none of them has one.
 func KinEfforts(providers []string, id string) ([]string, bool) {
-	all := load()
+	all, at := loadGen()
 	shape, ok := versionless(bareID(id))
 	if !ok {
 		return nil, false
@@ -1743,13 +1968,8 @@ func KinEfforts(providers []string, id string) ([]string, bool) {
 		found              bool
 	)
 	for _, pid := range providers {
-		for key, m := range all[pid].Models {
-			if !m.Thinks && len(m.efforts("")) == 0 || m.budgeted() {
-				continue
-			}
-			if s, ok := versionless(bareID(key)); !ok || s != shape {
-				continue
-			}
+		for _, key := range levelIndexOf(all, at, pid).kin[shape] {
+			m := all[pid].Models[key]
 			// the newest; of two the same day, the first provider's, then
 			// the greater id, whatever order the map gives
 			if !found || m.ReleaseDate > newest || m.ReleaseDate == newest && pid == from && key > name {
@@ -1830,40 +2050,6 @@ func mostGiven(by map[int]int) int {
 	}
 	return best
 }
-
-// undated is an id without the date a vendor appends to a snapshot of it:
-// YYYYMMDD, or the six digits Ark and DeepSeek write (deepseek's
-// "deepseek/deepseek-v4.1-flash-1017" is 2026-10-17). A four-digit release
-// (qwen's -2507) is a model of its own and stays.
-func undated(id string) string {
-	if i := strings.LastIndexAny(id, "-@"); i > 0 && snapshotDay(id[i+1:]) {
-		return id[:i]
-	}
-	return id
-}
-
-// snapshotDay is whether s is the date a snapshot is named by: YYYYMMDD from
-// 2000 on, YYMMDD from 2023 on, or a bare MMDD (DeepSeek's -1017 is
-// 2026-10-17), with a month and a day that are one. A version that reads as
-// neither (qwen's -2507, a 2025-07 release) is not one.
-func snapshotDay(s string) bool {
-	if strings.Trim(s, "0123456789") != "" {
-		return false
-	}
-	switch len(s) {
-	case 8:
-		return strings.HasPrefix(s, "20")
-	case 6:
-		yy, mm, dd := twoDigits(s[0:2]), twoDigits(s[2:4]), twoDigits(s[4:6])
-		return yy >= 23 && yy <= 39 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31
-	case 4:
-		mm, dd := twoDigits(s[0:2]), twoDigits(s[2:4])
-		return mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31
-	}
-	return false
-}
-
-func twoDigits(s string) int { return int(s[0]-'0')*10 + int(s[1]-'0') }
 
 // bareID is a model's id without the vendor's prefix, lowercase.
 func bareID(id string) string {

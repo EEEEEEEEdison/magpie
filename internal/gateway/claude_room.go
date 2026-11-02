@@ -164,13 +164,13 @@ func memLimit(goos, root string) (int64, string) {
 		}
 		switch {
 		case parts[0] == "0" && parts[1] == "":
-			// v2: this cgroup's limits and every one above it. The group's
-			// path is the kernel's, a slash path whatever machine reads it,
-			// so it is walked with path, not filepath: Windows' filepath.Dir
-			// of "\\system.slice\\x" is itself, and the walk would never end.
+			// v2: this cgroup's limits and every one above it. The
+			// cgroup path is a "/" path whatever the host reads it on,
+			// so the walk is path's: filepath's root is "\" on Windows,
+			// where dir never read "/" and the loop never ended (#4113).
 			for dir := path.Clean("/" + parts[2]); ; dir = path.Dir(dir) {
 				for _, name := range []string{"memory.max", "memory.high"} {
-					if n, ok := readLimit(filepath.Join(cgroups, filepath.FromSlash(dir), name)); ok {
+					if n, ok := readLimit(filepath.Join(cgroups, dir, name)); ok {
 						least(n, "cgroup "+path.Join(dir, name))
 					}
 				}

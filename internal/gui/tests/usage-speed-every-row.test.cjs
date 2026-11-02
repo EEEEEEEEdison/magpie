@@ -29,7 +29,7 @@ const GW = {
 const ROWS = [
   // 0: a chat call not streamed to the agent: 3,832 tokens in 31 s
   { ...GW, route_id: 1, t: at(0), provider: "antigravity", model: "gemini-3.8-flash-tiered", served: "gemini-3.8-flash-tiered", req: "antigravity/gemini-3.8-flash-tiered", out: 3832, reasoning: 3830, ms: 31006, ep: "/v1/chat/completions → /v1internal:streamGenerateContent?alt=sse" },
-  // 1: a short one not streamed: too little over its whole time
+  // 1：非流式短回复，整轮时长有效，仍可计速。
   { ...GW, route_id: 2, t: at(1), provider: "deepseek", model: "deepseek-flash", served: "deepseek-flash", req: "deepseek/deepseek-flash", out: 105, reasoning: 103, ms: 6683, ep: "/v1/chat/completions" },
   // 2: hidden reasoning then a 6-token tool call 87 ms after the first token
   { ...GW, route_id: 3, t: at(2), out: 47, reasoning: 41, ms: 6788, ttft_ms: 6701, reasoning_hidden: true, flow_ms: 1 },
@@ -43,8 +43,12 @@ const ROWS = [
   { ...GW, route_id: 7, t: at(6), out: 1300, reasoning: 300, ms: 16000, ttft_ms: 6000, reasoning_hidden: true, flow_ms: 9000 },
   // 7: reasoning and nothing after it
   { ...GW, route_id: 8, t: at(7), out: 41, reasoning: 41, ms: 6000, ttft_ms: 5000, reasoning_hidden: true, flow_ms: 1 },
-  // 8: measured: 500 tokens in the 5 s after its first
+  // 8：按整轮 7 s 计 500 tokens，包含首 token 的 2 s 等待。
   { ...GW, route_id: 9, t: at(8), out: 500, ms: 7000, ttft_ms: 2000, first_text_ms: 2000, flow_ms: 5000 },
+  // 整轮突发规则排除的长回复不能通过旧下限路径重新显示速度。
+  { ...GW, route_id: 10, t: at(9), out: 1200, reasoning: 200, ms: 20000, ttft_ms: 18000, flow_ms: 1000 },
+  { ...GW, route_id: 11, t: at(10), source: "log", out: 1200, reasoning: 200, ms: 20000, ttft_ms: 18000, flow_ms: 1000 },
+  { ...GW, route_id: 12, t: at(11), source: "log", out: 60, ms: 3000, ttft_ms: 1000 },
 ];
 
 function ledger(period) {
@@ -92,6 +96,7 @@ const L = {
     burst: "It came in one burst at its end, not as it was written, so how fast it was written isn't seen",
     failed: "A failed request tells no speed",
     noOut: "No output tokens to time a speed from",
+    small: "A Codex turn of one call is timed only when its whole turn is at least a second and its output at least 100 tokens: this one wrote 60 tokens in 3.0 s",
   },
   zh: {
     whole: "124 token/秒", short: "16 token/秒", answer: "81 token/秒", measured: "71 token/秒",
@@ -101,6 +106,7 @@ const L = {
     burst: "内容在最后一次性到达，不是边写边发，看不出写得多快",
     failed: "失败的请求没有速度",
     noOut: "没有输出 token，算不出速度",
+    small: "Codex 单次调用只在整轮至少 1 秒且输出至少 100 个 token 时计时：这次整轮 3.0 秒 输出 60 个 token",
   },
 };
 
@@ -116,6 +122,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 }, reducedMotion: "reduce" });
         const p = await ctx.newPage();
         p.setDefaultTimeout(5000);
+        p.setDefaultNavigationTimeout(60000);
         p.on("pageerror", (e) => errors.push(e.message));
         await p.route("**/*", server(lang));
         await p.goto("http://magpie.test/");
@@ -159,6 +166,12 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // the one timed after its first token counts its whole turn now
         assert.equal(await text(8), w.measured);
         assert((await tip(8)).startsWith(w.measuredTip), await tip(8));
+        for (const i of [9, 10]) {
+          assert.equal(await text(i), "—", "突发回复不能重新成为下限速度");
+          assert.equal(await tip(i), w.burst);
+        }
+        assert.equal(await text(11), "—");
+        assert.equal(await tip(11), w.small, "Codex 门槛按整轮解释，不扣首字时间");
 
         assert.deepEqual(errors, []);
         await ctx.close();

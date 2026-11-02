@@ -53,6 +53,14 @@ var mrValues = []string{
 // encoding/json escapes only with HTML.
 var mrKeys = []string{"model", "input", "", "a b", "<tag>", "a&b", "quo\"te", "back\\slash", "tab\t", "é", "\u2028", "\xff", "\x7f", "z", "A"}
 
+// 真实分隔符、JSON Unicode 转义和字面的反斜线-u 文本均与标准库逐字节一致。
+func TestMarshalRawLineSeparators(t *testing.T) {
+	for _, raw := range []string{"\"<>&line\u2028sep\u2029\"", `"<>&line\u2028sep\u2029"`, `"<>&line\\u2028sep\\u2029"`} {
+		mrCompare(t, []json.RawMessage{json.RawMessage(raw)})
+		mrCompare(t, map[string]json.RawMessage{"\u2028": json.RawMessage(raw)})
+	}
+}
+
 func TestMarshalRawIsEncodingJSON(t *testing.T) {
 	mrCompare(t, map[string]json.RawMessage(nil))
 	mrCompare(t, []json.RawMessage(nil))

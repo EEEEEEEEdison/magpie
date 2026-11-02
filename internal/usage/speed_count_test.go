@@ -120,6 +120,15 @@ func TestCodexTurnTimedByItsWholeTurn(t *testing.T) {
 			t.Errorf("%s/%q: measured %d/%d ms, want 380/7000", r.Agent, r.Source, n, w)
 		}
 	}
+	// 被整轮流速规则排除的回复不能再按首字后的正文速度回填。
+	for _, r := range []Row{
+		{Source: "log", Record: Record{Agent: "codex", Output: 1200, Reasoning: 200, Millis: 20000, TTFT: 18000, Flow: 1000}},
+		{Source: "log", Record: Record{Agent: "claude", Output: 1200, Reasoning: 200, Millis: 20000, TTFT: 18000, Flow: 1000}},
+	} {
+		if n, ms := r.Floor(); n != 0 || ms != 0 {
+			t.Errorf("%s held reply was counted again as a floor: %d/%d", r.Agent, n, ms)
+		}
+	}
 	// a group sums the whole turns
 	var g Totals
 	g.addRow(row(380, 7000, 6800, 0))

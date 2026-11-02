@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -61,7 +63,7 @@ func fakeWSLCheck(t *testing.T, up ...string) *wslCheck {
 		c.Err = nil
 		c.Path, c.Args = self, []string{self, "-test.run=^TestFakeMCPServer$"}
 		if mode != "" {
-			c.Path, c.Args = "/usr/bin/env", append([]string{"/usr/bin/env", fakeMode + "=" + mode}, c.Args...)
+			c.Args = append(c.Args, "-magpie-fake-mcp-mode="+mode)
 		}
 		return c
 	}
@@ -145,6 +147,16 @@ func TestCheckWindowsServerHere(t *testing.T) {
 func TestCheckMixedServerEachSide(t *testing.T) {
 	w := fakeWSLCheck(t, "Ubuntu")
 	s := fakeStdio(t, "ok", nil)
+	// 两侧都能查找的命令名；Windows 绝对路径按契约只在本机运行。
+	name := "magpie-fake-mcp"
+	program := name
+	if runtime.GOOS == "windows" {
+		program += ".exe"
+	}
+	if err := os.Link(s.Command, filepath.Join(os.Getenv("PATH"), program)); err != nil {
+		t.Fatal(err)
+	}
+	s.Command = name
 	s.Agents = []string{"claude", "codex@wsl:Ubuntu"}
 	h := CheckServer(context.Background(), s)
 	if h.State != "ok" || h.Tools != 3 || !slices.Equal(h.Checked, []string{"", "Ubuntu"}) {

@@ -35,7 +35,9 @@ func TestDesktopCodeNativeIdentity(t *testing.T) {
 		if !native["claude-desktop|sess1"] || native["claude|sess1"] || !native["claude|independent"] {
 			t.Fatalf("native ownership: %v", native)
 		}
-		if got := st.Overview("claude-desktop", "", "", 8); got.Count != 1 || got.Top["tokens_with_cache"][0].Tokens != (Tokens{Input: 13, Output: 3, CacheRead: 120}) {
+		got := st.Overview("claude-desktop", "", "", 8)
+		top := got.Top["tokens"]
+		if got.Count != 1 || len(top) != 1 || top[0].Tokens != (Tokens{Input: 13, Output: 3, CacheRead: 120}) {
 			t.Fatalf("Desktop and its subagent: %+v", got)
 		}
 		if got := st.Overview("claude", "", "", 8); got.Count != 1 {
@@ -71,5 +73,86 @@ func TestDesktopCodeNativeIdentity(t *testing.T) {
 		if c.Agent != "claude" {
 			t.Errorf("deleted metadata: call %s still belongs to %s", c.RequestID, c.Agent)
 		}
+	}
+}
+
+// metadata 改变后，未改写或只追加的 CLI 文件也必须重新判断 entrypoint fallback。
+func TestDesktopFallbackChangesWithoutTranscriptRewrite(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		disk, growing bool
+	}{
+		{"memory", false, false}, {"disk", true, false},
+		{"memory continuation", false, true}, {"disk continuation", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := setupCalls(t)
+			held := desktopTitlesHeld
+			desktopTitlesHeld = 0
+			t.Cleanup(func() { desktopTitlesHeld = held })
+			path := filepath.Join(d.claude, "projects", "project", "sess1.jsonl")
+			msg := func(id string, sec int) string {
+				return swap(claudeMsg(id, "sol", 10, 2, 0, 0, sec), `"entrypoint":"cli"`, `"entrypoint":"claude-desktop"`)
+			}
+			writeLines(t, path, msg("first", 1))
+			check := func(want string, count int) {
+				t.Helper()
+				var got []Call
+				for _, source := range CallSources() {
+					if source.Path == path {
+						if tc.disk {
+							got = ReadCallSource(source)
+						} else {
+							got = readCalls(file{path: source.Path, key: source.Key, agent: source.Agent, noDesktopApp: source.NoDesktopApp, size: source.Size, mod: source.Modified}).Calls
+						}
+					}
+				}
+				if len(got) != count {
+					t.Fatalf("calls: %d, want %d", len(got), count)
+				}
+				for _, c := range got {
+					if c.Agent != want {
+						t.Errorf("call %s belongs to %s, want %s", c.RequestID, c.Agent, want)
+					}
+				}
+			}
+			check("claude-desktop", 1)
+			meta := filepath.Join(d.desktop, "claude-code-sessions", "account", "org", "local_owned.json")
+			writeLines(t, meta, `{"sessionId":"local_owned","cliSessionId":"another-session","title":""}`)
+			count := 1
+			if tc.growing {
+				appendText(t, path, msg("second", 2)+"\n")
+				count++
+			}
+			if tc.disk {
+				Reset()
+			}
+			check("claude", count)
+			var scans int
+			scanHook = func(p string, off int64) {
+				if p == path {
+					scans++
+				}
+			}
+			t.Cleanup(func() { scanHook = nil })
+			check("claude", count)
+			Reset()
+			check("claude", count)
+			if scans != 0 {
+				t.Errorf("unchanged ownership rescanned the transcript %d times after restart", scans)
+			}
+			scanHook = nil
+			if err := os.Remove(meta); err != nil {
+				t.Fatal(err)
+			}
+			if tc.growing {
+				appendText(t, path, msg("third", 3)+"\n")
+				count++
+			}
+			if tc.disk {
+				Reset()
+			}
+			check("claude-desktop", count)
+		})
 	}
 }

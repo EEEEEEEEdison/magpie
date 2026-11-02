@@ -47,6 +47,9 @@ func proxyCheckRig(t *testing.T, exit ...string) (client *http.Client, proxyURL 
 		if addr == "trace.example.invalid:80" {
 			addr = direct.Listener.Addr().String()
 		}
+		if addr != direct.Listener.Addr().String() && addr != proxy.Listener.Addr().String() {
+			return nil, fmt.Errorf("proxy check dial outside its fixture: %s", addr)
+		}
 		return dial(ctx, network, addr)
 	}
 	tr := netproxy.Dispatch(base)

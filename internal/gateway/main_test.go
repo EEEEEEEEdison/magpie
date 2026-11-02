@@ -3,8 +3,11 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/agentenv"
@@ -24,11 +27,15 @@ import (
 const standInsEnv = "MAGPIE_GATEWAY_TEST_STAND_INS"
 
 func TestMain(m *testing.M) {
+	// 测试仅使用显式夹具提供的网络，不枚举本机 WSL 网卡。
+	WSLNets = func() []*net.IPNet { return nil }
 	serveRotation()
 	groupsServed = provider.ServeGroups()
 	serveMiddleware()
 	searchOn = gwtool.Serve(gwtool.WebSearch)
 	limitsOn = gwbudget.Limit(budget.Limiter{})
+	// the test binary is no magpie: it runs no claude-tui-helper
+	claudeTUIRuns = false
 	code, err := isolatedTests(m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -46,11 +53,19 @@ func isolatedTests(m *testing.M) (int, error) {
 		return 1, err
 	}
 	defer os.RemoveAll(home)
+	for _, names := range [][]string{agentenv.Vars, agentenv.ClaudeProviders} {
+		for _, name := range names {
+			if err := os.Unsetenv(name); err != nil {
+				return 1, err
+			}
+		}
+	}
 	for name, value := range map[string]string{
 		"HOME": home, "USERPROFILE": home,
 		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
 		"XDG_CACHE_HOME":  filepath.Join(home, ".cache"),
 		"XDG_DATA_HOME":   filepath.Join(home, ".local", "share"),
+		"XDG_STATE_HOME":  filepath.Join(home, ".local", "state"),
 		"APPDATA":         filepath.Join(home, "AppData", "Roaming"),
 		"LOCALAPPDATA":    filepath.Join(home, "AppData", "Local"),
 	} {
@@ -67,11 +82,6 @@ func isolatedTests(m *testing.M) (int, error) {
 	// 9c377231 dropped this package's own switch).
 	if err := os.Setenv(testenv.Marker, home); err != nil {
 		return 1, err
-	}
-	for _, name := range agentenv.Vars {
-		if err := os.Unsetenv(name); err != nil {
-			return 1, err
-		}
 	}
 	// The machine's proxy variables too: net/http freezes them into its
 	// first routed request, so a test that sets its own afterwards (search's
@@ -97,7 +107,7 @@ func isolatedTests(m *testing.M) (int, error) {
 		if err := os.Mkdir(bin, 0o755); err != nil {
 			return 1, err
 		}
-		if err := testenv.StandIns(bin, []string{"security", "secret-tool", "claude", "codex", "cursor-agent", "devin", "grok", "kiro-cli"}); err != nil {
+		if err := testenv.StandIns(bin, []string{"security", "secret-tool", "claude", "codex", "cursor-agent", "devin", "grok", "kiro-cli", "wsl.exe"}); err != nil {
 			return 1, err
 		}
 		defer testenv.RemovePrograms()
@@ -128,6 +138,26 @@ func isolatedTests(m *testing.M) (int, error) {
 func TestRunsAsAnIsolatedTestBinary(t *testing.T) {
 	if os.Getenv(testenv.Marker) == "" {
 		t.Fatalf("TestMain left %s unset", testenv.Marker)
+	}
+}
+
+// The package's servers bind only the loopback networks a test gives them.
+func TestWSLNetworksAreIsolated(t *testing.T) {
+	if nets := WSLNets(); len(nets) != 0 {
+		t.Fatalf("tests see the machine's WSL networks: %v", nets)
+	}
+}
+
+// 自定义 TestMain 也须隔离状态目录和能访问真实发行版的 WSL 命令。
+func TestStateAndWSLStayInSandbox(t *testing.T) {
+	home := os.Getenv(testenv.Marker)
+	state := os.Getenv("XDG_STATE_HOME")
+	if state == "" || !strings.HasPrefix(state, home+string(os.PathSeparator)) {
+		t.Errorf("state folder %q is outside sandbox %s", state, home)
+	}
+	tool, err := exec.LookPath("wsl.exe")
+	if err != nil || !strings.HasPrefix(tool, home+string(os.PathSeparator)) {
+		t.Errorf("wsl.exe resolves to %q (%v), outside sandbox %s", tool, err, home)
 	}
 }
 

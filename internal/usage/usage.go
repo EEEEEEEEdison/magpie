@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -43,6 +44,9 @@ type Record struct {
 	ProviderAccount string `json:"providerAccount,omitempty"`
 	CallerKeyID     string `json:"callerKeyId,omitempty"`
 	CallerKeyName   string `json:"callerKeyName,omitempty"`
+	// CallerIssuerID is the key CallerKeyID was issued under (an issued,
+	// short-lived key: access.IssueKey), whose limits count this call too.
+	CallerIssuerID string `json:"callerIssuerId,omitempty"`
 	// SessionProvider is the provider ID recorded by the agent. SessionAccount
 	// identifies the session's creator, not the account used for an API request.
 	// Neither field establishes an upstream route from today's configuration.
@@ -110,8 +114,13 @@ type Record struct {
 	// native Codex call established whether a gateway row compacted.
 	Compaction *bool `json:"compaction,omitempty"`
 	// FirstReasoning is the start of paced visible reasoning, absent for hidden reasoning.
-	FirstReasoning  int64 `json:"first_reasoning_ms,omitempty"`
-	ReasoningHidden bool  `json:"reasoning_hidden,omitempty"`
+	FirstReasoning int64 `json:"first_reasoning_ms,omitempty"`
+	// ReasoningHidden: the reply reasoned and its stream doesn't tell how
+	// much — sealed or summarised, or streamed with no reasoning count in
+	// its usage (#4545: Anthropic's usage never has one), when Reasoning is
+	// 0 for unknown, not for none. A reply of no text then tells no speed
+	// (Decode).
+	ReasoningHidden bool `json:"reasoning_hidden,omitempty"`
 	// Sent: ms from the request to its answering try going out to the
 	// vendor, its body written, as TTFT is counted: magpie's own time and
 	// the tries that failed first are before it, and TTFT-Sent is how
@@ -129,8 +138,8 @@ type Record struct {
 	Own int64 `json:"own_ms,omitempty"`
 	// Masking: the ms of Own that went on masking the request (Settings
 	// → Privacy: the rules, and the local model with its wait for a
-	// turn); 0 where nothing was masked, or in a record from before it
-	// was kept.
+	// turn), all of it where Own is unknown; 0 where nothing was masked,
+	// or in a record from before it was kept.
 	Masking int64 `json:"masking_ms,omitempty"`
 	Retried int64 `json:"retried_ms,omitempty"`
 	Queued  int64 `json:"queued_ms,omitempty"`
@@ -417,6 +426,34 @@ func IsAgent(id string) bool {
 	return slices.ContainsFunc(knownAgents(), func(k Known) bool { return k.ID == id || slices.Contains(k.Names, id) })
 }
 
+// libraries are the product names of HTTP libraries, runtimes and API
+// SDKs as AgentOf names a client by its User-Agent, lower-cased. A
+// request that says only one of these is from a script, or from a tool
+// built on the library, and says nothing of which: it is no agent of its
+// own (theforeveriris on X: Bun, curl and python-httpx each had an
+// agent's scorecard on the Context tab).
+var libraries = map[string]bool{
+	// command lines and API tools
+	"curl": true, "wget": true, "httpie": true, "postmanruntime": true, "insomnia": true,
+	// JavaScript
+	"bun": true, "node": true, "deno": true, "node-fetch": true, "undici": true, "axios": true, "got": true, "ky": true,
+	// Python
+	"python": true, "python-httpx": true, "httpx": true, "python-requests": true, "requests": true,
+	"python-urllib": true, "urllib3": true, "aiohttp": true,
+	// Go, JVM, Ruby, PHP, Dart, Rust
+	"go-http-client": true, "go-resty": true, "resty": true, "okhttp": true, "java": true, "java-http-client": true,
+	"apache-httpclient": true, "reactor-netty": true, "ruby": true, "faraday": true, "rest-client": true,
+	"guzzlehttp": true, "dart": true, "reqwest": true, "libcurl": true,
+	// the vendors' SDKs, which an app or a script calls a model with
+	"openai": true, "asyncopenai": true, "anthropic": true, "asyncanthropic": true, "ai-sdk": true, "google-genai-sdk": true,
+}
+
+// IsLibrary says whether a client, by the name AgentOf gives it (a
+// record's Agent, old records' too), is an HTTP library, a runtime or an
+// API SDK rather than an agent: curl, Bun, python-httpx, Go-http-client,
+// OpenAI/Python.
+func IsLibrary(id string) bool { return libraries[strings.ToLower(strings.TrimSpace(id))] }
+
 // AgentOf names the agent behind a client User-Agent. Known agents map to
 // their magpie id; anything else keeps its product name.
 func AgentOf(ua string) string {
@@ -457,14 +494,16 @@ const (
 // Periods lists the windows in order.
 var Periods = []Period{Today, Week, Month, All}
 
-// CostAt is what the call costs at a price: at the price of the window it
-// was made in, at the tier its input reaches, its 1-hour cache writes at
-// theirs. A reported call that said what it cost costs that, at any price.
+// CostAt is what the call costs at a price: at the tier its input reaches,
+// its 1-hour cache writes at theirs, the price of its day where a tier is
+// dated, and at the hour it was made (an off-peak price doubles at peak,
+// Price.AtTime). A reported call that said what it cost costs that, at any
+// price.
 func (r Record) CostAt(p catalog.Price) float64 {
 	if r.OwnCost != nil {
 		return *r.OwnCost // a reported call's own cost (#1874)
 	}
-	return p.CostSplitAt(r.Time, r.Input, r.Output, r.CacheRead, r.CacheWrite, r.CacheWrite1h)
+	return p.AtTime(r.Time).CostSplit(r.Input, r.Output, r.CacheRead, r.CacheWrite, r.CacheWrite1h)
 }
 
 // Totals is a sum of calls.
@@ -550,19 +589,13 @@ func (t Totals) Floor() float64 {
 	return float64(t.FloorOut) / (float64(t.FloorMs) / 1000)
 }
 
-// A reply's speed is its output tokens over its decode window, the ms
-// from its first content to its end (#196; one that reasoned, DecodeOf); a window counts only when it
-// timed the writing (#731). One that is shorter than MinDecodeMs, or over
-// which the tokens would have come faster than MaxDecodeSpeed a second,
-// didn't: the reply came in one burst at its end, written before the
-// window opened — a turn that is one big tool call from Gemini, whose
-// functionCall comes whole, has its first content a millisecond before
-// its end, and 8264 tokens in 1 ms read 8,264,000 tok/s. Such a reply
-// tells no speed and is left out of the summed one, where its tokens
-// over next to no time would lift everyone's; its TTFT still counts.
-// The bounds are wide of any real stream: the fastest vendors write a few
-// thousand tokens a second, and a tenth of a second is the least a
-// stream's timing tells anything by. routing/client.js's speedOf has the same.
+// A reply's speed is its output tokens over its whole turn, from the request
+// to its end, including the wait for its first content (#196; DecodeOf). A
+// turn shorter than MinDecodeMs, or over which the tokens would have come
+// faster than MaxDecodeSpeed a second, tells no speed: 8264 tokens in 1 ms
+// read 8,264,000 tok/s. Such a reply is left out of the summed speed, where
+// its tokens over next to no time would lift everyone's; its TTFT still
+// counts. routing/client.js's speedOf has the same bounds.
 const (
 	MinDecodeMs    = 100
 	MaxDecodeSpeed = 10000
@@ -583,12 +616,9 @@ func DecodeWindow(out int, ms, from int64) int64 {
 // reasoning in them, over the whole turn, from the request to its last token,
 // the wait for its first token in that time.
 //
-// It used to count only the writing after the first token, which read a reply
-// of 2.5 s of wait and 10 s of writing faster than it was: the wait is part
-// of how long the answer took, and the number the card shows is what the
-// turn's tokens came at. ttft, firstText and firstReasoning are the timing
-// the turn was seen with, and count no longer; a reply of none, or one that
-// came too fast to tell (MinDecodeMs, MaxDecodeSpeed), tells no speed.
+// ttft, firstText and firstReasoning are the timing the turn was seen with,
+// and count no longer; a reply of none, or one that came too fast to tell
+// (MinDecodeMs, MaxDecodeSpeed), tells no speed.
 //
 // A reply its vendor held back and let go in a burst at its end still tells
 // none (John on Discord: Kimi Code answering OpenCode read 1,367, then 2,237
@@ -902,184 +932,13 @@ func summarize(p Period, now time.Time, recs []Record) Summary {
 }
 
 func summarizeFrom(p Period, now time.Time, first time.Time, historicalKeys map[string]bool, read func(func(Record))) Summary {
-	renamed := provider.UsageRenames()
-	// the names models' usage is counted under (SlouchyQuill507): a model's
-	// row sums its ids, each call priced by its own id first
-	alias := provider.UsageAlias()
-	normalizedKeys := map[string]bool{}
-	for id := range historicalKeys {
-		for _, next := range renamed.Each(id) {
-			normalizedKeys[next] = true
-		}
-	}
-	historicalKeys = normalizedKeys
-	// a picked range's own days alone: its chart can start on the Monday
-	// before its first, and it ends before now (#1492)
-	from, until := p.Since(now), p.Until(now)
-	visit := func(fn func(Record)) {
-		read(func(r Record) {
-			if r.Time.Before(from) || after(until, r.Time) {
-				return
-			}
-			r.renameBy(renamed)
-			fn(r)
-		})
-	}
-	s := Summary{Period: p, Bucket: "day", Agents: []Group{}, Models: []Group{}, ProviderKeys: []Group{}, Accounts: []Group{}, CallerKeys: []Group{}, Sessions: []Group{}, Series: []Point{}}
-	s.Since, s.Bucket, s.Series = timeline(p, now, first)
-	s.Period = p.shown()
-
-	priceOf := Pricer()
-	// the places each provider id went in the period, and goes now
-	hosts := map[string]map[string]bool{}
-	// the providers whose calls are told apart by account: those an
-	// account answered for in the period, and those signed in now
-	accountProviders := map[string]bool{}
-	visit(func(r Record) {
-		if r.IsRejected() {
-			return
-		}
-		if r.Account() != "" && !r.Time.Before(s.Since) {
-			accountProviders[r.Provider] = true
-		}
-		if r.Host != "" && !r.Time.Before(s.Since) {
-			if hosts[r.Provider] == nil {
-				hosts[r.Provider] = map[string]bool{}
-			}
-			hosts[r.Provider][who(r.Host)] = true
-		}
-	})
-	goesNow := map[string]string{}
-	keyProviders := map[string]bool{}
-	for _, p := range provider.All() {
-		goesNow[p.ID] = who(p.Where())
-		keyProviders[p.ID] = p.Account == nil && p.Key != ""
-		if p.Account != nil {
-			accountProviders[p.ID] = true
-		}
-	}
-	for id := range historicalKeys {
-		keyProviders[id] = true
-	}
-	agents := map[string]*Group{}
-	models := map[string]*Group{}
-	keys := map[string]*Group{}
-	accounts := map[string]*Group{}
-	callerKeys := map[string]*Group{}
-	sessions := map[string]*Group{}
-	visit(func(r Record) {
-		if r.IsRejected() {
-			return
-		}
-		t := r.Time.In(now.Location())
-		if t.Before(s.Since) {
-			return
-		}
-		pr := priceOf(r)
-		s.Totals.add(r, pr)
-		i := bucketIndex(s.Bucket, s.Since, t)
-		if i >= 0 && i < len(s.Series) {
-			s.Series[i].add(r, pr)
-		}
-		id := ReportedAs(r.Agent) // one kept before magpie knew the agent by name
-		a := agents[id]
-		if a == nil {
-			a = &Group{ID: id}
-			agents[id] = a
-		}
-		a.add(r, pr)
-		model := r.Model
-		if alias != nil {
-			model = alias(model)
-		}
-		k, host := r.Provider+"/"+model, ""
-		if w := who(r.Host); w != "" && (len(hosts[r.Provider]) > 1 || w != goesNow[r.Provider]) {
-			k, host = k+" @ "+w, w
-		}
-		m := models[k]
-		if m == nil {
-			m = &Group{ID: k, Provider: r.Provider, Model: model, Host: host}
-			models[k] = m
-		}
-		m.add(r, pr)
-		m.addOwn(r, pr)
-		if r.CallerKeyID != "" {
-			g := callerKeys[r.CallerKeyID]
-			if g == nil {
-				g = &Group{ID: r.CallerKeyID, CallerKeyID: r.CallerKeyID}
-				callerKeys[r.CallerKeyID] = g
-			}
-			g.CallerKeyName = r.CallerKeyName
-			g.add(r, pr)
-		}
-		if keyProviders[r.Provider] {
-			id := r.Provider + "#" + r.ProviderKeyID
-			g := keys[id]
-			if g == nil {
-				g = &Group{ID: id, Provider: r.Provider, ProviderKeyID: r.ProviderKeyID}
-				keys[id] = g
-			}
-			g.ProviderKeyName = r.ProviderKeyName
-			g.add(r, pr)
-			g.addOwn(r, pr)
-		}
-		if accountProviders[r.Provider] {
-			who := r.Account()
-			id := r.Provider + "@" + who
-			g := accounts[id]
-			if g == nil {
-				g = &Group{ID: id, Provider: r.Provider, Account: who}
-				accounts[id] = g
-			}
-			g.add(r, pr)
-			g.addOwn(r, pr)
-		}
-		if r.Session != "" {
-			g := sessions[id+"|"+r.Session]
-			if g == nil {
-				g = &Group{ID: r.Session, Agent: id}
-				sessions[id+"|"+r.Session] = g
-			}
-			g.add(r, pr)
-		}
-	})
-	for _, g := range agents {
-		s.Agents = append(s.Agents, *g)
-	}
-	for _, g := range models {
-		s.Models = append(s.Models, *g)
-	}
-	byTokens := func(gs []Group) {
-		sort.SliceStable(gs, func(i, j int) bool {
-			if a, b := gs[i].Tokens(), gs[j].Tokens(); a != b {
-				return a > b
-			}
-			if gs[i].Calls != gs[j].Calls {
-				return gs[i].Calls > gs[j].Calls
-			}
-			return gs[i].ID < gs[j].ID
-		})
-	}
-	byTokens(s.Agents)
-	byTokens(s.Models)
-	for _, g := range keys {
-		s.ProviderKeys = append(s.ProviderKeys, *g)
-	}
-	byTokens(s.ProviderKeys)
-	for _, g := range accounts {
-		s.Accounts = append(s.Accounts, *g)
-	}
-	byTokens(s.Accounts)
-	for _, g := range callerKeys {
-		s.CallerKeys = append(s.CallerKeys, *g)
-	}
-	byTokens(s.CallerKeys)
-	for _, g := range sessions {
-		s.Sessions = append(s.Sessions, *g)
-	}
-	byTokens(s.Sessions)
-	s.SessionCount = len(s.Sessions)
-	return s
+	u := newSummaryRun(p, now, first, historicalKeys)
+	hosts := newSummaryHosts()
+	u.read(read, func(r Record) { hosts.note(r, u.since) })
+	keyed := u.keying(hosts)
+	counts := u.newCounts()
+	u.read(read, func(r Record) { counts.add(u, &keyed, r) })
+	return counts.summary(u)
 }
 
 // ---- last seen --------------------------------------------------------------
@@ -1109,22 +968,52 @@ func Vias(since time.Time) ViaIndex {
 	return cachedVias(since)
 }
 
+// LogVersion is a number for the log as it stands, which changes when a
+// call is written to it, and whether there is one: a synthetic log
+// (LogCalls), or one not read to its end, has none; no log yet is one. The Sessions page
+// keys an unchanged list on it.
+func LogVersion() (uint64, bool) {
+	if LogCalls != nil {
+		return 0, false
+	}
+	s := readLogSnapshot()
+	return s.version, s.info == nil || s.complete()
+}
+
 // A provider renamed since is listed by the id it has now (renames): the
 // Sessions tab named a renamed one by its old id (cybercaius).
 func buildVias(snapshot *logSnapshot, since time.Time, renames provider.Renames) *viaLists {
-	out := map[string][]Via{}
-	first := map[string]time.Time{}
-	keep := keptStrings{}
-	snapshot.visit(since, func(r Record) {
+	counted := map[string]viaAcc{}
+	countVias(snapshot.blocks, since, renames, nil, counted, keptStrings{})
+	return listedVias(&viaLists{m: map[string][]Via{}, first: map[string]time.Time{}}, counted)
+}
+
+// viaAcc is one session's lists as counted, in the order its calls first
+// named each, and when its first call was.
+type viaAcc struct {
+	vs    []Via
+	first time.Time
+}
+
+// countVias counts blocks' calls into own, a session's counts begun from
+// a copy of base's: base is never written.
+func countVias(blocks []*rowChunk, since time.Time, renames provider.Renames, base, own map[string]viaAcc, keep keptStrings) {
+	visitBlocks(blocks, since, func(r Record) {
 		if r.IsRejected() || r.IsReported() || r.Session == "" || r.Model == "" {
 			return
 		}
 		r.Provider, r.Model, r.Effort = keep.of(renames.Of(r.Provider, r.Time)), keep.of(r.Model), keep.of(r.Effort)
 		k := ReportedAs(r.Agent) + "|" + r.Session
-		vs := out[k]
-		if t, seen := first[k]; !seen || r.Time.Before(t) {
-			first[k] = r.Time
+		a, seen := own[k]
+		if !seen {
+			if b, ok := base[k]; ok {
+				a, seen = viaAcc{vs: slices.Clone(b.vs), first: b.first}, true
+			}
 		}
+		if !seen || r.Time.Before(a.first) {
+			a.first = r.Time
+		}
+		vs := a.vs
 		i := slices.IndexFunc(vs, func(v Via) bool { return v.Provider == r.Provider && v.Model == r.Model && v.Effort == r.Effort })
 		if i < 0 {
 			vs, i = append(vs, Via{Provider: r.Provider, Model: r.Model, Effort: r.Effort}), len(vs)
@@ -1138,12 +1027,24 @@ func buildVias(snapshot *logSnapshot, since time.Time, renames provider.Renames)
 		if r.Time.After(vs[i].Last) {
 			vs[i].Last = r.Time
 		}
-		out[k] = vs
+		a.vs = vs
+		own[k] = a
 	})
-	for _, vs := range out {
-		sort.SliceStable(vs, func(i, j int) bool { return vs[i].Calls > vs[j].Calls })
+}
+
+// listedVias is lists with each session counted in counted listed in
+// place of its own, the most calls first; lists itself is not written.
+func listedVias(lists *viaLists, counted map[string]viaAcc) *viaLists {
+	if len(counted) == 0 {
+		return lists
 	}
-	return &viaLists{m: out, first: first}
+	out := &viaLists{m: maps.Clone(lists.m), first: maps.Clone(lists.first)}
+	for k, a := range counted {
+		vs := slices.Clone(a.vs)
+		sort.SliceStable(vs, func(i, j int) bool { return vs[i].Calls > vs[j].Calls })
+		out.m[k], out.first[k] = vs, a.first
+	}
+	return out
 }
 
 // Saw notes a request from an agent arriving now.

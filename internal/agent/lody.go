@@ -279,7 +279,7 @@ func desktopExec(entry, link string) []string {
 			return nil
 		}
 		argv[0] = p
-	} else if st, err := os.Stat(argv[0]); err != nil || st.IsDir() || st.Mode()&0111 == 0 {
+	} else if _, err := exec.LookPath(argv[0]); err != nil {
 		// an AppImage moved or deleted since Lody wrote its entry
 		return nil
 	}

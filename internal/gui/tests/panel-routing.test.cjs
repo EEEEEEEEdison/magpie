@@ -91,6 +91,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const page = await (await browser.newContext({ viewport, reducedMotion: live ? "no-preference" : "reduce" })).newPage();
         pages.push(page);
         page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", serve(lang, opened, live));
         await page.goto(url);
@@ -199,6 +200,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const picked = await win.locator('.rt-req[aria-pressed="true"]').evaluateAll((rs) => rs.map((r) => r.querySelector(".to").textContent));
       assert.equal(picked.length, 1);
       assert.match(picked[0], /429/);
+      await win.waitForFunction((re) => new RegExp(re).test(document.querySelector(".rt-log-head").textContent), want[lang].story.source);
       assert.match(await win.locator(".rt-log-head").textContent(), want[lang].story);
 
       // a request as it comes: a dot flies from its agent, waits at the

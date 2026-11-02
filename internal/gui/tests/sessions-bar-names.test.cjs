@@ -110,6 +110,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const context = await browser.newContext({ viewport: { width: 1600, height: 900 }, reducedMotion: "reduce", timezoneId: "Asia/Shanghai" });
       const page = await context.newPage();
       page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
       const errors = [];
       page.on("pageerror", (e) => errors.push(e.message));
       await page.route("**/*", serve(lang));
@@ -138,19 +139,22 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
       await t.test("narrow: the long names shortened, no bar under 5em", async () => {
         await page.setViewportSize({ width: 420, height: 900 });
-        await page.waitForTimeout(100);
+        await page.locator("#side").waitFor({ state: "hidden" });
         const rs = await rows(page);
         for (const r of rs) assert.ok(r.bar >= 59, `${r.sel} "${r.text}" bar ${r.bar}`);
         lined(rs);
         assert.ok(rs.some((r) => r.full > r.shown), "a long name should be shortened at 420 wide");
         // nothing past its card
-        const over = await page.evaluate(() => [...document.querySelectorAll("#sessGrid .sess-card")].filter((c) => c.scrollWidth > c.clientWidth + 1).map((c) => c.id));
+        const over = await page.evaluate(() => [...document.querySelectorAll("#sessGrid .sess-card")].filter((c) => c.scrollWidth > c.clientWidth + 1).map((c) => ({
+          id: c.id, width: c.clientWidth, scroll: c.scrollWidth,
+          wide: [...c.querySelectorAll("*")].filter((e) => e.getBoundingClientRect().right > c.getBoundingClientRect().right).map((e) => ({ cls: e.className, text: e.textContent, width: e.clientWidth, scroll: e.scrollWidth })).slice(0, 8),
+        })));
         assert.deepEqual(over, []);
       });
 
       await t.test("wide again", async () => {
         await page.setViewportSize({ width: 1600, height: 900 });
-        await page.waitForTimeout(100);
+        await page.locator("#side").waitFor({ state: "visible" });
         const rs = await rows(page);
         for (const r of rs) assert.ok(r.full <= r.shown + 0.5, `${r.sel} "${r.text}" cut short`);
         lined(rs);

@@ -10,7 +10,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -215,7 +217,8 @@ func TestPluginStreamLongActiveReader(t *testing.T) {
 }
 
 func TestPluginStreamStalledClientKeepsOtherRequestsMoving(t *testing.T) {
-	sent := make(chan struct{}, 1)
+	var written atomic.Int64
+	producerDone := make(chan struct{})
 	up := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var q struct {
 			Messages []struct{ Content string }
@@ -229,18 +232,15 @@ func TestPluginStreamStalledClientKeepsOtherRequestsMoving(t *testing.T) {
 			_, _ = io.WriteString(w, `data: {"id":"small","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
 			return
 		}
+		defer close(producerDone)
 		frame := pluginReplyFrame()
 		for i := 0; i < (8<<20)/pluginReplyChunk; i++ {
-			if _, err := io.WriteString(w, frame); err != nil {
+			n, err := io.WriteString(w, frame)
+			written.Add(int64(n))
+			if err != nil {
 				return
 			}
 			w.(http.Flusher).Flush()
-			if i == (1<<20)/pluginReplyChunk-1 {
-				select {
-				case sent <- struct{}{}:
-				default:
-				}
-			}
 		}
 		<-r.Context().Done()
 	})
@@ -262,13 +262,40 @@ func TestPluginStreamStalledClientKeepsOtherRequestsMoving(t *testing.T) {
 	if err != nil || !strings.Contains(line, " 200 ") {
 		t.Fatalf("stalled client's status = %q, %v", line, err)
 	}
-	select {
-	case <-sent:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the vendor did not stream a backlog")
+	// 客户端只读状态行。缓冲容量因平台而异；直接等两端的真实写阻塞，
+	// 不要求 vendor 在正常信用回压前仍能写完任意指定的字节数。
+	waitBacklog := func() {
+		t.Helper()
+		deadline := time.NewTimer(5 * time.Second)
+		defer deadline.Stop()
+		buf := make([]byte, 1<<20)
+		for {
+			select {
+			case <-producerDone:
+				t.Fatal("首请求在回压断言前已经结束")
+			case <-deadline.C:
+				t.Fatalf("两端未到达 TCP 写回压屏障，vendor 已写 %d 字节\n%s", written.Load(), buf)
+			default:
+			}
+			n := runtime.Stack(buf, true)
+			if n == len(buf) {
+				t.Fatal("回压屏障的 goroutine 栈被截断")
+			}
+			vendorBlocked, gatewayBlocked := false, false
+			for _, stack := range strings.Split(string(buf[:n]), "\n\n") {
+				if !strings.Contains(stack, "[IO wait") || !strings.Contains(stack, "net.(*conn).Write(") {
+					continue
+				}
+				vendorBlocked = vendorBlocked || strings.Contains(stack, "TestPluginStreamStalledClientKeepsOtherRequestsMoving.func1(")
+				gatewayBlocked = gatewayBlocked || strings.Contains(stack, "gateway.(*Server).passthrough(")
+			}
+			if vendorBlocked && gatewayBlocked {
+				return
+			}
+			runtime.Gosched()
+		}
 	}
-	// Only the status line was consumed. Let the finite socket buffers fill.
-	time.Sleep(250 * time.Millisecond)
+	waitBacklog()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	second := strings.Replace(pluginReplyRequest(model, false), "local fixture", "second fixture", 1)
@@ -287,5 +314,6 @@ func TestPluginStreamStalledClientKeepsOtherRequestsMoving(t *testing.T) {
 	if err != nil || res.StatusCode != http.StatusOK || !strings.Contains(string(b), `"content":"ok"`) {
 		t.Fatalf("second plugin reply = %d %q, %v", res.StatusCode, b, err)
 	}
+	waitBacklog()
 	t.Logf("second plugin request completed in %v while the first client stopped reading", time.Since(start))
 }

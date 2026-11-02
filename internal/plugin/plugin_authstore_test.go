@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,6 +82,114 @@ func TestStopWithoutRenewalIsQuick(t *testing.T) {
 	Restart()
 	if d := time.Since(start); d > stopWait+time.Second {
 		t.Fatalf("stopping took %v", d)
+	}
+}
+
+// A killed host is gone when stop returns: its Wait has finished and the
+// host has released its calls, not merely been told to die. Otherwise Settle
+// returns while the child still holds the test's folders (#2702).
+func TestStopWaitsForAKilledHost(t *testing.T) {
+	sandbox(t)
+	cmd := bunCommand(context.Background(), os.Getenv("MAGPIE_BUN"), t.TempDir(), "-e", "setInterval(() => {}, 1000)")
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	hctx, cancel := context.WithCancel(context.Background())
+	h := &host{
+		cmd: cmd, in: in, calls: map[int64]*call{}, dead: make(chan struct{}),
+		slots: make(chan struct{}, callLimit()), streams: make(chan struct{}, streamLimit()),
+		out: make(chan writeReq, callLimit()), ctrl: map[int64]*ctrl{},
+		ctrlWake: make(chan struct{}, 1), ctx: hctx, cancel: cancel,
+	}
+	waiting := make(chan struct{})
+	release := make(chan struct{})
+	h.mu.Lock() // hold fail's cleanup after Wait, as a slow pipe close can
+	go func() {
+		err := cmd.Wait()
+		if err == nil {
+			err = io.EOF
+		}
+		close(waiting)
+		h.fail(fmt.Errorf("the plugin host quit: %v", err))
+		close(release)
+	}()
+	t.Cleanup(func() {
+		h.stop()
+		<-release
+	})
+	was := stopWait
+	stopWait = 20 * time.Millisecond
+	t.Cleanup(func() { stopWait = was })
+	stopped := make(chan struct{})
+	go func() {
+		h.stop()
+		close(stopped)
+	}()
+	<-waiting
+	select {
+	case <-stopped:
+		h.mu.Unlock()
+		<-release
+		t.Fatal("stop returned before the killed host's Wait and cleanup finished")
+	default:
+	}
+	h.mu.Unlock()
+	<-stopped
+	<-release
+}
+
+// 提前报错只唤醒调用方；stop 仍须等待故障清理和子进程退出。
+func TestStopWaitsAfterHostFailure(t *testing.T) {
+	sandbox(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	h, err := get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release, failed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	was := h.cancel
+	h.cancel = func() {
+		close(entered)
+		<-release
+		was()
+	}
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(func() {
+		unblock()
+		h.stop()
+		<-failed
+	})
+	go func() {
+		h.fail(errHostGone)
+		close(failed)
+	}()
+	<-entered
+	stopped := make(chan struct{})
+	go func() {
+		h.stop()
+		close(stopped)
+	}()
+	// 故障清理被显式挡住；这个窗口只检查 stop 没有提前返回。
+	select {
+	case <-stopped:
+		t.Error("stop 在故障清理和子进程退出前返回")
+	case <-time.After(100 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case <-stopped:
+	case <-ctx.Done():
+		t.Fatal("故障清理放行后 stop 没有结束")
+	}
+	<-failed
+	if h.cmd.ProcessState == nil {
+		t.Error("stop 返回时尚未 Wait 子进程")
 	}
 }
 

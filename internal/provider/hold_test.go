@@ -86,6 +86,63 @@ func TestHoldKeptForTheNextRequest(t *testing.T) {
 	}
 }
 
+// The environment stamp follows changes made inside this process, not only
+// a new test process. In particular, os.Clearenv must not read as the same
+// environment as the one just cleared. Restoring every variable is enough:
+// Windows need not restore the environment block's order.
+func TestEnvironSumFollowsEveryChange(t *testing.T) {
+	if got := environSum(); got == 0 || got != environSum() {
+		t.Fatalf("an unchanged environment: %x, then %x", got, environSum())
+	}
+	before := environSum()
+	t.Setenv("MAGPIE_ENVIRON_STAMP_TEST", "one")
+	set := environSum()
+	if set == before {
+		t.Fatal("Setenv left the environment stamp unchanged")
+	}
+	if err := os.Unsetenv("MAGPIE_ENVIRON_STAMP_TEST"); err != nil {
+		t.Fatal(err)
+	}
+	if got := environSum(); got != before {
+		t.Fatalf("Unsetenv did not restore the stamp: %x, want %x", got, before)
+	}
+
+	t.Setenv("MAGPIE_ENVIRON_STAMP_TEST", "one")
+	saved := os.Environ()
+	restore := func() {
+		for _, kv := range saved {
+			key, value, _ := strings.Cut(kv, "=")
+			if err := os.Setenv(key, value); err != nil {
+				t.Errorf("restore %s: %v", key, err)
+			}
+		}
+	}
+	os.Clearenv()
+	cleared := environSum()
+	restore()
+	if cleared == 0 || cleared == set {
+		t.Fatalf("Clearenv: stamp %x, before %x", cleared, set)
+	}
+	if got := environSum(); got == 0 || got != environSum() {
+		t.Fatalf("restored environment is not stable: %x, then %x", got, environSum())
+	}
+	if got := os.Getenv("MAGPIE_ENVIRON_STAMP_TEST"); got != "one" {
+		t.Fatalf("restored MAGPIE_ENVIRON_STAMP_TEST = %q, want one", got)
+	}
+}
+
+// A failed environment read is unknown, not the empty environment. Two
+// unknown stamps don't match, or a rebuild could be cached from a failed
+// read and reused once the environment can be read again.
+func TestEnvironmentStampUnknownDoesNotMatch(t *testing.T) {
+	if sameEnvironment(0, 0) {
+		t.Fatal("two unknown environments matched")
+	}
+	if !sameEnvironment(7, 7) || sameEnvironment(7, 8) {
+		t.Fatal("known environments didn't compare by their hash")
+	}
+}
+
 // What is held across requests is built again when anything it was built
 // from may have moved: a write that only tells filememo (settings.Save, an
 // account's file), the providers' or the settings' file written by

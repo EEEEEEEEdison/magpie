@@ -88,6 +88,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       t.after(() => browser.close());
       const page = await (await browser.newContext({ viewport: { width: 1000, height: 740 }, reducedMotion: "reduce" })).newPage();
       page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
       const errors = [], posts = [], requests = [];
       page.on("pageerror", (e) => errors.push(e.message));
       await page.route("**/*", fixture(lang, "light", posts, requests));
@@ -132,7 +133,15 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.locator('nav [data-view="usage"]').click();
       await page.locator("#usageKeys .row").first().waitFor();
       assert.deepEqual(await page.locator("#usageKeys .name").allTextContents(), ["Server", "Laptop"]);
+      assert.deepEqual(await page.locator("#usageKeys .num b").allTextContents(), ["2.2K", "1.1K"]);
+      // 网关密钥的合计也跟随读者的显式缓存选择，费用不变。
+      await page.locator("#stats .kpi-pick").click();
+      await page.locator(".proto-menu:visible .pm-item").nth(1).click();
       assert.deepEqual(await page.locator("#usageKeys .num b").allTextContents(), ["3.2K", "1.1K"]);
+      assert.deepEqual(await page.locator("#usageKeys .cost").allTextContents(), ["≈$0.400", "≈$0.200"]);
+      await page.locator("#stats .kpi-pick").click();
+      await page.locator(".proto-menu:visible .pm-item").nth(0).click();
+      assert.deepEqual(await page.locator("#usageKeys .num b").allTextContents(), ["2.2K", "1.1K"]);
       assert.deepEqual(await page.locator("#usageKeys .cost").allTextContents(), ["≈$0.400", "≈$0.200"]);
       assert(!/Workspace|Personal/.test(await page.locator("#usageKeys").textContent()));
       await page.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();

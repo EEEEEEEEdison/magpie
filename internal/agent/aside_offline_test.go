@@ -49,7 +49,8 @@ func TestAsideOfflineDisconnectRestoresWithoutDaemon(t *testing.T) {
 	if proc.FindTool(a.Bin) != "" {
 		t.Fatal("fixture must have no Aside executable")
 	}
-	missing := &Agent{ID: "dsh", Name: "Native fixture", Bin: "magpie-test-missing-native", Dir: a.Dir, Path: a.Path, Native: a.Native}
+	// Hermes 的目录只供 CLI 使用；Windows 上 dsh 的共享目录应保持未知。
+	missing := &Agent{ID: "hermes", Name: "Native fixture", Bin: "magpie-test-missing-native", Dir: a.Dir, Path: a.Path, Native: a.Native}
 	if !missing.CLIMissing() {
 		t.Fatal("native fixture must report missing CLI")
 	}

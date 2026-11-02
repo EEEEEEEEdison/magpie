@@ -74,8 +74,10 @@ func desktopCodeFiles(files []file) []file {
 	if desktopTitles.names == nil || time.Since(desktopTitles.at) >= desktopTitlesHeld {
 		scanDesktopTitles()
 	}
+	owned := len(desktopTitles.names) > 0
 	for i := range files {
 		f := &files[i]
+		f.noDesktopApp = owned
 		id := strings.TrimPrefix(f.key, "claude:")
 		if _, owned := desktopTitles.names[id]; owned {
 			f.agent, f.key = "claude-desktop", "claude-desktop:"+id

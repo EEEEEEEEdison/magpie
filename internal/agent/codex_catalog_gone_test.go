@@ -137,6 +137,67 @@ func TestCodexOwnCatalogGoneNotPutBack(t *testing.T) {
 	}
 }
 
+// 本机路径的不同拼写都指向同一份列表；发行版的路径只按其原生拼写判断。
+// 另一个目录即使有同名文件，也不归 magpie 所有。
+func TestCodexCatalogSpellings(t *testing.T) {
+	for _, where := range []string{"local", "distro"} {
+		for _, filename := range []string{"magpie-models.json", "magpie-desktop-models.json"} {
+			for _, spelling := range []string{"native", "slash", "relative", "relative dot", "distro", "other folder", "other distro"} {
+				t.Run(where+"/"+filename+"/"+spelling, func(t *testing.T) {
+					home, read := codexHome(t, "", "model = \"gpt-5.5\"\n")
+					at := here(home)
+					if where == "distro" {
+						at.id = "codex@wsl:fixture"
+						at.spell = func(path string) string {
+							rel, err := filepath.Rel(home, path)
+							if err != nil {
+								t.Fatal(err)
+							}
+							return "/home/fixture/" + filepath.ToSlash(rel)
+						}
+					}
+					path := filepath.Join(home, ".codex", filename)
+					var value string
+					owned := where == "local"
+					switch spelling {
+					case "native":
+						value = path
+					case "slash":
+						value = filepath.ToSlash(path)
+					case "relative":
+						value = filename
+					case "relative dot":
+						value = "./" + filename
+					case "distro":
+						value, owned = "/home/fixture/.codex/"+filename, where == "distro"
+					case "other folder":
+						value, owned = filepath.Join(home, "other", filename), false
+					case "other distro":
+						value, owned = "/home/someone/.codex/"+filename, false
+					}
+					cx := codexIn(at)
+					if err := edit.SetTOMLTop(cx.Path, edit.KV{Path: "model_catalog_json", Value: value}); err != nil {
+						t.Fatal(err)
+					}
+					if err := cx.Sync(); err != nil {
+						t.Fatal(err)
+					}
+					want := value
+					if owned {
+						want = ""
+					}
+					if got, _ := edit.GetTOMLTop(cx.Path, "model_catalog_json"); got != want {
+						t.Fatalf("catalog = %q, want %q:\n%s", got, want, read())
+					}
+					if got, _ := edit.GetTOMLTop(cx.Path, "model"); got != "gpt-5.5" {
+						t.Fatalf("the user's model changed:\n%s", read())
+					}
+				})
+			}
+		}
+	}
+}
+
 // A config an older magpie left naming its removed list is mended at the
 // next start (Sync), with no reconnect: the key taken out while magpie is
 // not Codex's provider, the list written again while it is.

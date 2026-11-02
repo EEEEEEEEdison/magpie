@@ -8,6 +8,7 @@ import (
 	"slices"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/yetone/magpie/internal/sessions"
 )
@@ -61,10 +62,9 @@ func TestCodexEffortRowsAreTheWholeLedgers(t *testing.T) {
 	}
 }
 
-// A build of CodexModelEffort takes no more for a gateway call no Codex
-// session file's call can be matched to than a visit of the log does: it
-// made every such call a record, a packed row and a priced row, and over
-// ~720k calls that was most of the start's peak (#2776).
+// CodexModelEffort 的筛选不能为每条无关调用保留 Record 或定价行；
+// ~720k 条调用曾因此占去启动的大部分内存（#2776）。消费结果走完整路径，
+// 字节预算只测筛选，不把会话发现、账号及价格读取的固定开销算作逐行开销。
 func TestCodexModelEffortLetsUnrelatedCallsGo(t *testing.T) {
 	now, _ := effortFixture(t)
 	Append(Record{Time: now.Add(-time.Hour), Agent: "codex", Provider: "openai", Model: "m", Input: 20, Output: 3, Status: 200, ResponseID: "resp-1", Session: "main-a"})
@@ -88,11 +88,16 @@ func TestCodexModelEffortLetsUnrelatedCallsGo(t *testing.T) {
 	if got := CodexModelEffort(All); len(got["main-a"]) != 1 {
 		t.Fatalf("main-a's consumption: %+v", got)
 	}
-	visit := measure(func() { Visit(time.Time{}, func(Record) {}) })
-	build := measure(func() { CodexModelEffort(All) })
-	t.Logf("a build allocated %d bytes, a visit %d", build, visit)
-	// the visit itself, the thread's own rows and the sets of its ids
-	if build > visit+visit/2+256<<10 {
-		t.Fatalf("a build over %d unrelated calls allocated %d bytes, a visit of the log %d", calls, build, visit)
+	logs := codexCalls(time.Time{})
+	// 保持每条调用一条 packedRow 的原上界；完整消费已在上面验证。
+	rows := uint64(calls+1) * uint64(unsafe.Sizeof(packedRow{}))
+	var matched []Record
+	scan := measure(func() { matched = matchingRecords(time.Time{}, logs) })
+	t.Logf("matching allocated %d bytes, the log's rows are %d", scan, rows)
+	if scan > rows {
+		t.Fatalf("matching over %d unrelated calls allocated %d bytes, a packed row each is %d", calls, scan, rows)
+	}
+	if len(matched) != 1 || matched[0].ResponseID != "resp-1" {
+		t.Fatalf("unrelated calls kept or the thread's call lost: %+v", matched)
 	}
 }

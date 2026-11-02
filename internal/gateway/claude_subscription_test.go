@@ -424,9 +424,7 @@ func TestSweepBridgeProjectsTakesOnlyTheBridgesFolders(t *testing.T) {
 	}
 	real = evalSymlinks(real) // what Claude Code names a folder after
 	link := filepath.Join(base, "link")
-	if err := os.Symlink(filepath.Join(base, "real"), link); err != nil {
-		t.Fatal(err)
-	}
+	testenv.FolderLink(t, filepath.Join(base, "real"), link)
 	claudeDir := filepath.Join(base, "claude")
 	projects := filepath.Join(claudeDir, "projects")
 	gone := []string{

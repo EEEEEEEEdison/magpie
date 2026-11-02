@@ -4,9 +4,8 @@
 // by a chevron on the heading, and stay folded across a reload; a click on
 // a heading leaves the heading where it is. The tokens tile's label is a
 // pop-up (the app's own menu) of how the totals are counted: with the cache
-// read and written counted in, which is what the totals count by default,
-// or without the cache, in the tile, the chart and every row; kept across a
-// reload. And on the Requests
+// 默认只计输入和输出；选择含缓存后，卡片、图表和各行也计缓存读写。
+// 显式选择跨重载保留。And on the Requests
 // tab the Tokens card's line (in · out · cache) wraps between its parts
 // rather than cutting the cache off in a wide window's five cards (缓存
 // 879…). Every language, 1100 and 420 wide (the Requests card at 1500 too);
@@ -94,6 +93,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           const open = async () => {
             const p = await ctx.newPage();
             p.setDefaultTimeout(5000);
+            p.setDefaultNavigationTimeout(60000);
             p.on("pageerror", (e) => errors.push(e.message));
             await p.route("**/*", server(lang));
             await p.goto("http://magpie.test/");
@@ -156,15 +156,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert.equal(await p.locator("#usageAccounts .row.stat").count(), 2);
           assert.equal(await shown("#usageAgents"), false);
 
-          // the tokens tile: with the cache in, which is how the totals
-          // count them by default
+          // 默认不含缓存；菜单选择仍须影响卡片、图表和各行。
           const tile = p.locator("#stats .kpi").first();
           const pick = tile.locator(".kpi-pick");
           const fmt = (n) => p.evaluate((n) => fmtN(n), n);
           const io = USAGE.input + USAGE.output, all = io + USAGE.cache_read;
-          assert.equal((await tile.locator("b").textContent()).trim(), await fmt(all));
-          assert.equal((await pick.textContent()).trim(), w.withCache);
-          assert.equal(await tile.locator("small.parts > span").count(), 3, "in, out and the cache");
+          assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
+          assert.equal((await pick.textContent()).trim(), w.tokens);
+          assert.equal(await tile.locator("small.parts > span").count(), 2, "in and out by default");
           assert.equal(await p.locator("#usagePane select").count(), 0, "no native select");
           // the pop-up takes the label's room and the line under it reads as
           // the next tile's does: not the label's small capitals
@@ -183,33 +182,33 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await menu.waitFor();
           assert.equal((await menu.locator(".pm-head").textContent()).trim(), w.head);
           assert.deepEqual(await menu.locator(".pm-name").allTextContents(), [w.without, w.with]);
-          // the menu says which way the totals count: the cache, at first
-          assert.deepEqual(await menu.locator(".pm-item.on .pm-name").allTextContents(), [w.with], "the cache is the way picked");
-          await menu.locator(".pm-item").nth(0).click();
+          assert.deepEqual(await menu.locator(".pm-item.on .pm-name").allTextContents(), [w.without], "without cache is the default");
+          await menu.locator(".pm-item").nth(1).click();
           await p.waitForTimeout(150);
           assert.equal(await p.locator("#view-usage").evaluate((v) => v.scrollTop), vt, "the pick moved the page");
-          // without the cache: the tile, its label and line, the rows
-          assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
-          assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), w.tokens);
-          assert.equal(await tile.locator("small.parts > span").count(), 2, "in and out");
+          assert.equal((await tile.locator("b").textContent()).trim(), await fmt(all));
+          assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), w.withCache);
+          assert.equal(await tile.locator("small.parts > span").count(), 3, "in, out and the cache");
+          assert.equal(await p.evaluate(() => localStorage.getItem("magpie.usageWithCache")), "1");
           const acct = p.locator('#usageAccounts .row.stat[data-id="acct-a"] .num b');
-          assert.equal((await acct.textContent()).trim(), await fmt(5500000));
-          // kept across a reload
+          assert.equal((await acct.textContent()).trim(), await fmt(405500000));
           await p.close();
           p = await open();
-          assert.equal((await p.locator("#stats .kpi b").first().textContent()).trim(), await fmt(io), "the choice is kept");
-          // and back to the cache
+          assert.equal((await p.locator("#stats .kpi b").first().textContent()).trim(), await fmt(all), "explicit with-cache choice survives reload");
           const pick2 = p.locator("#stats .kpi .kpi-pick");
           await reader.inView(p, pick2);
           await pick2.click();
-          // the reader's own pick is the one marked, after the reload too
           const menu2 = p.locator(".proto-menu:visible");
           await menu2.waitFor();
-          assert.deepEqual(await menu2.locator(".pm-item.on .pm-name").allTextContents(), [w.without], "the reader's pick is the way marked");
-          await p.locator(".proto-menu:visible .pm-item").nth(1).click();
+          assert.deepEqual(await menu2.locator(".pm-item.on .pm-name").allTextContents(), [w.with], "the reader's pick is the way marked");
+          await menu2.locator(".pm-item").nth(0).click();
           await p.waitForTimeout(150);
-          assert.equal((await p.locator("#stats .kpi b").first().textContent()).trim(), await fmt(all));
-          assert.equal((await p.locator('#usageAccounts .row.stat[data-id="acct-a"] .num b').textContent()).trim(), await fmt(4000000 + 1500000 + 400000000));
+          assert.equal((await p.locator("#stats .kpi b").first().textContent()).trim(), await fmt(io));
+          assert.equal((await p.locator('#usageAccounts .row.stat[data-id="acct-a"] .num b').textContent()).trim(), await fmt(5500000));
+          assert.equal(await p.evaluate(() => localStorage.getItem("magpie.usageWithCache")), "0");
+          await p.close();
+          p = await open();
+          assert.equal((await p.locator("#stats .kpi b").first().textContent()).trim(), await fmt(io), "explicit without-cache choice survives reload");
           // nothing in a tile cut or spilling out of the window
           const spill = await p.locator("#stats .kpi").evaluateAll((ks) => ks.filter((k) => k.scrollWidth > k.clientWidth + 1).map((k) => k.innerText.replace(/\s+/g, " ") + " " + k.scrollWidth + "/" + k.clientWidth));
           assert.deepEqual(spill, [], "a tile spills");
@@ -224,6 +223,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           t.after(() => ctx.close());
           const p = await ctx.newPage();
           p.setDefaultTimeout(5000);
+          p.setDefaultNavigationTimeout(60000);
           p.on("pageerror", (e) => errors.push(e.message));
           await p.route("**/*", server(lang));
           await p.goto("http://magpie.test/");

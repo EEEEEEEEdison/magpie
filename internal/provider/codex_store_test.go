@@ -113,6 +113,16 @@ func (k *fakeKeychain) item(account string) []byte {
 	return k.items[account]
 }
 
+// codexOnMacKeychain selects the system keychain, not the encrypted auth
+// storage Windows defaults keyring and auto to.
+func codexOnMacKeychain(t *testing.T, k *fakeKeychain) {
+	t.Helper()
+	was := secretAuthStorageDefault
+	secretAuthStorageDefault = false
+	t.Cleanup(func() { secretAuthStorageDefault = was })
+	codexKeychain, codexKeychainHere = k, true // isolate puts them back
+}
+
 // codexInKeychain moves signIn's auth.json into a fake keychain item, as
 // Codex 0.162 does with cli_auth_credentials_store = store: the item on
 // one line, with a field magpie doesn't know, and auth.json gone.
@@ -130,7 +140,7 @@ func codexInKeychain(t *testing.T, home, store string) (*fakeKeychain, string) {
 	os.Remove(filepath.Join(dir, "auth.json"))
 	os.WriteFile(filepath.Join(dir, "config.toml"), []byte("cli_auth_credentials_store = \""+store+"\"\n"), 0o600)
 	k := &fakeKeychain{items: map[string][]byte{codexKeychainAccount(dir): one}}
-	codexKeychain, codexKeychainHere = k, true // isolate puts them back
+	codexOnMacKeychain(t, k)
 	resetCodexKeychain()
 	return k, codexKeychainAccount(dir)
 }
@@ -199,7 +209,7 @@ func TestCodexSignedInInKeychain(t *testing.T) {
 func TestCodexKeychainFallback(t *testing.T) {
 	home := signIn(t)
 	dir := filepath.Join(home, ".codex")
-	codexKeychain, codexKeychainHere = &fakeKeychain{}, true
+	codexOnMacKeychain(t, &fakeKeychain{})
 	os.WriteFile(filepath.Join(dir, "config.toml"), []byte("cli_auth_credentials_store = \"auto\"\n"), 0o600)
 	if _, ok := codexAccount(home); !ok {
 		t.Fatal("auto, no item: auth.json wasn't read")
@@ -580,7 +590,7 @@ func TestCodexSignInKnown(t *testing.T) {
 	os.Remove(auth)
 	check("logged out", false, true)
 
-	codexKeychain, codexKeychainHere = &fakeKeychain{}, true
+	codexOnMacKeychain(t, &fakeKeychain{})
 	os.WriteFile(filepath.Join(dir, "config.toml"), []byte("cli_auth_credentials_store = \"keyring\"\n"), 0o600)
 	resetCodexKeychain()
 	check("keyring, no item", false, true)

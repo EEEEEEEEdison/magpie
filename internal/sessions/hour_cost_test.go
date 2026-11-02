@@ -1,28 +1,19 @@
 package sessions
 
 import (
-	"math"
 	"testing"
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
 )
 
-// A session's tokens are billed at the price of the window each hour they were
-// spent in is in (DeepSeek's peak hours), and what no hour holds at the base
-// price; taking a message back takes back its hour too.
-func TestHourCostBillsEachHourItsWindowsPrice(t *testing.T) {
-	where, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatalf("Asia/Shanghai: %v", err)
-	}
-	peak := catalog.Price{Input: 0.5, Output: 2, TimeZone: "Asia/Shanghai",
-		TimeTiers: []catalog.TimeTier{
-			{Days: []int{1, 2, 3, 4, 5}, From: "09:00", To: "12:00", Input: 1, Output: 4},
-			{Days: []int{1, 2, 3, 4, 5}, From: "14:00", To: "18:00", Input: 1, Output: 4},
-		}}
-	monday := time.Date(2026, 10, 19, 10, 30, 0, 0, where)
-	evening := time.Date(2026, 10, 19, 20, 30, 0, 0, where)
+// A session's tokens are billed at the price of each hour they were spent in
+// (DeepSeek's peak hours), and what no hour holds at the base price; taking a
+// message back takes back its hour too.
+func TestHourCostBillsEachHourItsPeakPrice(t *testing.T) {
+	peak := catalog.Price{Input: 0.5, Output: 2, Peak: catalog.PeakWeekdays}
+	monday := time.Date(2026, 10, 19, 2, 30, 0, 0, time.UTC)
+	evening := time.Date(2026, 10, 19, 20, 30, 0, 0, time.UTC)
 	if monday.Weekday() != time.Monday {
 		t.Fatalf("2026-10-19 is a %s", monday.Weekday())
 	}
@@ -54,38 +45,25 @@ func TestHourCostBillsEachHourItsWindowsPrice(t *testing.T) {
 	}
 }
 
-// A zone whose offset is not a whole hour puts a window's end inside an
-// hour, and that hour is billed by the minutes it spends on each side
-// rather than wholly at the price of one of them.
-func TestHourCostSplitsAnHourOnAHalfHourZone(t *testing.T) {
-	if _, err := time.LoadLocation("Asia/Kolkata"); err != nil {
-		t.Skipf("Asia/Kolkata: %v", err)
+// 多次短请求的小时总量不能被当成一次长上下文请求，未知时间部分也用基础档。
+func TestHourCostDoesNotTierTheAggregate(t *testing.T) {
+	at := time.Date(2026, 10, 19, 2, 30, 0, 0, time.UTC)
+	price := catalog.Price{Input: 2, Output: 8, CacheRead: 0.5, CacheWrite: 2.5, CacheWrite1h: 4,
+		Peak: catalog.PeakWeekdays, Tiers: []catalog.Tier{{Above: 100_000, Input: 20, Output: 80, CacheRead: 5, CacheWrite: 25,
+			From: "2026-10-19", To: "2026-10-19"}}}
+	s := &state{}
+	one := Tokens{Input: 25_000, Output: 10_000, CacheRead: 25_000, CacheWrite: 10_000, CacheWrite1h: 5_000}
+	for i := 0; i < 20; i++ {
+		s.useAt(at, "sol", one)
 	}
-	// 09:00-12:00 Kolkata is 03:30-06:30 UTC: the hour keyed 03 holds half
-	// an hour off-peak and half on-peak. Billed wholly at the hour's start
-	// it would be off-peak; at its end, on-peak.
-	peak := catalog.Price{Input: 1, Output: 4, TimeZone: "Asia/Kolkata",
-		TimeTiers: []catalog.TimeTier{{From: "09:00", To: "12:00", Input: 2, Output: 8}}}
-	one := Tokens{Input: 1_000_000, Output: 1_000_000}
-	hours := map[string]Tokens{
-		hourOf(time.Date(2026, 10, 20, 3, 0, 0, 0, time.UTC)): one, // half off, half on
+	if got := hourCost(s.hoursOf()["sol"], s.Models.of("sol"), price); got != 7 {
+		t.Errorf("20 small calls in a peak hour cost %v, want 7", got)
 	}
-	// a million of each: off-peak an hour costs 1+4 = 5, peak 2+8 = 10.
-	// Half and half is half of each: 2.5+5 = 7.5. An implementation that
-	// bills the hour whole at either end's price gives 5 or 10.
-	got := hourCost(hours, Tokens{Input: 1_000_000, Output: 1_000_000}, peak)
-	if math.Abs(got-7.5) > 1e-9 {
-		t.Errorf("an hour half either side of a window's start cost %v, want 7.5", got)
+	if got := hourCost(nil, s.Models.of("sol"), price); got != 3.5 {
+		t.Errorf("aggregate without an hour costs %v, want 3.5", got)
 	}
-	// the hour wholly inside the window keeps the peak price whole, so a
-	// zone on the hour bills what it always did
-	inside := map[string]Tokens{hourOf(time.Date(2026, 10, 20, 4, 0, 0, 0, time.UTC)): one}
-	if got := hourCost(inside, Tokens{Input: 1_000_000, Output: 1_000_000}, peak); math.Abs(got-10) > 1e-9 {
-		t.Errorf("an hour wholly at peak cost %v, want 10", got)
-	}
-	// and an hour wholly outside it the base price
-	outside := map[string]Tokens{hourOf(time.Date(2026, 10, 20, 1, 0, 0, 0, time.UTC)): one}
-	if got := hourCost(outside, Tokens{Input: 1_000_000, Output: 1_000_000}, peak); math.Abs(got-5) > 1e-9 {
-		t.Errorf("an hour wholly off peak cost %v, want 5", got)
+	s.use("2026-10-19", "sol", Tokens{Input: 1_000_000})
+	if got := hourCost(s.hoursOf()["sol"], s.Models.of("sol"), price); got != 9 {
+		t.Errorf("peak hour plus unknown-hour input costs %v, want 9", got)
 	}
 }

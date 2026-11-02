@@ -125,9 +125,12 @@ let usageRead = 0;
 async function loadUsage(asked) {
   renderUsageTab();
   renderUsageEvery(); // the refresh's tooltip says what it reads on this tab
-  if (asked) quotasOpened();
+  // only the Overview shows the allowances: the page opened on another
+  // tab asks no vendor, nor reads their history, beside its own read and
+  // the page's way in (#4064)
+  if (asked && usageTab === "usage") quotasOpened();
   if (usageTab === "sessions") return loadSessions();
-  if (usageTab === "requests") return loadLedger();
+  if (usageTab === "requests") return loadLedger(asked && ledger && ledgerWant === ledParams({ offset: ledOffset, limit: LED_PAGE }) ? "open" : false);
   if (usageTab === "context") return window.loadContext?.();
   renderUsageLoading();
   if (!asked) loadQuotas();
@@ -161,7 +164,8 @@ function renderPeriod(loading) {
   if (range) b.title = t("Days picked: {days}", { days: rangeName(range) });
   b.onclick = () => {
     if (b.classList.contains("open")) return closeProtoMenu();
-    openRangeMenu(b, range, (from, to) => {
+    // on a phone the strip is hidden behind the head's menu, which opens it
+    openRangeMenu(b.offsetParent ? b : $("#usageRangeMenu"), range, (from, to) => {
       for (const x of seg.querySelectorAll(".opt")) x.classList.toggle("on", x === b);
       b.lastChild.textContent = rangeName({ from, to });
       b.title = t("Days picked: {days}", { days: rangeName({ from, to }) });
@@ -172,6 +176,39 @@ function renderPeriod(loading) {
   };
   seg.append(b);
   slide(seg, "period");
+}
+
+// On a phone the head's period, Sessions' range and Context's days are
+// one menu, "7 days ⌄", over whichever of them the tab shows, so the tabs
+// are the head's one strip there (app.css hides the strips). It follows
+// that strip as each tab redraws its own, and a pick clicks the strip's
+// option, so every choice keeps the one handler it has.
+{
+  const b = $("#usageRangeMenu");
+  const strips = ["#period", "#sessRange", "#ctxRange"].map((q) => $(q));
+  const shown = () => {
+    const box = strips.find((x) => !x.hidden);
+    const seg = box && (box.matches(".segs") ? box : box.querySelector(".segs"));
+    return seg ? [...seg.querySelectorAll(":scope > .opt")] : [];
+  };
+  const draw = () => {
+    const opts = shown();
+    b.hidden = !opts.length;
+    if (!opts.length) return;
+    const on = opts.find((o) => o.classList.contains("on")) || opts[0];
+    b.disabled = opts.every((o) => o.disabled);
+    b.replaceChildren(el("span", "", on.textContent.trim()), svg(CHEV, 11, 1.8));
+  };
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    const opts = shown();
+    const on = opts.findIndex((o) => o.classList.contains("on"));
+    openProtoMenu(b, opts.map((o, i) => ({ v: String(i), name: o.textContent.trim(), literalName: true, note: "" })), String(on), (v) => opts[+v]?.click(), "Time range", "sess-menu");
+  };
+  const watch = new MutationObserver(draw);
+  for (const x of strips) watch.observe(x, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["class", "hidden", "disabled"] });
+  draw();
 }
 
 function pickPeriod(id) {
@@ -321,6 +358,7 @@ function renderUsageLoading() {
   // still there while the period loads (#809, Hu9956: 用量界面红框这行会延迟几秒才会出现)
   for (const h of $$("#view-usage .row-head:not(#quotaHead, .plugin-panel > .row-head)")) h.hidden = true;
   $("#usageNote").textContent = "";
+  $("#usageClear").hidden = true;
 }
 
 // costHead is the Usage head's sum: the cost at effective prices, or, when
@@ -386,7 +424,7 @@ function keysSumTip(subs) {
 function quotaWho(q) {
   const out = [];
   if (q.alias) {
-    const a = el("span", "user quota-alias", q.alias);
+    const a = el("span", "user quota-alias" + (q.named ? " own-name" : ""), q.alias);
     a.title = q.user ? q.alias + " · " + q.user : q.alias;
     out.push(a);
     if (q.user) {
@@ -405,8 +443,46 @@ function quotaWho(q) {
     out.push(s);
   } else if (q.seat) out[0].title += "\n" + t("The same seat as the key plan {name}, shown once, on this account's card", { name: q.seat });
   if (q.sharedKeys) out.push(sharedKeysNote(q));
-  if (q.user || q.alias) out.push(hideAccounts.eye(q.user || q.alias));
+  if (q.user || q.alias) out.push(hideAccounts.eye(q.user || q.alias, q.provider));
   return out;
+}
+
+// quotaWarm is Warm up on the card of a Codex or Claude account whose
+// 5-hour window isn't running (01huadalang on Discord, who looked here, not
+// in Settings): the request Settings › Usage's Warm up now sends (POST
+// /api/warm-now {agent, user}), for this account. Idle is as the
+// warm-up tells it (idle in codex_warmup.go): nothing used and its reset a
+// whole window away, or gone by; or not read at all, which a Claude account
+// never used is, while a Codex account with no 5-hour window has none to
+// start. One just warmed reads the same for warmSlack, so it waits that out.
+const quotaWarmed = new Map();
+function quotaWarm(q) {
+  const agent = q.provider, user = q.user, key = agent + "\n" + user?.toLowerCase();
+  if (!user || q.error || !(state.settings?.[agent + "Users"] || []).some((u) => u.toLowerCase() === user.toLowerCase())) return null;
+  const w = q.windows?.find((x) => x.name === "5 hours"), now = Date.now(), at = w?.resetsAt ? Date.parse(w.resetsAt) : 0;
+  if (w ? !(at && at <= now) && (w.used > 0 || at && at - now < 5 * 3600e3 - 600e3) : agent !== "claude") return null;
+  const busy = quotaWarmed.get(key);
+  if (busy && busy !== true && now - busy < 600e3) return null;
+  const b = el("button", "text acct-warm" + (busy === true ? " busy" : ""), t("Warm up"));
+  b.type = "button";
+  b.disabled = busy === true;
+  b.title = t("The 5-hour window hasn't started: one tiny request starts it now");
+  b.onclick = async (e) => {
+    e.stopPropagation();
+    quotaWarmed.set(key, true);
+    renderQuotas();
+    try {
+      await api("warm-now", { agent, user });
+      quotaWarmed.set(key, Date.now());
+      status(t("Warmed up {who}", { who: user }), "ok");
+    } catch (err) {
+      quotaWarmed.delete(key);
+      status(t("Couldn't warm up {who}: {why}", { who: user, why: err.message }), "err");
+    }
+    renderQuotas();
+    loadQuotas(); // the window it started
+  };
+  return b;
 }
 
 function ownCalls(n) {
@@ -485,19 +561,17 @@ function usageParts(texts) {
   return out;
 }
 
-// The token totals count what went in and out, and the cache's tokens, read
-// and written, in them too: that is most of what a session spent, and the
-// Requests tab's total has always had them. The reader can leave the cache
-// out instead (#2378), and the pick is kept as they left it
-// (magpie.usageWithCache).
-let usageWithCache = true;
-try { usageWithCache = localStorage.getItem("magpie.usageWithCache") !== "0"; } catch {}
+// The Usage pages' token totals count what went in and out; the cache's
+// tokens, read and written, can be counted in them too (#2378), as the
+// Requests tab's total always has them — the Overview's tiles, chart and
+// lists and, since #2591, the Sessions tab's alike. Kept as the reader
+// left it (magpie.usageWithCache).
+let usageWithCache = false;
+try { usageWithCache = localStorage.getItem("magpie.usageWithCache") === "1"; } catch {}
 const cacheOf = (x) => (x.cache_read || 0) + (x.cache_write || 0);
 const usageTokens = (x) => tokensOf(x) + (usageWithCache ? cacheOf(x) : 0);
-// the tokens tile's label: a pop-up of the two ways to count. Two tabs draw
-// a tokens tile of their own, so the pick tells the one that drew it which
-// page to draw again.
-function usageTokensPick(redraw = renderUsage) {
+// the tokens tile's label: a pop-up of the two ways to count
+function usageTokensPick() {
   const b = el("button", "kpi-pick");
   b.type = "button";
   b.setAttribute("aria-haspopup", "menu");
@@ -512,7 +586,9 @@ function usageTokensPick(redraw = renderUsage) {
     ], usageWithCache ? "1" : "", (v) => {
       usageWithCache = v === "1";
       try { localStorage.setItem("magpie.usageWithCache", usageWithCache ? "1" : "0"); } catch {}
-      redraw();
+      // the tab it was picked on follows; the pick lives on the Overview's
+      // and the Sessions tab's tokens tiles (#2591)
+      (usageTab === "sessions" ? renderSessions : renderUsage)();
     }, "Token totals", "sess-menu");
   };
   return b;
@@ -542,6 +618,7 @@ function renderUsage() {
     const none = noCallsIn(period);
     stats.append(el("div", "none", t(none) + " " + t("Point an agent at a catalog model and use it; every call through the gateway is counted here.")));
     $("#usageNote").textContent = "";
+    $("#usageClear").hidden = true;
     return;
   }
   stats.classList.remove("empty");
@@ -700,13 +777,62 @@ function renderUsage() {
     b.onclick = (e) => { e.stopPropagation(); hideUsageAgent(g.id, false); };
     r.append(b);
   });
-  list("usageModels", u.models);
+  // a model's usage cleared (CrazyMouse_TT on X: a local model deployed
+  // again, its requests, speed and cache wanted from nothing)
+  list("usageModels", u.models, (r, g) => {
+    if (!g.model) return;
+    r.classList.add("acts");
+    const b = el("button", "icon us-more");
+    b.type = "button";
+    b.setAttribute("aria-haspopup", "menu");
+    b.setAttribute("aria-label", t("Actions for {name}", { name: g.name || g.model }));
+    b.append(svg(DOTS, 14, 2.2));
+    const menu = () => {
+      const again = agentMenu?.anchor === b;
+      closeAgentMenu();
+      if (again) return;
+      openRowMenu(b, [{ name: "Clear usage…", icon: USAGE_CLEAR, run: () => clearUsage(g) }]);
+    };
+    b.onclick = (e) => { e.stopPropagation(); menu(); };
+    r.oncontextmenu = (e) => { e.preventDefault(); menu(); };
+    r.querySelector(".share").after(b);
+  });
   list("usageAccounts", u.accounts || []);
   list("usageKeys", u.callerKeys || []);
   $("#usageNote").textContent = t("Counted from the providers' own usage reports on every call through the gateway · {path}", { path: u.path });
+  const clear = $("#usageClear");
+  clear.hidden = false;
+  clear.onclick = () => clearUsage();
   // the account cards say how many of this period's requests were
   // magpie's own (ownLine), which they could only once the summary came
   if (quotas && (u.accounts?.some((g) => g.own?.calls) || $("#subscriptionUsage .quota-own"))) renderQuotas();
+}
+
+// clearUsage clears the Usage page's figures, after the reader confirms:
+// one model's (g, from the Models list) or everything's (no g). The calls
+// up to now stop being counted on the usage pages, here and on the
+// computers this one syncs with; the request log keeps them, so a key's
+// spending limit and the allowances still count them
+// (settings.UsageCleared).
+const USAGE_CLEAR = "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v3.5M9 7v3.5";
+async function clearUsage(g) {
+  const ok = await confirmAction(
+    g ? t("Clear the usage of {model}?", { model: g.name || g.model }) : t("Clear all usage?"),
+    (g
+      ? t("Every call to {model} at {provider} so far stops being counted on the Usage page: its requests, tokens, cost, speed and cache, in every period, on this computer and those it syncs with.", { model: g.name || g.model, provider: (g.sub || g.provider || "").split(" · ")[0] })
+      : t("Every call so far stops being counted on the Usage page: the requests, tokens, cost, speed and cache of every agent and model, in every period, on this computer and those it syncs with."))
+      + " " + t("Gateway keys' spending limits and the allowances still count these calls. This can't be undone."),
+    t("Clear"),
+  );
+  if (!ok) return;
+  try {
+    await api("usage/clear", g ? { provider: g.provider || "", model: g.model } : {});
+    status(g ? t("The usage of {model} is cleared", { model: g.name || g.model }) : t("All usage is cleared"), "ok");
+    ledger = null;
+    await loadUsage();
+  } catch (e) {
+    status(e.message, "err");
+  }
 }
 
 // countable is whether the Usage page's Agents list offers to count a
@@ -762,6 +888,141 @@ async function hideUsageAgent(id, hide) {
   }
 }
 
+// ---------- allowance cards hidden from the Overview ----------
+//
+// An allowance card can be hidden from the Overview (whqtian_07012 on
+// Discord: StepFun's plan card wanted, its balance card not), from the
+// card's own menu (quotaCardMenus). Only from this page: routing, caps and
+// the counting never hear of it, the tray panel's Allowances tab has its
+// own (Arrange), and a menu bar cell asking for a hidden card shows it
+// until the page is left. Each is kept by its tray card id and its kind
+// (cardHideKey), in magpie's settings (usageCardsHidden), so every window
+// and magpie web agree; one line at the section's end says how many, and
+// has them back.
+let quotaHidOpen = false; // the hidden cards listed under their line
+let usagePeek = ""; // a card a menu bar cell asked for, shown though hidden
+new MutationObserver(() => { if ($("#view-usage").hidden) usagePeek = ""; }).observe($("#view-usage"), { attributes: true, attributeFilter: ["hidden"] });
+const cardHideKind = (q) => q.balance && !q.windows?.length && !q.plan ? "balance" : "plan";
+const cardHideKey = (q) => trayCardID(q) + "|" + cardHideKind(q);
+// the keys a card as drawn stands for: a plan's card carrying its key's
+// balance (keyCards) hides both
+const cardHideKeys = (q) => [cardHideKey(q), ...(q.balanceCard ? [q.balanceCard + "|balance"] : [])];
+const hiddenCards = () => new Set(state.settings?.usageCardsHidden || []);
+const cardPeeked = (q) => !!usagePeek && (trayCardID(q) === usagePeek || q.provider === usagePeek);
+// overviewCards: the cards the Overview draws, a provider's keys sharing
+// one balance already one card (sharedBalances), the hidden left out
+function overviewCards(list) {
+  const hid = hiddenCards();
+  list = sharedBalances(list);
+  return hid.size ? list.filter((q) => !hid.has(cardHideKey(q)) || cardPeeked(q)) : list;
+}
+// quotaCardMenus gives a card its menu: a right-click, the keyboard's menu
+// key on its handle, or on a touch screen a long press (iOS Safari sends
+// no contextmenu for one), for the account whose section it was on, or
+// the whole card from its head
+let quotaPressed = 0; // when a long press last opened a card's menu
+// the mouse events a phone makes up once the finger lifts don't close it,
+// nor press what the finger was on
+const quotaPressing = () => !!agentMenu && performance.now() - quotaPressed < 1000;
+for (const k of ["mousedown", "click"]) addEventListener(k, (e) => { if (quotaPressing() && !e.target.closest?.(".row-menu")) { e.stopImmediatePropagation(); e.preventDefault(); } }, true);
+function quotaCardMenus(card, subs) {
+  let press = null;
+  card.oncontextmenu = (e) => {
+    if (e.target.closest("input, textarea")) return;
+    e.preventDefault();
+    // Android sends one after the long press that opened it already
+    if (quotaPressing()) return;
+    quotaCardMenu(e.target, card, subs);
+  };
+  const stop = () => { clearTimeout(press?.timer); press = null; };
+  card.addEventListener("pointerdown", (e) => {
+    stop();
+    if (e.pointerType !== "touch" || usageArranging || e.target.closest(".us-handle, input, textarea")) return;
+    const at = e.target;
+    press = { x: e.clientX, y: e.clientY, timer: setTimeout(() => { press = null; quotaPressed = performance.now(); quotaCardMenu(at, card, subs); }, 550) };
+  });
+  card.addEventListener("pointermove", (e) => { if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 8) stop(); });
+  for (const k of ["pointerup", "pointercancel", "pointerleave"]) card.addEventListener(k, stop);
+}
+function quotaCardMenu(target, card, subs) {
+  let part = [...card.children].find((c) => c.contains(target));
+  while (part && !part.classList.contains("subscription-account") && !part.classList.contains("subscription-head")) part = part.previousElementSibling;
+  const who = part?.classList.contains("subscription-account") && subs.find((q) => trayCardID(q) === part.dataset.card);
+  const of = who ? [who] : subs;
+  const anchor = card.querySelector(".us-handle") || card.querySelector(".subscription-head");
+  const again = agentMenu?.anchor === anchor;
+  closeAgentMenu();
+  if (again) return;
+  const one = of.length === 1 && of[0];
+  openRowMenu(anchor, [
+    { name: who && subs.length > 1 ? "Hide this account from Overview" : "Hide from Overview", icon: EYE_OFF, run: () => hideQuotaCards(of.flatMap(cardHideKeys), true) },
+    // a plan's card showing its key's balance: the balance alone
+    ...(one?.balanceCard ? [{ name: "Hide its balance from Overview", icon: EYE_OFF, run: () => hideQuotaCards([one.balanceCard + "|balance"], true) }] : []),
+  ]);
+}
+// renderQuotaHid: the line under the cards saying how many are hidden,
+// opening them, each with Unhide, and Show all
+function renderQuotaHid() {
+  const hb = $("#quotaHid");
+  const hid = hiddenCards();
+  const hidden = quotas && hid.size ? sharedBalances(quotas).filter((q) => hid.has(cardHideKey(q)) && !cardPeeked(q)) : [];
+  hb.hidden = !hidden.length;
+  if (!hidden.length) { quotaHidOpen = false; return; }
+  const line = hb.querySelector(".us-hidline"), hl = hb.querySelector(".list");
+  let all = hb.querySelector(".us-showall");
+  if (!all) {
+    all = el("button", "text us-showall", t("Show all"));
+    all.type = "button";
+    hb.append(all);
+  }
+  all.textContent = t("Show all");
+  all.hidden = !quotaHidOpen || hidden.length < 2;
+  all.onclick = () => hideQuotaCards(hidden.map(cardHideKey), false);
+  line.replaceChildren(el("span", "", t("{n} hidden", { n: hidden.length })), svg(CHEV, 11, 1.6));
+  line.title = t("Hidden from the Overview only: they are still used and counted. Click to see them.");
+  line.setAttribute("aria-expanded", String(quotaHidOpen));
+  line.onclick = () => { quotaHidOpen = !quotaHidOpen; renderQuotaHid(); };
+  hl.hidden = !quotaHidOpen;
+  hl.replaceChildren();
+  if (!quotaHidOpen) return;
+  for (const q of hidden) {
+    const r = el("div", "row stat hid acts");
+    r.dataset.id = cardHideKey(q);
+    r.append(icon(q.icon));
+    const who = el("div", "who");
+    who.append(el("div", "name", quotaName(q)), el("div", "sub", [q.alias || q.user, t(cardHideKind(q) === "balance" ? "Balance" : "Plan")].filter(Boolean).join(" · ")));
+    const b = el("button", "text us-unhide", t("Unhide"));
+    b.type = "button";
+    b.onclick = (e) => { e.stopPropagation(); hideQuotaCards([cardHideKey(q)], false); };
+    r.append(who, b);
+    hl.append(r);
+  }
+}
+// hideQuotaCards hides cards from the Overview, or has them back: drawn at
+// once, put back if the save fails
+async function hideQuotaCards(keys, hide) {
+  const prev = state.settings || {};
+  const cur = (prev.usageCardsHidden || []).filter((k) => !keys.includes(k));
+  const cardsHidden = hide ? [...cur, ...keys] : cur;
+  usagePeek = "";
+  state.settings = { ...prev, usageCardsHidden: cardsHidden };
+  const again = () => {
+    renderQuotas();
+    // the keyboard stays near: on the hidden line, or the card put back
+    const to = $("#quotaHid .us-hidline");
+    (hide && to && !to.closest("[hidden]") ? to : null)?.focus({ preventScroll: true });
+  };
+  again();
+  try {
+    const s = await api("usage/arrange", { cardsHidden });
+    state.settings = { ...state.settings, usageCardsHidden: s.usageCardsHidden || [] };
+  } catch (e) {
+    state.settings = prev;
+    again();
+    status(e.message, "err");
+  }
+}
+
 // ---------- requests ----------
 //
 // The ledger: every request of the period, one row each, newest first —
@@ -771,6 +1032,7 @@ async function hideUsageAgent(id, hide) {
 // server pages it (/api/usage/requests) and saves it whole as CSV.
 
 let ledger = null; // the page shown: { rows, offset, total, agents, …totals }
+let ledgerWant = ""; // the ledParams it was read with
 let ledOffset = 0, ledPurpose = "", ledAgent = "", ledProvider = "", ledAccount = "", ledCallerKey = "", ledFailed = false, ledRetried = false, ledQuery = "", ledModel = "", ledRoute = 0, ledComputer = "", ledDay = "", ledVia = "";
 
 const LED_PAGE = 100;
@@ -885,7 +1147,11 @@ function ledRead(kind, path, want) {
 }
 const ledAborted = (e) => e?.name === "AbortError";
 
-// quiet: a refresh while it's looked at, redrawn only on a change
+// quiet: a refresh while it's looked at, redrawn only on a change.
+// "open": the page opened again on the rows it showed (#4064, xisdumpling):
+// they stay as they are while read, are drawn again only on a change, and
+// that redraw (a hundred rows, their chart and heatmap) waits for the
+// sidebar to settle on the page, not stopping it halfway
 async function loadLedger(quiet) {
   if (!ledger && !quiet) renderLedgerLoading();
   // a pick over rows shown: they stay, dimmed, till its answer comes, so
@@ -904,8 +1170,23 @@ async function loadLedger(quiet) {
   if (want !== ledParams({ offset: ledOffset, limit: LED_PAGE })) return; // another page or filter was picked meanwhile
   ledPending(false);
   if (quiet && JSON.stringify(l) === JSON.stringify(ledger)) return;
+  if (quiet === "open") {
+    const was = ledger;
+    await navSettled();
+    if (ledger !== was || want !== ledParams({ offset: ledOffset, limit: LED_PAGE })) return; // read again or drawn meanwhile
+  }
   ledger = l;
+  ledgerWant = want;
   if (view === "usage" && usageTab === "requests") renderLedger();
+}
+// navSettled: the sidebar's move to a page opened (navTopStep's spring,
+// navSubEnter's tabs coming in) has run its course, or 700ms have passed
+function navSettled() {
+  const until = performance.now() + 700;
+  return new Promise((done) => {
+    const look = () => performance.now() < until && (window.navTop?.raf || document.querySelector("#nav .nav-sub.moving")) ? requestAnimationFrame(look) : done();
+    look();
+  });
 }
 
 function ledPending(on) {
@@ -1636,6 +1917,10 @@ new ResizeObserver(() => {
   ledFitFrame = requestAnimationFrame(() => {
     ledFitFrame = 0;
     const wrap = $("#ledWrap");
+    // out of sight it has no width: what was fit stays, so the page shown
+    // again at the width it had fits nothing again (#4064: each fit of a
+    // hundred rows restyles them twice and lays them out)
+    if (!wrap.clientWidth) return;
     wrap.style.setProperty("--ledw", wrap.clientWidth + "px");
     if (wrap.clientWidth !== ledFitW) { ledFitW = wrap.clientWidth; ledFit(); }
     ledHScroll();
@@ -1684,59 +1969,17 @@ const ledDecode = (r) => {
   if (ledCodexTurn(r) && (w < LED_CODEX_WINDOW_MS || n < LED_CODEX_BODY)) return null;
   return { n, w };
 };
-// a Codex turn of one call read from its session file, its first token
-// known: its window after the first token can be one network push, not the
-// writing (Fallmonkey on Discord: a first token at 6.8 s, the rest 0.2 s
-// later), so it tells a speed only over a second or more and 100 tokens or
-// more (usage.CodexWindowMs, CodexBodyTokens); else ledFloor_ tells the
-// least it wrote at over the whole turn
+// Codex 单次调用保留一秒、100 token 的门槛；按整轮计时，不扣首字等待。
 const LED_CODEX_WINDOW_MS = 1000, LED_CODEX_BODY = 100;
 const ledCodexTurn = (r) => r.source === "log" && r.agent === "codex" && r.ttft_ms > 0;
 // how fast a reply wrote, in tokens a second: 0 when it can't tell
 const ledRowSpeed = (r) => { const d = ledDecode(r); return d ? d.n / (d.w / 1000) : 0; };
-// the least a reply read from a session file wrote at, in tokens a second:
-// the file has no first token, only when the line that asked for it and its
-// last line were written (Claude Code's are each block's end), so its tokens
-// over that whole time, the wait for the first one in it, are a floor the
-// speed after the first token can't be under. Against Claude Code's own
-// stream it read 2–5% under for a reply of 1,400 tokens or more, 11–33% for
-// a shorter one or one asked with a tool's result, so only a reply of 1,000
-// or more is told. 0 when it tells none, and a call magpie timed tells its
-// own (ledDecode). Only the row's: the period's speed counts timed calls
-// and session files' floors (usage.Row.Floor), not a gateway row's below.
-// Claude Code's, Claude Desktop's and Codex's files only (usage.FloorAgents):
-// a call's time is from what asked for it, never from inside it. OpenCode's
-// isn't checked against real sessions, and tells none.
-// A Codex turn of one call that reasoned has its first token but not its
-// first text (Fallmonkey on Discord): its answer, its output less the
-// reasoning, all came after the first token, so the answer over the time
-// after it is a floor of the answer's speed, when that time is a second or
-// more and the answer 100 tokens or more, as a measured one is. A Codex turn
-// of one call that tells neither tells its output over the whole turn, the
-// wait in it, by the same 1,000-token rule as any whole-time floor (Fallmonkey
-// on Discord: 11 tokens in 2.75 s read ≥4 tok/s).
-// A gateway call that tells no speed of its own (夜松云 on Discord: the
-// Requests tab's speed was blank for some rows) has the same two floors, as
-// its time is from when it came to its last token: one that reasoned with no
-// first text recorded (a tool call after hidden reasoning), its answer after
-// the first token, unless its content came in a burst; else one not streamed,
-// or not timed, its output over its whole time, by the 1,000-token rule.
-// ledFloor_ says the tokens, the ms, and which it is (answer, turn, gateway).
+// 与 usage.Row.Floor 一致：已计速或被突发规则排除的回复不再回填下限速度。
 const LED_FLOOR_AGENTS = new Set(["claude", "claude-desktop", "codex"]);
 const ledWhole_ = (r) => r.out >= 1000 && r.ms >= 1000 && r.out * 1000 <= 10000 * r.ms;
 const ledFloor_ = (r) => {
-  if (ledFailed_(r) || ledRowSpeed(r)) return null;
-  if (r.source !== "log") {
-    const n = r.out - (r.reasoning || 0), w = r.ms - r.ttft_ms;
-    if (r.ttft_ms > 0 && r.reasoning > 0 && !(r.first_text_ms > 0) && n >= LED_CODEX_BODY && w >= LED_CODEX_WINDOW_MS && n * 1000 <= 10000 * w && !(r.flow_ms > 0 && r.flow_ms * 4 < w)) return { n, w, answer: true, gateway: true };
-    return ledWhole_(r) ? { n: r.out, w: r.ms, gateway: true } : null;
-  }
-  if (!LED_FLOOR_AGENTS.has(r.agent)) return null;
-  if (ledCodexTurn(r)) {
-    const n = r.out - (r.reasoning || 0), w = r.ms - r.ttft_ms;
-    if (r.reasoning > 0 && n >= LED_CODEX_BODY && w >= LED_CODEX_WINDOW_MS && n * 1000 <= 10000 * w) return { n, w, answer: true };
-    return ledWhole_(r) ? { n: r.out, w: r.ms, turn: true } : null;
-  }
+  if (ledFailed_(r) || ledRowSpeed(r) || (r.flow_ms > 0 && r.flow_ms * 4 < r.ms)) return null;
+  if (r.source !== "log" || !LED_FLOOR_AGENTS.has(r.agent)) return null;
   return ledWhole_(r) ? { n: r.out, w: r.ms } : null;
 };
 // why a row tells no speed of its own, in words for its tooltip, so a dash
@@ -1745,7 +1988,7 @@ const ledFloor_ = (r) => {
 // that reasoned is not set aside for hidden reasoning nor for a late first
 // text (5989b1af's whole-turn speed): what is left is a failed call, no time
 // or no output to divide, a reply that came in one burst at its end, a Codex
-// turn of one call under a second and under 100 tokens after its first.
+// 单次调用的整轮不足一秒，或输出不足 100 个 token。
 const ledNoSpeed_ = (r) => {
   if (ledFailed_(r)) return t("A failed request tells no speed");
   if (!(r.ms > 0)) return t("No duration was recorded to time a speed from");
@@ -1753,7 +1996,7 @@ const ledNoSpeed_ = (r) => {
   const w = r.ms;
   if (w < 100) return t("A turn under 100 ms came too fast to tell a speed by");
   if (r.flow_ms > 0 && r.flow_ms * 4 < w) return t("It came in one burst at its end, not as it was written, so how fast it was written isn't seen");
-  if (ledCodexTurn(r)) return t("A Codex turn of one call is timed only over a second or more and 100 tokens or more after its first token: this one wrote {n} tokens in {ms}", { n: ledNum(r.out), ms: ledTook(Math.max(0, w - r.ttft_ms)) });
+  if (ledCodexTurn(r)) return t("A Codex turn of one call is timed only when its whole turn is at least a second and its output at least 100 tokens: this one wrote {n} tokens in {ms}", { n: ledNum(r.out), ms: ledTook(w) });
   return t("A turn under 100 ms came too fast to tell a speed by");
 };
 const ledFloorSpeed = (r) => { const f = ledFloor_(r); return f ? f.n / (f.w / 1000) : 0; };
@@ -1908,6 +2151,9 @@ function renderLedger() {
   sessPick($("#ledAgent"), "All agents", ledAgent, l.agents.map((a) => ({ v: a.id, name: a.name, note: "" })), "Agent", (v) => { ledAgent = v; ledOwn("agent"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   sessPick($("#ledProvider"), "All providers", ledProvider, providers.map((p) => ({ v: p.id, name: t(p.name), note: p.deleted ? t("Deleted {date}", { date: new Date(p.deleted).toLocaleDateString(intlLang(), { year: "numeric", month: "short", day: "numeric" }) }) : "" })), "Provider", (v) => { ledProvider = v; ledOwn("provider"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   ledProviderMore(providers.find((p) => p.id === ledProvider));
+  // a model beside the provider (OHHHHHH05 on X): the models the other filters keep, by tokens;
+  // the page's totals, cells and chart are then that model's, gateway and session-log calls alike
+  sessPick($("#ledModel"), "All models", ledModel, (l.by?.model || []).filter((s) => s.id).map((s) => ({ v: s.id, name: s.id, note: t("{n} tokens", { n: fmtN(allTokens(s)) }) })), "Model", (v) => { ledModel = v; ledQuery = ""; $("#ledQ").value = ""; ledOwn("model"); ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   sessPick($("#ledAccount"), "All accounts", ledAccount, accounts.map((a) => ({ v: a.id, name: a.name || a.id, note: [a.name && a.id, ...(a.providers || []).map((p) => t(p))].filter(Boolean).join(" · ") })), "Account", (v) => { ledAccount = v; ledOffset = 0; loadLedger().catch((e) => status(e.message, "err")); });
   sessPick($("#ledKey"), "All gateway keys", ledCallerKey, callers.map((k) => ({
     v: k.id, name: k.name, note: "",
@@ -2063,6 +2309,10 @@ function renderLedger() {
     // one that tested the provider (the editor's Test, Detect APIs, a model
     // list) is counted nowhere, and says so (neiko on Discord)
     const probe = r.source === "probe";
+    // an agent's call to a tool of magpie's MCP servers (ferock on Discord)
+    const mcp = r.source === "mcp";
+    // magpie's ask of a search API, for a search an agent's model made (cybercaius on Discord)
+    const search = r.source === "search";
     if (r.agent === "magpie") {
       const own = ownBadge();
       if (probe) own.title = probeWhy();
@@ -2077,7 +2327,10 @@ function renderLedger() {
     // resolved to a provider's name, which would promote an unknown request
     // to an official provider — and the row keeps saying it is a local
     // session. A row whose file names none says only that.
-    const where = local ? (r.session_account || r.session_provider || t("Local session")) : t(r.providerName) + (r.host ? " · " + r.host : "");
+    const where = local ? (r.session_account || r.session_provider || t("Local session"))
+      : mcp ? [r.providerName && t(r.providerName), r.host].filter(Boolean).join(" · ") || "—"
+      : search ? [r.providerName && t(r.providerName), r.host, r.providerKeyName].filter(Boolean).join(" · ") || "—"
+      : t(r.providerName) + (r.host ? " · " + r.host : "");
     const wc = td(el("div", "where-name", where), "where", where);
     const badges = el("div", "source-badges");
     if (local && r.session_account && r.session_official_login) {
@@ -2115,6 +2368,17 @@ function renderLedger() {
       k.title = probeWhy();
       badges.append(k);
     }
+    if (mcp) {
+      const k = el("span", "src mcp", "MCP");
+      k.title = t("{agent} called the tool {tool} of magpie's MCP server {server}. Its arguments are not kept, and it is not counted in any total: the model requests it made are rows of their own.", { agent: name, tool: r.req || "—", server: r.host || "magpie" });
+      badges.append(k);
+    }
+    if (search) {
+      // a search API's, or a plan's own search service's (r.provider)
+      const k = el("span", "src search", t(r.provider ? "Web search" : "Search API"));
+      k.title = t("magpie asked {api} to search the web for {agent}. The query is not kept, and it is not counted in any total.", { api: r.req || "—", agent: name });
+      badges.append(k);
+    }
     if (badges.childElementCount) wc.append(badges);
     td(ledServed(r), "model");
     td(r.effort || "—", r.effort ? "" : "faint");
@@ -2148,14 +2412,12 @@ function renderLedger() {
     const v = ledRowSpeed(r), floor = ledFloorSpeed(r);
     td(v ? t("{n} tok/s", { n: ledNum(Math.round(v)) }) : floor ? "≥" + t("{n} tok/s", { n: ledNum(Math.round(floor)) }) : "—", "n speed" + (v || floor ? "" : " faint"),
       v ? t("{n} output tokens in {ms}, the whole turn", { n: ledNum(ledDecode(r).n), ms: ledTook(ledDecode(r).w) }) + " · " + t("TTFT {ms}", { ms: ledTook(r.ttft_ms) })
-        : floor && ledFloor_(r).answer ? t("At least: {n} answer tokens in {ms} after the first token, the {r} reasoning tokens left out. The session file has no first text, so reasoning after the first token is counted too", { n: ledNum(ledFloor_(r).n), ms: ledTook(ledFloor_(r).w), r: ledNum(r.reasoning) }) + " · " + t("TTFT {ms}", { ms: ledTook(r.ttft_ms) })
-        : floor && ledFloor_(r).turn ? t("At least: {n} output tokens in {ms}, the whole turn. What came after the first token ({after}) is too little to time a speed by: under a second or under 100 tokens, so the wait for it is counted too", { n: ledNum(r.out), ms: ledTook(r.ms), after: ledTook(r.ms - r.ttft_ms) }) + " · " + t("TTFT {ms}", { ms: ledTook(r.ttft_ms) })
         : floor ? t("At least: {n} output tokens in {ms}, from the line that asked for it to its last. The session file has no first token, so the wait for it is counted too", { n: ledNum(r.out), ms: ledTook(r.ms) })
         : ledNoSpeed_(r));
     const st = el("span", "st");
     // a status when the gateway logged the call; a session file has none,
     // and says only whether it went well
-    let word = r.status ? String(r.status) : r.source === "log" ? (bad ? r.err_type || t("Failed") : t("Succeeded")) : "—";
+    let word = r.status ? String(r.status) : r.source === "log" || mcp || search ? (bad ? r.err_type || t("Failed") : t("Succeeded")) : "—";
     if (r.status && bad && r.err_type) word += " · " + r.err_type;
     if (r.handed_on) word += " · " + t("handed on");
     else if (r.tries > 1) word += " · " + t("{n} tries", { n: r.tries });
@@ -2367,7 +2629,7 @@ let sessStats = null; // { from, to, days: [{ date, usage, active }], agents } f
 let sessModel = ""; // "" for every model
 let sessFolder = ""; // "" for every folder
 // the sessions of the range summed up under the filters, by the server:
-// { count, median, p90, days, top: { tokens, tokens_with_cache, cost, active } }, and the
+// { count, median, p90, days, top: { tokens, cost, active } }, and the
 // query it answers
 let sessOver = null;
 let sessOverAt = "";
@@ -2462,8 +2724,7 @@ function renderSessionsLoading() {
   view.setAttribute("aria-busy", "true");
   $("#usageCost").replaceChildren(el("span", "skeleton sk-cost"));
   renderSessRange(true);
-  $("#sessAgent").replaceChildren();
-  $("#sessModel").hidden = $("#sessFolder").hidden = true;
+  $("#sessAgent").hidden = $("#sessModel").hidden = $("#sessFolder").hidden = true;
   $("#sessChart").hidden = true;
   $("#sessGrid").hidden = true;
   $("#sessListHead").hidden = true;
@@ -2560,7 +2821,7 @@ function sessIndexHero() {
   bar.append(fill);
   hero.append(words, field, bar);
 
-  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const reduced = calm();
   let frac = 0, shown = 0, known = false, tipAt = Date.now(), tipI = 0, rate = 0, last = null;
   let done = false;
   hero.update = (p) => {
@@ -2694,7 +2955,9 @@ function hexA(hex, a) {
   return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
 }
 const sessKey = (s) => s.agent + ":" + s.id;
-const sessTokens = (s) => s.input + s.output;
+// counted the way the tokens tiles count, cache and all when the reader
+// asked for it (#2591); both lists' rows spend it (sessSpent)
+const sessTokens = (s) => usageTokens(s);
 // a session's cost: "—" when none of its models has a known price
 function sessCost(s) {
   if (!s.models.some((m) => m.priced && (m.input || m.output || m.cache_read || m.cache_write))) return "—";
@@ -2742,38 +3005,16 @@ function renderSessions() {
   const rows = st.days.flatMap((d) => d.usage.map((u) => ({ ...u, date: d.date })));
   const acts = st.days.flatMap((d) => d.active.map((a) => ({ ...a, date: d.date })));
 
-  // one segment per agent that has sessions, or usage in the range
-  const agents = [...new Map([...all.map((s) => [s.agent, s.name]), ...Object.entries(st.agents || {})]).entries()];
+  // the agent filter is a menu, as the model and folder ones beside it: a
+  // strip of a segment per agent ran past the window with a dozen of them
+  // in range, and scrolled sideways to reach the last
+  // a session is under the agent it ran in: s.app, when its files are
+  // another's (Claude Desktop's Code tab's, in Claude Code's folder)
+  const agents = [...new Map([...all.map((s) => [s.app || s.agent, s.name]), ...Object.entries(st.agents || {})]).entries()];
   if (sessAgent !== "all" && !agents.some(([id]) => id === sessAgent)) sessAgent = "all";
-  const seg = $("#sessAgent");
-  seg.hidden = agents.length < 2;
-  const opts = [["all", t("All")], ...agents];
-  // the same agents keep their buttons: drawn anew, a strip with more than
-  // fit (#929) would lose where it was scrolled to (WebKit)
-  const was = [...seg.querySelectorAll(":scope > .opt")];
-  if (was.length !== opts.length || was.some((b, i) => b.dataset.agent !== opts[i][0] || b.textContent !== opts[i][1])) {
-    seg.replaceChildren();
-    for (const [id, name] of opts) {
-      const b = el("button", "opt", name);
-      b.dataset.agent = id;
-      b.onclick = () => { sessAgent = id; renderSessions(); };
-      seg.append(b);
-    }
-  }
-  for (const b of seg.querySelectorAll(":scope > .opt")) {
-    b.classList.toggle("on", b.dataset.agent === sessAgent);
-    b.setAttribute("aria-pressed", String(b.dataset.agent === sessAgent));
-  }
-  // and the agent picked is brought into the strip, the page left where it is
-  const picked = seg.querySelector(":scope > .on");
-  if (picked && seg.scrollWidth > seg.clientWidth) {
-    if (picked.offsetLeft < seg.scrollLeft) seg.scrollLeft = picked.offsetLeft;
-    else if (picked.offsetLeft + picked.offsetWidth > seg.scrollLeft + seg.clientWidth) seg.scrollLeft = picked.offsetLeft + picked.offsetWidth - seg.clientWidth;
-  }
-  slide(seg, "sessAgent");
 
   // the model and folder filters offer what the range has, under the other filters
-  const byAgent = (x) => sessAgent === "all" || x.agent === sessAgent;
+  const byAgent = (x) => sessAgent === "all" || (x.app || x.agent) === sessAgent;
   // a model's own name, not the one it was sold under: the picker and the
   // model bars offer that, so one model's calls at every provider are one
   // row and one filter (yetone: 模型肯定是合并过的，不能出现前缀的)
@@ -2786,6 +3027,10 @@ function renderSessions() {
   };
   const models = spent(rows.filter((r) => byAgent(r) && byFolder(r)), "bare").map(([v, n]) => ({ v, name: v, note: t("{n} tokens", { n: fmtN(n) }) }));
   const folders = spent(rows.filter((r) => byAgent(r) && byModel(r)), "cwd").map(([v, n]) => ({ v, name: baseName(v), note: v + " · " + t("{n} tokens", { n: fmtN(n) }) }));
+  const agentSpent = new Map(spent(rows.filter((r) => byModel(r) && byFolder(r)), "agent"));
+  const agentOpts = agents.map(([v, name]) => ({ v, name: name || v, note: agentSpent.has(v) ? t("{n} tokens", { n: fmtN(agentSpent.get(v)) }) : "" }))
+    .sort((a, b) => (agentSpent.get(b.v) || 0) - (agentSpent.get(a.v) || 0));
+  sessPick($("#sessAgent"), "All agents", sessAgent === "all" ? "" : sessAgent, agentOpts, "Agent", (v) => { sessAgent = v || "all"; renderSessions(); });
   sessPick($("#sessModel"), "All models", sessModel, models, "Model", (v) => { sessModel = v; renderSessions(); });
   sessPick($("#sessFolder"), "All folders", sessFolder, folders, "Folder", (v) => { sessFolder = v; renderSessions(); });
 
@@ -2871,19 +3116,22 @@ function renderSessions() {
       if (cls?.includes("dur")) for (const part of n.split(/(\d+)/)) part && b.append(/^\d+$/.test(part) ? part : el("i", "u", part.trim()));
       else b.textContent = n;
       b.title = n;
-      e.append(b, el("span", "", label));
-      if (sub) e.append(el("small", "", sub));
+      e.append(b, typeof label === "string" ? el("span", "", label) : label);
+      // a line in parts keeps each whole, wrapping between them rather
+      // than cutting the last off, as the Overview's tiles do
+      if (Array.isArray(sub)) {
+        const s = el("small", "parts");
+        s.append(...usageParts(sub));
+        e.append(s);
+      } else if (sub) e.append(el("small", "", sub));
       stats.append(e);
     };
     const days = new Set(used.map((r) => r.date)).size;
     // how many sessions, and what the middle one and the one in ten spent
     tile(ov.count == null ? "—" : fmtN(ov.count), t("sessions"), ov.count ? t("median {m} · p90 {p}", { m: fmtN(ov.median), p: fmtN(ov.p90) }) : "",
       t("Tokens in and out per session: the middle session's, and what nine in ten stay under"), stale ? "stale" : "");
-    // the range's tokens, counted the page's way: the cache's read and
-    // written tokens in them when the reader asked for that (#2378), the
-    // picker on the tile being the same one the Overview's carries
-    tile(fmtN(usageTokens(tot)), usageTokensPick(renderSessions), [t("{a} in · {b} out", { a: fmtN(tot.input), b: fmtN(tot.output) }),
-      ...(usageWithCache && cacheOf(tot) ? [t("{a} cache", { a: fmtN(cacheOf(tot)) })] : [])]);
+    // counted as the Overview's tokens tile is, by the same pick (#2591)
+    tile(fmtN(usageTokens(tot)), usageTokensPick(), [t("{a} in · {b} out", { a: fmtN(tot.input), b: fmtN(tot.output) }), ...(usageWithCache && cacheOf(tot) ? [t("{a} cache", { a: fmtN(cacheOf(tot)) })] : [])]);
     tile(c ? "≈" + c : "—", t("cost"), unpricedModels || t("at effective prices"), unpricedNote);
     // input leaves out what was read from the cache and written to it
     const prompt = tot.input + tot.cache_read + tot.cache_write;
@@ -3022,7 +3270,8 @@ function renderSessChart(chart, st, used, ov, acts) {
   for (const r of used) {
     const x = at.get(r.date);
     if (!x) continue;
-    x.input += r.input; x.output += r.output; x.cache_read += r.cache_read || 0; x.cache_write += r.cache_write || 0; x.cost += r.cost;
+    x.input += r.input; x.output += r.output; x.cost += r.cost;
+    x.cache_read += r.cache_read || 0; x.cache_write += r.cache_write || 0;
     if (!r.priced) x.unpriced++;
   }
   for (const a of acts || []) { const x = at.get(a.date); if (x) x.active += a.seconds; }
@@ -3224,7 +3473,7 @@ function sessCalSide(days, value, show) {
     if (sub) f.append(el("small", "", sub));
     side.append(f);
   };
-  const busy = (x) => x.input + x.output || x.active || x.sessions;
+  const busy = (x) => usageTokens(x) || x.active || x.sessions;
   let run = 0, streak = 0, best = null;
   for (const x of days) {
     run = busy(x) ? run + 1 : 0;
@@ -3292,11 +3541,13 @@ function renderSessTop() {
   head.append(el("span", "grow"), seg);
   box.append(head);
   slide(seg, "sessTop");
-  const by = sessTopBy === "tokens" && usageWithCache ? "tokens_with_cache" : sessTopBy;
-  const list = ov.top?.[by] || [];
+  let list = ov.top?.[sessTopBy] || [];
+  // ranked without the cache, shown with it: ranked again by the count the
+  // reader sees, so the numbers still run down (#2591)
+  if (sessTopBy === "tokens" && usageWithCache) list = [...list].sort((a, b) => usageTokens(b) - usageTokens(a));
   const body = el("div", "sess-tops");
   if (!list.length) body.append(el("div", "sess-none", ov.top ? t("Nothing in this range.") : "…"));
-  const icons = new Map((sessions?.sessions || []).map((s) => [s.agent, s.icon]));
+  const icons = new Map((sessions?.sessions || []).map((s) => [s.app || s.agent, s.icon]));
   const names = sessStats?.agents || {};
   for (const s of list) {
     const open = sessTopOpen === s.key;
@@ -3691,6 +3942,7 @@ function renderUsageEvery() {
   const cur = USAGE_EVERY.find(([n]) => n === usageEvery);
   const b = $("#usageEvery");
   b.replaceChildren(el("span", "", t(cur[1])), svg(CHEV, 11, 1.6));
+  b.classList.toggle("live", usageEvery > 0); // a phone's dot: it reads again by itself
   b.title = t("Refresh every");
   b.onclick = (e) => {
     e.stopPropagation();
@@ -3806,6 +4058,7 @@ if (mode === "window" && params.get("view") === "usage") {
   const per = params.get("period");
   if (PERIODS.some(([id]) => id === per)) period = per;
   quotaFocus = usageTab === "usage" ? (params.get("card") || params.get("provider") || "") : "";
+  usagePeek = quotaFocus;
   quotaFocusUntil = performance.now() + 5000;
   ledProvider = params.get("provider") || "";
   ledAgent = params.get("agent") || "";

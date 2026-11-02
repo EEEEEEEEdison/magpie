@@ -63,6 +63,15 @@ func TestHostRunsAsMagpieBun(t *testing.T) {
 	if err != nil {
 		t.Skip("no bun on PATH")
 	}
+	// npm 的 bun 可能是 .cmd 启动器；被复制的必须是实际二进制。
+	out, err := command(context.Background(), real, "-p", "process.execPath").Output()
+	if err != nil {
+		t.Fatalf("读取 Bun 的实际路径: %v", err)
+	}
+	real = strings.TrimSpace(string(out))
+	if !filepath.IsAbs(real) {
+		t.Fatalf("Bun 未返回绝对路径: %q", real)
+	}
 	bunHome(t, BunVersion, time.Now())
 	t.Cleanup(Settle)
 	// a real Bun as magpie downloaded it before, at the old name: a hard
@@ -94,7 +103,7 @@ func TestHostRunsAsMagpieBun(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		return
 	}
-	out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(h.cmd.Process.Pid)).Output()
+	out, err = exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(h.cmd.Process.Pid)).Output()
 	if err != nil {
 		t.Fatal(err)
 	}

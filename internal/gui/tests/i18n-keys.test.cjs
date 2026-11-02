@@ -46,7 +46,8 @@ test("a plugin's words are its own", () => {
       const p = path.join(d, e.name);
       if (e.isDirectory()) {
         if (!["node_modules", ".git", "site", "tests", "testdata", "docs"].includes(e.name)) walk(p);
-      } else if (/\.(go|js|html|css)$/.test(e.name) && e.name !== "i18n.js") texts.push([p, fs.readFileSync(p, "utf8")]);
+      // Go 测试及其注释不会向窗口提供词条，不能据此改变词条归属。
+      } else if (/\.(go|js|html|css)$/.test(e.name) && !e.name.endsWith("_test.go") && e.name !== "i18n.js") texts.push([p, fs.readFileSync(p, "utf8")]);
     }
   };
   walk(repo);

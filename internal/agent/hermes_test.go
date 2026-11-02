@@ -16,16 +16,30 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestHermes(t *testing.T) {
+// Hermes 的每例测试都有完整的平台目录，避免前一例的 profile 或墓碑残留。
+func hermesSandbox(t *testing.T) string {
+	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	for name, value := range map[string]string{
+		"HOME": home, "USERPROFILE": home, "HERMES_HOME": "",
+		"APPDATA":         filepath.Join(home, "AppData", "Roaming"),
+		"LOCALAPPDATA":    filepath.Join(home, "AppData", "Local"),
+		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
+		"XDG_CACHE_HOME":  filepath.Join(home, ".cache"),
+		"XDG_DATA_HOME":   filepath.Join(home, ".local", "share"),
+		"XDG_STATE_HOME":  filepath.Join(home, ".local", "state"),
+	} {
+		t.Setenv(name, value)
+	}
+	return home
+}
+
+func TestHermes(t *testing.T) {
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro", "flash"}}); err != nil {
 		t.Fatal(err)
 	}
+	setUpInMagpie("hermes")
 	dir := appdir.HermesHomeIn(home)
 	path := filepath.Join(dir, "config.yaml")
 	read := func() (map[string]any, map[string]any, string) {
@@ -105,6 +119,7 @@ func TestHermes(t *testing.T) {
 	}
 
 	// Disconnect from magpie's model: back to what the user had
+	setUpInMagpie("hermes")
 	f.Set("magpie/deepseek/flash")
 	if err := a.Disconnect(); err != nil {
 		t.Fatal(err)
@@ -116,6 +131,7 @@ func TestHermes(t *testing.T) {
 
 	// a config with no provider of its own: none comes back
 	os.WriteFile(path, []byte("agent:\n  max_turns: 60\n"), 0o644)
+	setUpInMagpie("hermes")
 	f.Set("magpie/deepseek/pro")
 	if err := a.Disconnect(); err != nil {
 		t.Fatal(err)
@@ -132,12 +148,7 @@ func TestHermes(t *testing.T) {
 // Disconnect takes magpie out of each (lijiho96940561 on X: only the main
 // bot had magpie).
 func TestHermesProfiles(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -219,11 +230,7 @@ func TestHermesProfiles(t *testing.T) {
 // that profile, and the root's config and its other profiles get the
 // provider too
 func TestHermesProfilesOfCustomRoot(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -284,12 +291,7 @@ func TestHermesFolder(t *testing.T) {
 // a timeout, a key command, a header beside magpie's. The address, key, API
 // mode and model list stay magpie's.
 func TestHermesKeepsTheUsersSettings(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -367,12 +369,7 @@ func TestHermesKeepsTheUsersSettings(t *testing.T) {
 // the check is quiet and a sync keeps it. A key the gateway doesn't take
 // still is drift.
 func TestHermesWithAGatewayKeyOfTheUsers(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -424,12 +421,7 @@ func TestHermesWithAGatewayKeyOfTheUsers(t *testing.T) {
 // unknown, kept and not drift; one naming a key the gateway doesn't take
 // is drift, and a sync puts magpie's key into the .env, the reference kept.
 func TestHermesWithAKeyInItsEnvFile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	t.Setenv("MAGPIE_API_KEY", "")
 	os.Unsetenv("MAGPIE_API_KEY")
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro"}}); err != nil {
@@ -567,12 +559,7 @@ func TestKeyHoldsTakesAGatewayKey(t *testing.T) {
 // picked keeps it (tjhhhh_84378 on Discord: another profile still showed
 // the old model).
 func TestHermesProfilesFollowMagpieModel(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro", "flash", "max", "lite"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -652,12 +639,7 @@ func TestHermesProfilesFollowMagpieModel(t *testing.T) {
 // the model it was on. A bot the user changed in between keeps their pick,
 // and a bot an older magpie left with no model gets magpie's.
 func TestHermesOffAndOnKeepsEveryBotsModel(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro", "flash", "lite"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -738,12 +720,7 @@ func TestHermesOffAndOnKeepsEveryBotsModel(t *testing.T) {
 // had recorded (tjhhhh on Discord: switching for the other bots didn't
 // take).
 func TestHermesBotsFollowTheModelHermesPicked(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro", "flash", "max"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -776,12 +753,7 @@ func TestHermesBotsFollowTheModelHermesPicked(t *testing.T) {
 // model the user picked there. A sticky name that is gone, deleted or not
 // Hermes's, and a HERMES_HOME naming a profile, leave it as before.
 func TestHermesStickyProfile(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro", "flash"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -846,12 +818,7 @@ func TestHermesStickyProfile(t *testing.T) {
 // the provider the profile had, and a profile nobody picks for keeps what
 // it has. With the root's profile only, there is no such picker.
 func TestHermesProfileModels(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
-	t.Setenv("HERMES_HOME", "")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
-	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	home := hermesSandbox(t)
 	if err := provider.Save(provider.Provider{ID: "deepseek", Name: "DeepSeek", Chat: "https://api.deepseek.com/v1", Key: "k", Models: []string{"pro", "flash", "max"}}); err != nil {
 		t.Fatal(err)
 	}

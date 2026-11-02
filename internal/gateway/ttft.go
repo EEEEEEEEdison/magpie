@@ -305,20 +305,21 @@ func filled(raw json.RawMessage) bool {
 	return true
 }
 
-// flowFor is flowMs from where a reply's speed is counted from, as
-// usage.DecodeOf counts it: its first text when it reasoned, else its
-// first content.
+// flowFor 从首个内容计算整段流动范围，包含推理；短答案不代表整轮被缓冲。
 func (f *firstToken) flowFor(reasoning int) int64 {
-	if reasoning > 0 && f.text > 0 {
-		return f.flowMs(f.text.Milliseconds())
-	}
 	return f.flowMs(f.first.Milliseconds())
 }
 
 // hidesReasoning excludes sealed thinking and Responses summaries even when
-// the upstream omits a separate reasoning-token count.
-func (f *firstToken) hidesReasoning(proto provider.Protocol) bool {
-	return f.hidden || (proto == provider.Responses || proto == provider.Gemini || proto == provider.CodeAssist) && f.reasoning > 0
+// the upstream omits a separate reasoning-token count. It also marks a
+// reply whose reasoning streamed while counted, its usage's reasoning
+// tokens, is 0 (#4545): that count is unknown, not none. Anthropic's usage
+// never splits thinking out of output_tokens (DeepSeek's Anthropic endpoint
+// streamed 33 thinking deltas and said only output_tokens 35), and a Chat
+// vendor may send reasoning_content with no completion_tokens_details. The
+// record's Reasoning stays the vendor's 0, never an estimate.
+func (f *firstToken) hidesReasoning(proto provider.Protocol, counted int) bool {
+	return f.hidden || f.reasoning > 0 && (counted <= 0 || proto == provider.Responses || proto == provider.Gemini || proto == provider.CodeAssist)
 }
 
 // reasoningMs requires a paced visible channel. Responses and Gemini summaries
