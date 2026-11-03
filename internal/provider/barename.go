@@ -20,6 +20,14 @@ import (
 // preview. Not v3 alone: deepseek-v3 is another model than deepseek-v2.
 var versionTail = regexp.MustCompile(`(?:[-_@:](?:\d{4}-\d{2}-\d{2}|\d{2}-\d{2}|\d{6,8}|\d{3,4}|v\d+:\d+|latest|preview|exp))+$`)
 
+// vVersion is a model's version written with a dash or an underscore where
+// its own name has a dot: Volcengine Ark and Mistral sell
+// deepseek-v4.1-flash as deepseek-v4-1-flash, and Mistral dates it -1017,
+// so the usage pages' Model split must count the two as one model and a
+// price set for either must cover both. Only a version after "v": Claude's
+// claude-opus-5-5 is that model's own name, not claude-opus-5.5.
+var vVersion = regexp.MustCompile(`v\d+(?:[-_.]\d+)+`)
+
 // vendorDot is Bedrock's region and maker before a model's name
 // (us.anthropic.claude-…), the geography of an inference profile as
 // catalog's bedrockGeos has them: global. and us-gov. among them. The
@@ -125,5 +133,9 @@ func BareModel(m string) string {
 	// what a tail left behind, before a space becomes a "-": "opus [1m]" is
 	// opus, not "opus-"
 	m = strings.TrimSpace(m)
+	// a version a vendor spells with a dash is the model's own dotted one
+	m = vVersion.ReplaceAllStringFunc(m, func(s string) string {
+		return strings.NewReplacer("-", ".", "_", ".").Replace(s)
+	})
 	return sepRun.ReplaceAllString(m, "-")
 }

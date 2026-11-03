@@ -37,6 +37,14 @@ func TestBareModelIsTheModelItself(t *testing.T) {
 		{"claude-opus-5 [1m]", "claude-opus-5"},
 		// v3 is another model than v2, so it is not a version tail
 		{"deepseek-v3", "deepseek-v3"},
+		// a version a vendor spells with a dash is the model's own dotted
+		// one: Volcengine Ark and Mistral sell deepseek-v4.1-flash as
+		// deepseek-v4-1-flash, and Mistral dates it -1017
+		{"deepseek-v4-1-flash", "deepseek-v4.1-flash"},
+		{"deepseek-v4-1-flash-1017", "deepseek-v4.1-flash"},
+		{"mistral/deepseek-v4-1-flash-1017", "deepseek-v4.1-flash"},
+		// only a "v" version folds: Claude's own name keeps its dashes
+		{"claude-opus-5-5", "claude-opus-5-5"},
 		// the region a model is sold in, with a colon where Bedrock puts a
 		// dot: workbuddy2api's cn:deepseek-v4.1-flash is the model itself
 		{"cn:deepseek-v4.1-flash", "deepseek-v4.1-flash"},

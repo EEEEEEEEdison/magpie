@@ -1377,8 +1377,11 @@ A price set for a model without a provider (`*/<model>`) is matched on the
 model's own name (`provider.BareModel`): the id without the maker or path a
 provider sells it under, without a region a relay writes before it with a
 colon (`cn:deepseek-v4.1-flash` is `deepseek-v4.1-flash`), without a
-snapshot or context-size tail, in lower case, and with a run of spaces — and
-the dashes or underscores beside it — as one `-`. So a `*/gpt-6-astra`
+snapshot or context-size tail, in lower case, with a version's dash or
+underscore as the dot the model's own name has (`deepseek-v4-1-flash` is
+`deepseek-v4.1-flash`, as Volcengine Ark and Mistral sell it), and with a
+run of spaces — and the dashes or underscores beside it — as one `-`. So a
+`*/gpt-6-astra`
 price is spent on a relay that lists the
 model as `GPT-6 Astra`, and a `*/gpt-6-sol` price on one that lists it as
 `gpt-6- sol`, as well as on the model's own id. What models.dev lists for
