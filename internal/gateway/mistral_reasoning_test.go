@@ -108,6 +108,33 @@ func TestMistralReasoningAsThinking(t *testing.T) {
 	sameJSON(t, ms[2], `{"role":"tool","tool_call_id":"call_1","content":"secret: magpie"}`)
 }
 
+// Claude Desktop's API translated to Mistral's gets the same treatment
+// (#4906): the assistant's thinking, which magpie sends back as
+// reasoning_content for a model that replays it, is the thinking part on
+// the first request, not a 422 the gateway has to recover from by losing
+// the turn's thinking.
+func TestMistralThinkingTranslated(t *testing.T) {
+	f := &fake{t: t, refuse: mistralRefuseMessages, reply: sse(
+		`data: {"id":"c1","model":"m1","choices":[{"delta":{"content":"91 = 7 x 13."}}]}`,
+		`data: {"id":"c1","choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`data: [DONE]`)}
+	up := setup(t, provider.Chat, f)
+	if err := provider.Save(provider.Provider{ID: "fake", Name: "Fake", Key: "k", Models: []string{"deepseek-v4-1-flash-1017"},
+		Preset: "mistral", Chat: up.URL + "/v1"}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New()
+	code, body := postTo(t, srv, "/v1/messages", `{"model":"deepseek-v4-1-flash-1017","max_tokens":100,"stream":false,"messages":[
+        {"role":"user","content":"Is 91 prime?"},
+        {"role":"assistant","content":[{"type":"thinking","thinking":"Check divisibility by 7: 7*13=91."},{"type":"text","text":"91 = 7 x 13."}]},
+        {"role":"user","content":"And 97? One word."}]}`)
+	if code != 200 || f.calls != 1 {
+		t.Fatalf("%d after %d calls: %s", code, f.calls, body)
+	}
+	ms := sentMessages(t, f.got)
+	sameJSON(t, ms[1], `{"role":"assistant","content":[{"type":"thinking","thinking":[{"type":"text","text":"Check divisibility by 7: 7*13=91."}]},{"type":"text","text":"91 = 7 x 13."}]}`)
+}
+
 // Another vendor that turns an earlier turn's thinking away the way
 // Mistral does is asked again without it, and not sent it again; one that
 // takes it (DeepSeek, Kimi) is sent it as it came.

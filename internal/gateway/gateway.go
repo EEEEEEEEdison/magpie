@@ -7955,7 +7955,14 @@ func buildFor(p provider.Provider, proto provider.Protocol, r *Request, model st
 		c.instructionsKept = true
 		r = &c
 	}
-	return build(proto, r, model, buildHost(p), p.RejectsTemperature(model))
+	body, err := build(proto, r, model, buildHost(p), p.RejectsTemperature(model))
+	if err == nil && proto == provider.Chat && (p.Preset == "mistral" || p.Host() == "api.mistral.ai") {
+		// an earlier turn's reasoning_content, which Mistral turns away
+		// with 422 extra_forbidden, as the thinking part it takes (#494);
+		// the translated body needs this as much as the relayed one does
+		body = mistralThinking(body)
+	}
+	return body, err
 }
 
 func build(proto provider.Protocol, r *Request, model, host string, rejectTemp bool) ([]byte, error) {
