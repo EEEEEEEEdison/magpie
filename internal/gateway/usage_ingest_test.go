@@ -357,8 +357,6 @@ func TestUsageIngestTellsSpeed(t *testing.T) {
   "t":"2026-10-17T00:24:29Z","agent":"my-app","provider":"xai","model":"grok-4.7","rid":"repro-1",
   "in":10696,"out":307,"reasoning":129,"ms":5035,"ttft_ms":4632,"first_text_ms":4700,"status":200}`
 	at := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
-	// a reply that didn't reason, its 601 tokens let go in the last 109 ms
-	// (its flow, scaled as the gateway scales it, 136 ms) of a 4 s window
 	burst := `{"t":"` + at + `","agent":"my-app","provider":"xai","model":"grok-4.7","rid":"burst-1","in":1000,"out":601,"ms":5035,"ttft_ms":1000,"flow_ms":136,"status":200}`
 	// the same reply, streamed as it was written
 	even := strings.Replace(strings.Replace(burst, `"flow_ms":136`, `"flow_ms":4000`, 1), "burst-1", "even-1", 1)

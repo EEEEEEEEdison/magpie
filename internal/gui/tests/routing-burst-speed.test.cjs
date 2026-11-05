@@ -29,7 +29,8 @@ const key = { id: "antigravity", provider: "antigravity", name: "Antigravity", k
 // content streamed over 10.6 s of it, which tells its own 552 in 16 s, 35.
 // [out, ms, ttft, flow, reasoning, firstText]
 const timing = [[8264, 24360, 24359], [8264, 1500, 1000], [1200, 15000, 3000], [100, 3000, 1000], [100, 3000, 1000], [100, 3000, 1000], [2187, 6700, 5100, 2],
-  [550, 16000, 5200, 236, 22, 5400], [550, 16000, 5200, 236, 22, 15764], [395, 19000, 5200, 196], [552, 16000, 5200, 10600, 22, 5400]];
+  [550, 16000, 5200, 236, 22, 5400], [550, 16000, 5200, 236, 22, 15764], [395, 19000, 5200, 196], [552, 16000, 5200, 10600, 22, 5400],
+  [392, 8455, 8200, 230, 0, 8200]];
 const routes = timing.map(([out, ms, ttft, flow, reasoning, firstText], i) => ({
   id: 100 - i, seq: 100 - i, time: at(i), agent: "codex", model: "antigravity/gemini-3.8-flash", provider: "antigravity",
   order: [key], tries: [{ id: key.id, model: key.model, start: at(i), done: true, status: 200, ms, ttft, flow, firstText }],

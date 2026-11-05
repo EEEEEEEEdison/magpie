@@ -50,6 +50,14 @@ const ROWS = [
   { ...GW, route_id: 11, t: at(10), source: "log", out: 1200, reasoning: 200, ms: 20000, ttft_ms: 18000, flow_ms: 1000 },
   { ...GW, route_id: 12, t: at(11), source: "log", out: 60, ms: 3000, ttft_ms: 1000 },
 ];
+// row 9's tooltip in every language its words are in
+const HELD = {
+  en: "It came in under a second after a wait of 8.2 s: it may have been written during the wait and let go at once, so how fast it was written isn't seen",
+  zh: "等了 8.2 秒 后不到一秒就全部到达：可能是在等待中写完再一次性发出，看不出写得多快",
+  "zh-TW": "等了 8.2 秒 後不到一秒就全部到達：可能是在等待中寫完再一次性送出，看不出寫得多快",
+  ja: "8.2 秒 待った後、1 秒足らずで全部届きました。待つ間に書かれて一度に送られたかもしれないため、書く速さはわかりません",
+  de: "Sie kam nach einer Wartezeit von 8.2 s in weniger als einer Sekunde: Sie wurde womöglich während des Wartens geschrieben und auf einmal losgelassen, also ist nicht zu sehen, wie schnell sie geschrieben wurde",
+};
 
 function ledger(period) {
   return {
@@ -115,7 +123,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     assert(["chromium", "webkit"].includes(engine), "BROWSER must be chromium or webkit");
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
     t.after(() => browser.close());
-    for (const lang of ["en", "zh"]) {
+    for (const lang of ["en", "zh", "zh-TW", "ja", "de"]) {
       const w = L[lang];
       await t.test(lang, async () => {
         const errors = [];
@@ -141,6 +149,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           assert(s, "row " + i + " has a speed or a dash");
           if (s === "—") assert((await tip(i)).length > 0, "row " + i + "'s dash says why");
         }
+        // the report: no 1,539 tok/s, and why
+        assert.equal(await text(9), "—");
+        assert.equal(await tip(9), HELD[lang]);
+        if (!w) { assert.deepEqual(errors, []); await ctx.close(); return; }
 
         // not streamed: its whole turn is the window, wait for the first
         // token in it, so it tells a speed like any other

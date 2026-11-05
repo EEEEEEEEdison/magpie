@@ -124,7 +124,7 @@ type Session struct {
 	// Gateway: seen only through magpie's gateway, with no file of the
 	// agent's on this computer (external.go)
 	Gateway       bool          `json:"gateway,omitempty"`
-	Agent         string        `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, codebuddy, droid, cursor, hermes, alma, kimi, agy
+	Agent         string        `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, workbuddy-ai, codebuddy, droid, cursor, hermes, alma, kimi, agy
 	ID            string        `json:"id"`
 	Cwd           string        `json:"cwd"`
 	Title         string        `json:"title"` // the name it was given, else the agent's own title, else the first prompt
@@ -196,6 +196,7 @@ type state struct {
 	// the agent whose file it is, for its parseVersions
 	Agent                 string            `json:"agent,omitempty"`
 	Codex                 *codexUsageState  `json:"-"`
+	codexPath             string            // the rollout read, for its fork's parent
 	Claude                *claudeUsageState `json:"claude,omitempty"`
 	DBRevision            string            `json:"db_revision,omitempty"`
 	Head                  string            `json:"head,omitempty"`
@@ -556,6 +557,9 @@ type fileMore struct {
 	// agy: what conversation_summaries.db says of the conversation
 	agy    *agySummary
 	editor *cursorEditorMeta
+	// loose: a Cursor editor transcript whose chat Cursor's editor keeps
+	// no longer, read from a store that could be read (or none)
+	loose bool
 	// wsl: the WSL distro whose home it is in
 	wsl string
 }
@@ -819,15 +823,24 @@ func listCCFiles(agent, dir string) []file {
 // files.
 var filesHook func()
 
-func allFiles() []file {
+func allFiles() []file { return allFilesWith(zcodeFiles) }
+
+// allFilesForTitles is allFiles with ZCode's sessions listed from their own
+// rows alone: a name poll needs titles, not every message counted
+// (zcodeFiles joins them for a session's size and last activity).
+func allFilesForTitles() []file { return allFilesWith(zcodeTitleFiles) }
+
+func allFilesWith(zcode func() []file) []file {
 	if filesHook != nil {
 		filesHook()
 	}
+	lists := callFileLists(codexFiles())
+	lists = append(lists, openCodeFiles(), piFiles(), raftFiles(), cindyFiles(), wslFiles("pi", "raft", "omp", "kimi"), zcode())
+	lists = append(lists, dshFiles(), clineFiles(), ccFiles("qoder", QoderDir("qoder")), ccFiles("qoder-cn", QoderDir("qoder-cn")),
+		grokFiles(), workbuddyFiles(), workbuddyAIFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), kimiFiles(), agyFiles())
 	// each lister asked Reads already; a file listed under another
 	// agent's name is held to that agent too
-	return allowed(distinctOf(append(callFileLists(codexFiles()), openCodeFiles(), piFiles(), raftFiles(), cindyFiles(),
-		wslFiles("pi", "raft", "omp", "kimi"), zcodeFiles(), dshFiles(), clineFiles(), ccFiles("qoder", QoderDir("qoder")), ccFiles("qoder-cn", QoderDir("qoder-cn")),
-		grokFiles(), workbuddyFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), kimiFiles(), agyFiles())...))
+	return allowed(distinctOf(lists...))
 }
 
 // distinctOf is lists one after another with each path kept once, the
@@ -900,6 +913,10 @@ func distinctPaths(fs []file) []file {
 // Dirs are the folders the sessions are read from: Claude Code's and
 // Codex's, and the other agents' where they keep sessions on this computer.
 func Dirs() []string {
+	// gateway mode reads no folder here (OwnOff)
+	if ownOff() {
+		return nil
+	}
 	out := []string{ClaudeDir()}
 	out = append(out, CodexDirs()...)
 	var named []os.FileInfo
@@ -914,6 +931,7 @@ func Dirs() []string {
 		{QoderDir("qoder-cn"), filepath.Join(QoderDir("qoder-cn"), "projects")},
 		{GrokDir(), filepath.Join(GrokDir(), "sessions")},
 		{WorkBuddyDir(), filepath.Join(WorkBuddyDir(), "projects")},
+		{WorkBuddyAIDir(), filepath.Join(WorkBuddyAIDir(), "projects")},
 		{CodeBuddyDir(), filepath.Join(CodeBuddyDir(), "projects")},
 		{OmpDir(), filepath.Join(OmpDir(), "sessions")},
 		{FactoryDir(), filepath.Join(FactoryDir(), "sessions")},
@@ -1245,7 +1263,13 @@ const cacheVersion = 30
 // parseVersions is cacheVersion for one agent's parses, 0 when not listed:
 // raised, the parses of that agent's files kept by an older magpie are read
 // again, and the rest stand.
-var parseVersions = map[string]int{}
+//
+// codex 1, zcode 1: a fork's copies of its parent's usage are the
+// parent's (codex_fork.go, zcDB.copied).
+//
+// codex 2: only a fork's copies are; its own calls after them are its own,
+// whatever their numbers.
+var parseVersions = map[string]int{"codex": 3, "zcode": 1}
 
 type cacheFile struct {
 	Version int    `json:"version"`
@@ -2065,7 +2089,7 @@ func parserFor(agent string) sessionParser {
 		return sessionParser{line: codexBody}
 	case "pi", "raft", "cindy", "omp":
 		return sessionParser{line: piParse}
-	case "workbuddy", "codebuddy":
+	case "workbuddy", "workbuddy-ai", "codebuddy":
 		return sessionParser{line: workbuddyLine}
 	default:
 		return sessionParser{line: claudeLine, claude: true}
@@ -2112,6 +2136,7 @@ func parseWith(f file, old *state, calls *callsRide) *state {
 	s.ContentHash = prefixHash(f.path, f.size)
 	var head func([]byte) bool
 	if f.agent == "codex" {
+		s.codexPath = f.path
 		head = func(b []byte) bool { return codexHead(s, b, f.main) }
 	}
 	line := func(b []byte, _, _ int64) bool {
@@ -2833,15 +2858,25 @@ func findListed(agent, id string) (Session, bool) {
 // agent's own title, else its first prompt. A key with no files, or a
 // session with no title, is left out. Desktop's local metadata can name a
 // session without its CLI transcript. The Routing page uses this too (#1293).
+// A ZCode request names its session without the sess_ prefix its database
+// gives it, so that id names the session too.
 func Titles(keys []string) map[string]string {
 	out := map[string]string{}
 	if len(keys) == 0 {
 		return out
 	}
 	want := make(map[string]bool, len(keys))
+	// alias maps the key a file is grouped under back to the key asked for:
+	// ZCode's request id, without the prefix its database gives it.
+	alias := map[string]string{}
 	var desktopIDs, piDesktopIDs []string
 	for _, k := range keys {
 		want[k] = true
+		if agent, id, ok := strings.Cut(k, ":"); ok && agent == "zcode" && !strings.HasPrefix(id, "sess_") {
+			full := agent + ":sess_" + id
+			want[full] = true
+			alias[full] = k
+		}
 		if id, ok := strings.CutPrefix(k, "claude-desktop:"); ok {
 			desktopIDs = append(desktopIDs, id)
 			continue
@@ -2870,7 +2905,30 @@ func Titles(keys []string) map[string]string {
 	defer mu.Unlock()
 	loadCache()
 	defer useDBs()()
-	files := allFiles()
+	files := allFilesForTitles()
+	// ZCode files a subagent under sess_subagent_agent_<id>, with its
+	// conversation under the parent session's key (ocRoots). A request
+	// names it by the bare id, so its title is read from its own file
+	// when no group carries the key asked for.
+	subFiles := map[string]*file{}
+	for i := range files {
+		f := &files[i]
+		if id, ok := strings.CutPrefix(f.m().sid, "sess_subagent_agent_"); ok && f.agent == "zcode" {
+			subFiles[id] = f
+		}
+	}
+	subAsked := map[string]string{} // the key asked for → the subagent's file
+	for _, k := range keys {
+		agent, id, ok := strings.Cut(k, ":")
+		if !ok || agent != "zcode" {
+			continue
+		}
+		if f := subFiles[strings.TrimPrefix(id, "sess_subagent_agent_")]; f != nil {
+			want[f.key] = true
+			subAsked[k] = f.path
+		}
+	}
+	zcodeTitleStamps(files, want)
 	groups := byKey(files, func(f *file) bool { return want[f.key] })
 	var fs []file
 	for _, f := range files {
@@ -2898,6 +2956,19 @@ func Titles(keys []string) map[string]string {
 				continue
 			}
 			out[k] = s.Title
+			if asked := alias[k]; asked != "" {
+				out[asked] = s.Title
+			}
+		}
+	}
+	for k, path := range subAsked {
+		if out[k] != "" {
+			continue
+		}
+		if st := cache[path]; st != nil {
+			if name := cmp.Or(st.Named, st.Title, st.First); name != "" {
+				out[k] = name
+			}
 		}
 	}
 	return out
