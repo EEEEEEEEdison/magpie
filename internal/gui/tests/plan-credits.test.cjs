@@ -3,10 +3,12 @@
 // Discord: the Usage page should say the credits spent by model, agent and
 // session). Each reply says it as usage.credit, the figure WorkBuddy's own
 // app shows on a reply as "Credits Consumed"; magpie keeps it on the row and
-// the Usage page's ranking says the sum on its line of numbers, the
-// Sessions page on the line of where magpie routed the session. A group no
-// reply said credits for says none, not 0. Every language, Chromium and
-// WebKit; no backend, the API is faked.
+// the Usage page's ranking says the sum on its line of numbers, in the splits
+// that are one plan's rows (Model · provider, Provider): a Model or Agent row
+// sums several plans' calls, whose credits can't be added. The Sessions page
+// says them on the line of where magpie routed the session. A group no reply
+// said credits for says none, not 0. Every language, Chromium and WebKit; no
+// backend, the API is faked.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -31,10 +33,20 @@ const OTHER = { id: "glm-5.2", calls: 3, input: 9, output: 1, cache_read: 0, cac
 function ledger(period) {
   const all = [GEM, FREE, OTHER];
   const s = (k) => all.reduce((a, x) => a + (x[k] || 0), 0);
+  // a row of one plan, for the splits that don't sum several plans' calls
+  const plan = (x, provider) => ({ ...x, id: provider + "/" + x.id });
   return {
     period, rows: [row(0, "gemini-3.5-flash", "workbuddy-ai"), row(1, "glm-5.2", "zai")], offset: 0, total: 2,
     calls: s("calls"), errors: 0, input: s("input"), output: s("output"), cache_read: 0, cache_write: 0, cost: 0, unpriced: 74, credits: 0.7, credited: 71,
-    by: { model: all }, bucket: "hour",
+    by: {
+      model: all,
+      modelAt: [plan(GEM, "workbuddy-ai"), plan(FREE, "workbuddy-ai"), plan(OTHER, "zai")],
+      provider: [
+        { id: "workbuddy-ai", calls: 71, input: 639, output: 841, cache_read: 0, cache_write: 0, cost: 0, credits: 0.7, credited: 71 },
+        { id: "zai", calls: 3, input: 9, output: 1, cache_read: 0, cache_write: 0, cost: 0 },
+      ],
+      agent: [{ id: "codex", calls: 74, input: s("input"), output: s("output"), cache_read: 0, cache_write: 0, cost: 0, credits: 0.7, credited: 71 }],
+    }, bucket: "hour",
     series: [{ label: "", time: hour(0), calls: s("calls"), input: s("input"), output: s("output"), by: { model: Object.fromEntries(all.map((x) => [x.id, { calls: x.calls, tokens: x.input + x.output, cost: 0 }])) } }],
     agents: [{ id: "codex", name: "Codex", icon: "codex-color" }],
   };
@@ -54,7 +66,13 @@ const SESSION = {
 // 积分 each account spent, not only its tokens)
 const acct = (id, provider, sub, calls, credits, credited) => ({ id: provider + "@" + id, provider, account: id, name: id, sub, icon: "generic", calls, errors: 0, input: 900 * calls, output: 100 * calls, cache_read: 0, cache_write: 0, cost: 0, ...(credited ? { credits, credited } : {}) });
 const ACCOUNTS = [acct("a@x.com", "workbuddy", "WorkBuddy", 70, 35, 70), acct("b@x.com", "workbuddy", "WorkBuddy", 2, 2.25, 1), acct("c@x.com", "codex", "Codex", 5)];
-const OVERVIEW = { calls: 77, errors: 0, input: 69300, output: 7700, reasoning: 0, unpriced: 77, cost: 0, cache_read: 0, cache_write: 0, credits: 37.25, credited: 71, bucket: "day", series: [], agents: [], models: [], accounts: ACCOUNTS, callerKeys: [], path: "~/.config/magpie/usage.jsonl" };
+// a model at one provider says its credits; an agent's calls at several
+// plans don't
+const MODEL_ONE = { id: "workbuddy-ai/gemini-3.5-flash", provider: "workbuddy-ai", model: "gemini-3.5-flash", name: "gemini-3.5-flash", calls: 70, errors: 0, input: 630, output: 840, cache_read: 0, cache_write: 0, cost: 0, credits: 35, credited: 70 };
+// a model whose calls all failed before writing a token: no share to draw
+const ZERO_MODEL = { id: "ctmoai/GPT-6.1-sol", provider: "ctmoai", model: "GPT-6.1-sol", name: "GPT-6.1-sol", calls: 7, errors: 7, input: 0, output: 0, cache_read: 0, cache_write: 0, cost: 0 };
+const AGENT_MANY = { id: "codex", name: "Codex", calls: 74, errors: 0, input: 648, output: 842, cache_read: 0, cache_write: 0, cost: 0, credits: 0.7, credited: 71 };
+const OVERVIEW = { calls: 77, errors: 0, input: 69300, output: 7700, reasoning: 0, unpriced: 77, cost: 0, cache_read: 0, cache_write: 0, credits: 37.25, credited: 71, bucket: "day", series: [], agents: [AGENT_MANY], models: [MODEL_ONE, ZERO_MODEL], accounts: ACCOUNTS, callerKeys: [], path: "~/.config/magpie/usage.jsonl" };
 const EMPTY = { calls: 0, errors: 0, input: 0, output: 0, reasoning: 0, unpriced: 0, cost: 0, bucket: "day", series: [], agents: [], models: [], path: "" };
 
 function server(lang, usage = EMPTY) {
@@ -91,20 +109,20 @@ const L = {
   de: ["0,7 Credits", "0 Credits", /Credits/],
 };
 
-// each language's 35, 2.25 and 37.25 credits
+// each language's 35 and 2.25 credits
 const A = {
-  en: ["35 credits", "2.25 credits", "37.25 credits"],
-  zh: ["35 积分", "2.25 积分", "37.25 积分"],
-  "zh-TW": ["35 積分", "2.25 積分", "37.25 積分"],
-  ja: ["35 クレジット", "2.25 クレジット", "37.25 クレジット"],
-  de: ["35 Credits", "2,25 Credits", "37,25 Credits"],
+  en: ["35 credits", "2.25 credits"],
+  zh: ["35 积分", "2.25 积分"],
+  "zh-TW": ["35 積分", "2.25 積分"],
+  ja: ["35 クレジット", "2.25 クレジット"],
+  de: ["35 Credits", "2,25 Credits"],
 };
 
 for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
   test(engine + ": the Overview says each account's credits and the period's", async (t) => {
     const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
     t.after(() => browser.close());
-    for (const [lang, [a, b, all]] of Object.entries(A)) {
+    for (const [lang, [a, b]] of Object.entries(A)) {
       await t.test(lang, async () => {
         const errors = [];
         const ctx = await browser.newContext({ viewport: { width: 1100, height: 800 }, reducedMotion: "reduce" });
@@ -120,9 +138,20 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert(subs[0].includes(a), "a@x.com's line: " + subs[0]);
         assert(subs[1].includes(b), "b@x.com's line: " + subs[1]);
         assert(!/credit|积分|積分|クレジット/i.test(subs[2]), "an account no reply said credits for: " + subs[2]);
+        const word = L[lang][2];
         const kpi = (await p.locator("#stats .kpi").nth(3).textContent()).trim();
-        assert(kpi.includes(all), "the calls tile: " + kpi);
+        assert(!word.test(kpi), "the calls tile says no credits, a period's calls are several plans': " + kpi);
         assert.equal(await p.locator("#stats .kpi").count(), 4, "no tile is added");
+        const modelSubs = await p.locator("#usageModels .sub").allTextContents();
+        assert(modelSubs.some((s) => s.includes(a)), "a model at one provider says its credits: " + modelSubs.join(" | "));
+        // a model that used no tokens draws no bar: no stub, no empty track
+        const zeroRow = p.locator("#usageModels .row").filter({ hasText: "GPT-6.1-sol" });
+        assert.equal(await zeroRow.locator(".share.zero").count(), 1, "a row with no tokens has no share");
+        assert.equal(await zeroRow.locator(".share i").evaluate((f) => f.getBoundingClientRect().width), 0, "its fill is empty");
+        assert.equal(await zeroRow.locator(".share").evaluate((s) => getComputedStyle(s).backgroundColor), "rgba(0, 0, 0, 0)", "its track is invisible");
+        assert.equal(await p.locator("#usageModels .row").filter({ hasText: "gemini-3.5-flash" }).locator(".share.zero").count(), 0, "a row with tokens keeps its share");
+        const agentSubs = await p.locator("#usageAgents .sub").allTextContents();
+        assert(agentSubs.length && agentSubs.every((s) => !word.test(s)), "an agent's calls at several plans say no credits: " + agentSubs.join(" | "));
         // a narrow window keeps each line inside its row
         await p.setViewportSize({ width: 420, height: 800 });
         await p.waitForTimeout(150);
@@ -158,17 +187,37 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await p.locator("#ledWrap .led tbody tr").first().waitFor();
         await p.waitForTimeout(300);
 
-        // the ranking: each model's sum on its line, none where none was said
+        // the ranking: the Model split sums one model's calls at every
+        // provider, whose plans' credits can't be added
         const line = async (id) => (await p.locator("#ledRank .rk").filter({ hasText: id }).locator(".rk-b").textContent()).trim();
         const g = await line("gemini-3.5-flash");
-        assert(g.includes(gem), `gemini-3.5-flash's line: ${g}`);
-        assert(!/0{5}/.test(g), `no float noise: ${g}`);
+        assert(!word.test(g), `the Model split's line says no credits: ${g}`);
+        assert.equal(await p.locator("#ledRank .rk-credits").count(), 0, "no credits in the Model split");
+
+        // Model · provider is one plan's row: the credits are its own
+        await p.locator("#ledSplit .opt").nth(1).click();
+        await p.locator("#ledRank .rk").filter({ hasText: "workbuddy-ai/gemini-3.5-flash" }).waitFor();
+        const g1 = await line("gemini-3.5-flash");
+        assert(g1.includes(gem), `gemini-3.5-flash's line: ${g1}`);
+        assert(!/0{5}/.test(g1), `no float noise: ${g1}`);
         const f = await line("deepseek-v4.1-flash");
         assert(f.includes(free), `the free model's line: ${f}`);
-        const o = await line("glm-5.2");
+        const o = await line("zai/glm-5.2");
         assert(!word.test(o), `a model no reply said credits for: ${o}`);
-        const tip = await p.locator("#ledRank .rk").filter({ hasText: "gemini-3.5-flash" }).locator(".rk-credits").getAttribute("title");
+        const tip = await p.locator("#ledRank .rk").filter({ hasText: "workbuddy-ai/gemini-3.5-flash" }).locator(".rk-credits").getAttribute("title");
         assert(tip && tip.includes("70"), "its title says how many requests: " + tip);
+
+        // Provider is one plan's rows too
+        await p.locator("#ledSplit .opt").nth(2).click();
+        await p.locator("#ledRank .rk").filter({ hasText: "workbuddy-ai" }).waitFor();
+        assert.equal(await p.locator("#ledRank .rk-credits").count(), 1, "the Provider split says its credits");
+
+        // Agent sums several plans' calls: no credits
+        await p.locator("#ledSplit .opt").nth(3).click();
+        await p.locator("#ledRank .rk").filter({ hasText: "codex" }).waitFor();
+        assert.equal(await p.locator("#ledRank .rk-credits").count(), 0, "no credits in the Agent split");
+        await p.locator("#ledSplit .opt").nth(1).click();
+        await p.locator("#ledRank .rk").filter({ hasText: "workbuddy-ai/gemini-3.5-flash" }).waitFor();
 
         // a narrow window keeps the line inside the ranking
         await p.setViewportSize({ width: 420, height: 800 });

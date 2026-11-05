@@ -1266,6 +1266,8 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
 .row.stat .who .name.faint { color: var(--faint); font-weight: 400; }
 .row.stat .share { flex: 1 1 auto; height: 4px; border-radius: 2px; background: var(--pill); overflow: hidden; margin: 0 6px; }
 .row.stat .share i { display: block; height: 100%; border-radius: 2px; background: var(--accent); opacity: .7; }
+/* a row that used no tokens has no share to draw: no stub in an empty track */
+.row.stat .share.zero { background: none; }
 .row.stat .num { display: flex; flex-direction: column; align-items: flex-end; flex: none; min-width: 64px; font-variant-numeric: tabular-nums; }
 .row.stat .num b { font-weight: 600; }
 .row.stat .num small { font-size: 10.5px; color: var(--muted); white-space: nowrap; }

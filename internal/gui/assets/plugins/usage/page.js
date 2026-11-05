@@ -693,7 +693,7 @@ function renderUsage() {
   const hit = u.cache_read && hitRate !== null ? t("hit rate {p}", { p: Math.round(100 * hitRate) + "%" }) : "";
   tile(fmtN(u.cache_read), t("cache read"), hit, u.cache_write ? t("{n} written", { n: fmtN(u.cache_write) }) + cacheTTLs(u, fmtN) : "");
   tile(fmtN(u.reasoning), t("reasoning"), t("inside output"));
-  tile(String(u.calls), t(u.calls === 1 ? "call" : "calls"), [u.credited ? ledCredits(u).textContent : "", u.errors ? t("{n} failed", { n: u.errors }) : "", u.retried ? t("{n} answered on a retry", { n: u.retried }) : "", u.unpriced ? t("{n} unpriced", { n: u.unpriced }) : ""].filter(Boolean).join(" · "), u.unpriced ? unpricedCallsWhy(u.unpriced) : "");
+  tile(String(u.calls), t(u.calls === 1 ? "call" : "calls"), [u.errors ? t("{n} failed", { n: u.errors }) : "", u.retried ? t("{n} answered on a retry", { n: u.retried }) : "", u.unpriced ? t("{n} unpriced", { n: u.unpriced }) : ""].filter(Boolean).join(" · "), u.unpriced ? unpricedCallsWhy(u.unpriced) : "");
 
   // the timeline: one bar per hour, day or week; output sits on top of input
   const chart = $("#chart");
@@ -725,6 +725,10 @@ function renderUsage() {
   const list = (id, groups, act) => {
     const box = typeof id === "string" ? $("#" + id) : id;
     box.replaceChildren();
+    // a plan's credits are its own: only a row of one plan (a model at a
+    // provider, an account) says them, not an agent's or a key's calls at
+    // several
+    const onePlan = id === "usageModels" || id === "usageAccounts";
     for (const g of groups) {
       const r = el("div", "row stat");
       r.dataset.id = g.id || "";
@@ -735,9 +739,9 @@ function renderUsage() {
       if (g.sub) sub.push(g.sub);
       sub.push(t(g.calls === 1 ? "{n} call" : "{n} calls", { n: g.calls }));
       // what the calls cost in their plan's credits, as the replies said
-      // (WorkBuddy's 积分): an account's, a model's, an agent's (lcyksp
-      // on Discord), not only their tokens
-      if (g.credited) sub.push(ledCredits(g).textContent);
+      // (WorkBuddy's 积分): an account's or a model at one provider's,
+      // not only their tokens
+      if (onePlan && g.credited) sub.push(ledCredits(g).textContent);
       // magpie's own calls apart from the agents' (#1839): magpie's row
       // says it is, and a model's, a key's or an account's how many of
       // its calls were
@@ -758,9 +762,12 @@ function renderUsage() {
       if (g.own?.calls) subLine.title = ownWhy();
       who.append(subLine);
       r.append(who);
-      const share = el("div", "share");
+      // a row that used no tokens has no share to draw: not the minimum
+      // width's stub in an empty track
+      const tokens = usageTokens(g);
+      const share = el("div", "share" + (tokens ? "" : " zero"));
       const fill = el("i");
-      fill.style.width = Math.max(1.5, 100 * usageTokens(g) / total).toFixed(1) + "%";
+      fill.style.width = tokens ? Math.max(1.5, 100 * tokens / total).toFixed(1) + "%" : "0%";
       share.append(fill);
       share.title = t("{n}% of tokens", { n: Math.round(100 * usageTokens(g) / total) });
       r.append(share);
