@@ -297,6 +297,14 @@ func MergeList(h http.Header, name, add string) {
 // refusal's body is worth reading before it is passed on.
 func (p Provider) Retries() bool { return p.Account != nil && p.Account.retry != nil }
 
+// RegionRetries is whether a 400 saying the request's location isn't
+// served is worth asking again on a new connection: Antigravity's egress
+// proxy may choose another node for it. The request itself is whole, so
+// another account or another connection can still answer.
+func (p Provider) RegionRetries() bool {
+	return p.Account != nil && p.Account.Agent == "antigravity"
+}
+
 // Retry is whether a request (sent) the backend refused with status and
 // body is worth sending once more, the account having mended what it named.
 func (p Provider) Retry(ctx context.Context, sent []byte, status int, body []byte) bool {

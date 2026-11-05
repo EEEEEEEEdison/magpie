@@ -80,6 +80,8 @@ func Func(req *http.Request) (*url.URL, error) {
 
 type choiceKey struct{}
 
+type freshKey struct{}
+
 type holdKey struct{}
 
 // Hold is ctx for work magpie was not asked to do and must not send: no
@@ -121,6 +123,22 @@ func With(ctx context.Context, choice string) context.Context {
 		ctx = context.WithValue(ctx, uncheckedKey{}, map[string]bool(nil))
 	}
 	return ctx
+}
+
+// Fresh is ctx for a request that must not reuse an idle connection: a
+// retry whose proxy may choose another node for it. The transport's idle
+// connections for the request's route are closed before it is sent.
+func Fresh(ctx context.Context) context.Context {
+	return context.WithValue(ctx, freshKey{}, true)
+}
+
+// freshOf is whether ctx asks for a new connection.
+func freshOf(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	fresh, _ := ctx.Value(freshKey{}).(bool)
+	return fresh
 }
 
 // Choice is the proxy ctx names (With), "" when it names none — for a CLI
@@ -191,6 +209,13 @@ func (d *dispatch) RoundTrip(req *http.Request) (*http.Response, error) {
 		d.CloseIdleConnections()
 	}
 	r := route{choice: choiceOf(req.Context()), h1: HTTP1 != nil && HTTP1(req.URL), unchecked: uncheckedHost(req)}
+	if freshOf(req.Context()) {
+		if r == (route{}) {
+			d.base.CloseIdleConnections()
+		} else {
+			d.transport(r).CloseIdleConnections()
+		}
+	}
 	if r == (route{}) {
 		return v4Retry(d.base, req)
 	}

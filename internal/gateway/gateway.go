@@ -4972,6 +4972,11 @@ func (s *Server) forward(ctx context.Context, p provider.Provider, to provider.P
 		res.Body.Close()
 		res, err = s.forwardOnce(ctx, p, to, path, body, in)
 	}
+	if err == nil {
+		// Antigravity's proxy may choose another node for a request it
+		// refused for where it came from (antigravity_region.go)
+		res, err = s.retryAntigravityRegion(ctx, p, to, path, body, in, res)
+	}
 	if err == nil && (res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusBadRequest) && p.Retries() {
 		// an account that can mend what the refusal names (a Factory org
 		// the server won't take; a model Copilot's Auto picked that the
