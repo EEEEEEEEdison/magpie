@@ -1,16 +1,17 @@
 package gateway
 
 import (
+	"math"
 	"testing"
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
 )
 
-// Speed first weighs a seat by the pace usage.DecodeOf tells: a reply that
-// came whole 255 ms after an 8.2 s first token (pluviophile714 on Discord,
-// 1,539 tok/s from gpt-6.1-sol) gives its seat a first token, not a pace,
-// so a relay that holds replies doesn't pass for the fastest.
+// Speed first weighs a seat by the pace usage.DecodeOf tells: this fork
+// times the whole turn, so a reply whose content came in 230 ms of an
+// 8.455 s turn is a held burst and gives its seat a first token, not a
+// pace. A reply that streamed through its turn keeps that whole-turn pace.
 func TestShortWindowAfterLongWaitNotesNoPace(t *testing.T) {
 	forgetSpeeds()
 	t.Cleanup(forgetSpeeds)
@@ -20,9 +21,9 @@ func TestShortWindowAfterLongWaitNotesNoPace(t *testing.T) {
 	if ttft, tps := speedOf(c, t0); ttft != 8200 || tps != 0 {
 		t.Fatalf("burst after a long wait: ttft %v, tps %v; want 8200, 0", ttft, tps)
 	}
-	// a streamed answer keeps its pace: 392 tokens over 4 s
+	// a streamed answer keeps its pace: 392 tokens over the whole 12.2 s turn
 	noteTrySpeed(c, Try{Millis: 12200, TTFT: 8200, FirstText: 8200, Flow: 4000}, 392, 0, t0)
-	if _, tps := speedOf(c, t0); tps != 98 {
-		t.Fatalf("streamed answer: tps %v; want 98", tps)
+	if _, tps := speedOf(c, t0); math.Abs(tps-392000.0/12200) > 0.01 {
+		t.Fatalf("streamed answer: tps %v; want %v", tps, 392000.0/12200)
 	}
 }
