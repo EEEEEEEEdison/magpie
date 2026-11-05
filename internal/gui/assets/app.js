@@ -667,8 +667,10 @@ function renderAgents() {
       row.classList.add("drifted");
       if (!kind) who.append(driftFix(a));
     }
-    // an app started before magpie's last change (the panel's row)
+    // an app started before magpie's last change (the panel's row), or one
+    // running now that its Restart can still reach
     else if (!kind && a.appRestart) who.append(appRestart(a));
+    else if (!kind && a.appRunning && a.wired) who.append(appRestartNow(a));
     // the CLI's version and its update (#202)
     if (mode !== "panel") who.append(cliTag(a));
     if (mode !== "panel" && isHere(a)) who.append(Object.assign(el("span", "ag-missing ag-here", t(HERE)), { title: t(HERE_TIP, { agent: a.name }) }));
@@ -1541,7 +1543,8 @@ function connectRow(a, row, who, { fields, extras, fieldBtn, sw, kind }) {
   row.classList.add("conn");
   row.classList.toggle("unplugged", kind === "ok" && !a.wired);
   who.classList.add("with-models");
-  who.append(connectLine(a, kind));
+  const statusLine = connectLine(a, kind);
+  who.append(statusLine);
   // a hidden one's Show stands in the row, centred as its picker and switch
   // are, not up on the name's line above its middle (Hu9956, #842: 其余里
   // 的显示歪了偏上了)
@@ -1565,6 +1568,9 @@ function connectRow(a, row, who, { fields, extras, fieldBtn, sw, kind }) {
         if (!getSelection()?.isCollapsed) return; // words being selected
         link.click();
       };
+      // its desktop app runs now: a Restart at hand beside Details and model,
+      // not only when a change left it on an older settings file (agent.AppState)
+      if (a.appRunning && !a.appRestart) row.append(appRestartNow(a));
     }
     // the square copying the command that starts it on magpie (agy), the
     // only way it takes magpie: on the row, before the model
@@ -2079,6 +2085,32 @@ function appRestart(a) {
       state = await api("agents/restart/" + a.id, {});
       renderAgents();
       status(t("{agent} restarted", { agent: a.name }));
+    } catch (err) {
+      if (go.isConnected) { go.disabled = false; go.classList.remove("busy"); }
+      status(tNotice(err.message), "err");
+    }
+  };
+  return go;
+}
+
+// appRestartNow: the same Restart while the app runs on the current
+// settings too (agent.AppState), so a change magpie can't see in its files
+// still has a way back without finding the app's shortcut
+function appRestartNow(a) {
+  const go = el("button", "ag-quiet ag-restart-now");
+  go.type = "button";
+  go.title = t("Restart {agent} to read the current settings", { agent: a.name });
+  go.setAttribute("aria-label", t("Restart {agent}", { agent: a.name }));
+  go.append(svg(REAPPLY, 11, 1.8), el("span", "", t("Restart")));
+  go.onclick = async (e) => {
+    e.stopPropagation();
+    if (!(await confirmRestart(a.name, a.id === "codex" ? t("Only its app-server restarts, for the new settings; its window stays. A running turn stops.") : undefined))) return;
+    go.disabled = true;
+    go.classList.add("busy");
+    try {
+      state = await api("agents/restart-app/" + a.id, {});
+      renderAgents();
+      status(a.id === "codex" ? t("Codex app-server restarted") : t("{agent} restarted", { agent: a.name }));
     } catch (err) {
       if (go.isConnected) { go.disabled = false; go.classList.remove("busy"); }
       status(tNotice(err.message), "err");

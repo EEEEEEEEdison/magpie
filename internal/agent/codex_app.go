@@ -47,6 +47,11 @@ func cmdErr(out []byte, err error) error {
 // itself; a var so tests don't end a real one.
 var restartAppServer = provider.RestartCodexApp
 
+// restartAppServerNow restarts the app-server of the Codex app running
+// here, wherever its app-server keeps Codex's home; a var so tests don't
+// end a real one.
+var restartAppServerNow = provider.RestartCodexAppServer
+
 // ReopenCodexApp restarts the app-server of the Codex desktop app at
 // bundle; the app starts a new one and its window stays. Only an app the
 // Agents row lists as left on the old list is touched, never a path a
@@ -76,6 +81,7 @@ var (
 	noticeSwitchAppNoEnd   = newNotice("magpie couldn't restart the {agent} app's app-server. Quit the app and open it again.")
 	noticeSwitchAppNotBack = newNotice("The {agent} app's app-server ended, but the app didn't start another. Quit the app and open it again.")
 	noticeSwitchAppUnknown = newNotice("magpie couldn't tell whether the {agent} app restarted. Quit the app and open it again.")
+	noticeRestartCodexGone = newNotice("The {agent} app or its app-server isn't running now.")
 )
 
 // restartSwitchedApp restarts the Codex app's app-server; a var so tests
@@ -101,6 +107,24 @@ func RestartSwitchedCodexApp(ctx context.Context) error {
 	return errors.New(noticeSwitchAppUnknown.say("agent", "Codex"))
 }
 
+// restartCodexNow restarts the app-server of the Codex app running here
+// for the Agents row's Restart, and says in the reader's language what
+// went wrong when it didn't. Its window, threads and drafts stay.
+func restartCodexNow(ctx context.Context, a *Agent) error {
+	err := restartAppServerNow(ctx)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, provider.ErrCodexAppGone):
+		return restartErr(noticeRestartCodexGone, a)
+	case errors.Is(err, provider.ErrCodexAppNoEnd):
+		return errors.New(noticeSwitchAppNoEnd.say("agent", a.Name))
+	case errors.Is(err, provider.ErrCodexAppNotBack):
+		return errors.New(noticeSwitchAppNotBack.say("agent", a.Name))
+	}
+	return errors.New(noticeSwitchAppUnknown.say("agent", a.Name))
+}
+
 // codexWinApp is the Windows Codex app: the OpenAI.Codex Store package's
 // ChatGPT.exe (26.1021 on the Windows box, under C:\Program Files\
 // WindowsApps\OpenAI.Codex_…\app\), never the ChatGPT chat app's.
@@ -118,18 +142,35 @@ const codexWinAUMID = "OpenAI.Codex_2p2nqsd0c76g0!App"
 // its processes: Electron's helpers run the same executable); not known
 // elsewhere.
 func codexAppOpen(context.Context) (open, known bool) {
+	if !restartOnLinux && !restartOnWindows && !restartOnMac {
+		return false, false
+	}
+	_, ok := codexAppRunning()
+	return ok, true
+}
+
+// codexAppRunning is the Codex desktop app as it runs here: the Store
+// app's ChatGPT.exe on Windows, ChatGPT.app (or Codex.app) on macOS, and
+// OpenAI's package's ChatGPT on Linux.
+func codexAppRunning() (appRunning, bool) {
 	switch {
 	case restartOnLinux:
 		app := desktopApps["codex"]
-		return len(running("^"+regexp.QuoteMeta(app.linux+"/ChatGPT")+"( |$)")) > 0, true
+		ps := running("^" + regexp.QuoteMeta(app.linux+"/ChatGPT") + "( |$)")
+		if len(ps) == 0 {
+			return appRunning{}, false
+		}
+		up := ps[0].up
+		for _, p := range ps[1:] {
+			up = max(up, p.up)
+		}
+		return appRunning{since: time.Now().Add(-up)}, true
 	case restartOnWindows:
-		_, ok := findRestartable(codexWinApp)
-		return ok, true
+		return findRestartable(codexWinApp)
 	case restartOnMac:
-		_, ok := findRestartable(restartable{mac: desktopApps["codex"]})
-		return ok, true
+		return findRestartable(restartable{mac: desktopApps["codex"]})
 	}
-	return false, false
+	return appRunning{}, false
 }
 
 // codexAppReopen is provider.CodexAppReopen: on Windows it quits the

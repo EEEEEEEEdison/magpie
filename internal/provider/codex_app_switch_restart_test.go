@@ -96,6 +96,29 @@ func TestRestartSwitchedCodexApp(t *testing.T) {
 	}
 }
 
+// The Agents page's Restart uses the same app-server restart without an
+// account switch: none running is said, and both the app's ones are ended
+// and replaced.
+func TestRestartCodexAppServer(t *testing.T) {
+	s := stubCodexApp(t)
+	oldGone, oldBack := codexAppGoneWait, codexAppBackWait
+	codexAppGoneWait, codexAppBackWait = 300*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() {
+		codexAppGoneWait, codexAppBackWait = oldGone, oldBack
+	})
+	ctx := context.Background()
+	if err := RestartCodexAppServer(ctx); !errors.Is(err, ErrCodexAppGone) {
+		t.Fatalf("no app-server: %v", err)
+	}
+	s.running = []int{7, 8}
+	if err := RestartCodexAppServer(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(s.ended, []int{7, 8}) {
+		t.Fatalf("ended %v, want both of the app's app-servers", s.ended)
+	}
+}
+
 // TestCodexSwitchAppHelper is TestRestartSwitchedCodexAppReal's fake
 // app-server: it waits to be ended.
 func TestCodexSwitchAppHelper(t *testing.T) {

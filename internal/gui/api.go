@@ -228,10 +228,14 @@ type agentJSON struct {
 	// StaleCopies: those copies, each with what it is and when it
 	// started, for the opened row to say which is left to reopen and how
 	StaleCopies []agent.StaleCopy `json:"staleCopies,omitempty"`
-	// AppRestart: its desktop app (Claude Desktop, WorkBuddy) running on
-	// what it read before magpie's last change, for the row's Restart
-	// (agent.AppBehind)
+	// AppRestart: its desktop app (Claude Desktop, WorkBuddy, ZCode,
+	// DeepSeek Harness) running on what it read before magpie's last
+	// change, for the row's amber Restart (agent.AppBehind)
 	AppRestart *agent.AppRun `json:"appRestart,omitempty"`
+	// AppRunning: its desktop app (or the Codex app's app-server) running
+	// now, for the row's ordinary Restart even when it has the current
+	// settings (agent.AppState)
+	AppRunning *agent.AppRun `json:"appRunning,omitempty"`
 	// Joined: connected with its own models still in its list (Codex
 	// signed in with ChatGPT, agent.Agent.Join)
 	Joined bool `json:"joined,omitempty"`
@@ -1177,6 +1181,23 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 		defer cancel()
 		if err := a.RestartApp(ctx); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, state())
+	})
+	// quits the agent's desktop app and opens it again now, or for Codex
+	// restarts its app-server: the row's Restart while the app runs,
+	// whether or not it has the current settings, after the user said yes
+	mux.HandleFunc("POST /api/agents/restart-app/{id}", func(rw http.ResponseWriter, r *http.Request) {
+		a, err := agent.Find(r.PathValue("id"))
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+		if err := a.RestartAppNow(ctx); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -2694,7 +2715,7 @@ func state() stateJSON {
 			aj.Source = a.Source()
 			aj.Failover = a.FailingOver != nil && a.FailingOver()
 		}
-		aj.AppRestart = a.AppBehind()
+		aj.AppRunning, aj.AppRestart = a.AppState()
 		if a.Import != nil {
 			aj.Import = a.Import()
 			if a.Added != nil {

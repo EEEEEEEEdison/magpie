@@ -21,12 +21,16 @@ import (
 // there only after a restart). Claude Desktop asks the gateway for its
 // models once, at start. WorkBuddy 5.6's app.asar watches models.json only
 // when the file was there at start, and the watch is on the file itself,
-// so a rewrite by rename leaves it watching the old one. While such an app
-// runs on what it read before magpie's last change, its Agents row offers
-// a Restart. magpie never restarts one unasked: the button asks first, in
-// magpie's own dialog, and only then quits the app as its own Quit does
-// and opens it again. The Codex app on macOS has its own Restart on its
-// stale-copy line (codex_app.go), behind the same question.
+// so a rewrite by rename leaves it watching the old one. ZCode reads its
+// providers at start, and DeepSeek Harness reads its config at start too.
+// While such an app runs on what it read before magpie's last change, its
+// Agents row offers a Restart. The same row offers one at any time while
+// the app runs (RestartAppNow), so a change made where magpie can't see
+// its files still has a way back without finding the app's shortcut.
+// magpie never restarts one unasked: the button asks first, in magpie's
+// own dialog, and only then quits the app as its own Quit does and opens
+// it again. The Codex app's own Restart (codex_app.go) ends its app-server
+// and leaves its window, behind the same question.
 
 // restartable is how one such app is found running: its macOS bundle (an
 // id and the names it is installed under), and on Windows its executable's
@@ -35,6 +39,11 @@ type restartable struct {
 	mac    desktopApp
 	winExe string
 	win    func(image string) bool
+}
+
+// here says whether this computer has a way to find r's app.
+func (r restartable) here() bool {
+	return (restartOnWindows && r.win != nil) || (restartOnMac && r.mac.id != "")
 }
 
 // claudeDesktopApp is Claude Desktop's bundle (Claude 2.7032's Info.plist:
@@ -48,8 +57,11 @@ var claudeDesktopApp = desktopApp{id: "com.anthropic.claudefordesktop", names: [
 // app-<version>\claude.exe) or its MSIX (desktopdir's Claude_… and
 // AnthropicPBC.Claude_…), never Claude Code's claude.exe elsewhere;
 // WorkBuddy is C:\Program Files\WorkBuddy\WorkBuddy.exe (5.6.2, seen on
-// the Windows box). WorkBuddy AI's Windows build wasn't to hand, so it has
-// no Restart there. None of them ships a Linux app.
+// the Windows box); ZCode is ZCode.exe (3.16.3, G:\Zcode on the Windows
+// box); DeepSeek Harness Desktop is DeepSeek Harness.exe (its per-user
+// NSIS installer). WorkBuddy AI's Windows build wasn't to hand, so it has
+// no Restart there, and neither ZCode's nor DeepSeek Harness's macOS
+// bundle id is known here. None of them ships a Linux app.
 var restartApps = map[string]restartable{
 	"claude-desktop": {mac: claudeDesktopApp, winExe: "claude.exe", win: func(image string) bool {
 		return winBase(image, "claude.exe") && (winHas(image, `\AnthropicClaude\`) || winHas(image, `\WindowsApps\Claude_`) || winHas(image, `\WindowsApps\AnthropicPBC.Claude_`))
@@ -58,6 +70,12 @@ var restartApps = map[string]restartable{
 		return winBase(image, "WorkBuddy.exe") && !winHas(image, `WorkBuddy AI`) && !winHas(image, `WorkBuddy-AI`)
 	}},
 	"workbuddy-ai": {mac: workbuddyAIApp},
+	"zcode": {winExe: "ZCode.exe", win: func(image string) bool {
+		return winBase(image, "ZCode.exe")
+	}},
+	"dsh": {mac: desktopApps["dsh"], winExe: "DeepSeek Harness.exe", win: func(image string) bool {
+		return winBase(image, "DeepSeek Harness.exe")
+	}},
 }
 
 func winBase(image, name string) bool {
@@ -187,38 +205,61 @@ func bundleExecutable(b, id string) string {
 	return strings.TrimSpace(string(exe[1]))
 }
 
-// AppRun is a desktop app running on what it read before magpie's last
-// change to it: when it started, for the row to offer a Restart.
+// AppRun is a desktop app running now, and when it started: for the row's
+// Restart, and when it read magpie's settings before magpie's last change
+// (AppState's behind).
 type AppRun struct {
 	Since time.Time `json:"since"`
 }
 
-// AppBehind is the agent's desktop app when it runs here and started
-// before magpie last changed what it reads at start; nil when it isn't
-// running, has started since, or magpie doesn't restart it here. Only for
-// an agent connected to magpie, or one disconnected from it in magpie:
-// those are the changes magpie made.
-func (a *Agent) AppBehind() *AppRun {
+// AppState is the agent's desktop app as it runs here, and when it is
+// running on what it read before magpie's last change to it. Either is
+// nil when the app isn't running, or when magpie doesn't restart it here.
+// It is only for an agent connected to magpie, or one disconnected from
+// it in magpie: those are the changes magpie made. behind is nil for
+// Codex, whose app-server is restarted separately while its window stays
+// (codex_app.go).
+func (a *Agent) AppState() (running, behind *AppRun) {
+	if a.WSL != "" {
+		return nil, nil
+	}
+	if a.ID == "codex" {
+		if !a.Wired() && !a.Disconnected() {
+			return nil, nil
+		}
+		if c, ok := codexAppRunning(); ok {
+			return &AppRun{Since: c.since}, nil
+		}
+		return nil, nil
+	}
 	r, ok := restartApps[a.ID]
-	if !ok || a.WSL != "" {
-		return nil
+	if !ok || !r.here() {
+		return nil, nil
 	}
 	if !a.Wired() && !a.Disconnected() {
-		return nil
-	}
-	files, reads := a.appReads()
-	if len(files) == 0 {
-		return nil
+		return nil, nil
 	}
 	c, ok := findRestartable(r)
 	if !ok {
-		return nil
+		return nil, nil
+	}
+	running = &AppRun{Since: c.since}
+	files, reads := a.appReads()
+	if len(files) == 0 {
+		return running, nil
 	}
 	changed := a.changedAt(files, reads)
 	if changed.IsZero() || !c.since.Before(changed.Add(-time.Second)) {
-		return nil
+		return running, nil
 	}
-	return &AppRun{Since: c.since}
+	return running, &AppRun{Since: c.since}
+}
+
+// AppBehind is AppState's behind: the agent's desktop app when it runs
+// here and started before magpie last changed what it reads at start.
+func (a *Agent) AppBehind() *AppRun {
+	_, behind := a.AppState()
+	return behind
 }
 
 // appReads are the files the agent's desktop app reads magpie's part from
@@ -289,6 +330,7 @@ var restarting sync.Map
 var (
 	noticeRestartNotHere    = newNotice("magpie doesn't restart {agent} on this computer.")
 	noticeRestartCurrent    = newNotice("{agent} isn't running on the old settings any more.")
+	noticeRestartNotRunning = newNotice("{agent} isn't running now.")
 	noticeRestartAsk        = newNotice("magpie couldn't ask {agent} to quit. Quit it yourself, then open it again.")
 	noticeRestartStillOpen  = newNotice("{agent} is still open; it may be asking something in its window. Answer it there, or quit it, then open it again.")
 	noticeRestartStillThere = newNotice("{agent} is still running. Quit it, then open it again.")
@@ -296,6 +338,15 @@ var (
 )
 
 func restartErr(n notice, a *Agent) error { return errors.New(n.say("agent", a.Name)) }
+
+// lockRestart holds a's restart until the returned function is called, so
+// a second click waits for the first instead of quitting the app it just
+// opened.
+func lockRestart(a *Agent) func() {
+	mu, _ := restarting.LoadOrStore(a.ID, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	return func() { mu.(*sync.Mutex).Unlock() }
+}
 
 // RestartApp quits the agent's desktop app and opens it again, so it reads
 // what magpie wrote. Only the Agents row's Restart calls it, after the
@@ -309,15 +360,41 @@ func (a *Agent) RestartApp(ctx context.Context) error {
 	if !ok || a.WSL != "" {
 		return restartErr(noticeRestartNotHere, a)
 	}
-	mu, _ := restarting.LoadOrStore(a.ID, &sync.Mutex{})
-	mu.(*sync.Mutex).Lock()
-	defer mu.(*sync.Mutex).Unlock()
+	defer lockRestart(a)()
 	if a.AppBehind() == nil {
 		return restartErr(noticeRestartCurrent, a)
 	}
 	c, ok := findRestartable(r)
 	if !ok {
 		return restartErr(noticeRestartCurrent, a)
+	}
+	if c.bundle != "" {
+		return reopenBundle(ctx, a, c.bundle)
+	}
+	return a.restartWin(ctx, r, c)
+}
+
+// RestartAppNow quits the agent's desktop app and opens it again now, or
+// for Codex restarts the app-server of the app that runs (codex_app.go),
+// whether or not it has the current settings. The Agents row offers it
+// while the app runs, so a change made outside magpie's sight still has a
+// Restart at hand. The caller has asked first.
+func (a *Agent) RestartAppNow(ctx context.Context) error {
+	if a.WSL != "" {
+		return restartErr(noticeRestartNotHere, a)
+	}
+	if a.ID == "codex" {
+		defer lockRestart(a)()
+		return restartCodexNow(ctx, a)
+	}
+	r, ok := restartApps[a.ID]
+	if !ok || !r.here() {
+		return restartErr(noticeRestartNotHere, a)
+	}
+	defer lockRestart(a)()
+	c, ok := findRestartable(r)
+	if !ok {
+		return restartErr(noticeRestartNotRunning, a)
 	}
 	if c.bundle != "" {
 		return reopenBundle(ctx, a, c.bundle)

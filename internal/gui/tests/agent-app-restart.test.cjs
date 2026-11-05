@@ -17,6 +17,9 @@ const model = (value) => [{ key: "model", label: "model", value, options: [{ val
 const workbuddy = { id: "workbuddy", name: "WorkBuddy", icon: "generic", path: "/fixture/models.json", wired: true, fields: model("deepseek-v4"), appRestart: { since: days(1) } };
 // disconnected in magpie, the app still runs on magpie's settings
 const claude = { id: "claude-desktop", name: "Claude Desktop", icon: "generic", path: "/fixture/claude", wired: false, fields: model(""), appRestart: { since: days(1) } };
+// connected, running on the current settings: Restart is still at hand
+const zcode = { id: "zcode", name: "ZCode", icon: "zcode", path: "/fixture/zcode", wired: true, fields: model("deepseek-v4"), appRunning: { since: days(1) } };
+const codexApp = { id: "codex", name: "Codex", icon: "generic", path: "/fixture/codex", wired: true, fields: model("deepseek-v4"), appRunning: { since: days(1) } };
 
 const words = {
   en: { restart: "Restart", cancel: "Cancel", line: "Connected · restart WorkBuddy to use it", done: "WorkBuddy restarted", still: "WorkBuddy is still open; it may be asking something in its window." },
@@ -28,7 +31,7 @@ const words = {
 const stillOpen = "WorkBuddy is still open; it may be asking something in its window. Answer it there, or quit it, then open it again.";
 
 function serve(lang, calls, fail) {
-  let agents = [workbuddy, claude];
+  let agents = [workbuddy, claude, zcode, codexApp];
   return async (route) => {
     const url = new URL(route.request().url());
     const json = (data, status = 200) => route.fulfill({ status, json: data });
@@ -40,6 +43,12 @@ function serve(lang, calls, fail) {
       calls.push(route.request().method() + " " + id);
       if (fail) return json({ error: stillOpen }, 409);
       agents = agents.map((a) => (a.id === id ? { ...a, appRestart: undefined } : a));
+      return json(st());
+    }
+    if (url.pathname.startsWith("/api/agents/restart-app/")) {
+      const id = url.pathname.split("/").pop();
+      calls.push(route.request().method() + " restart-app " + id);
+      if (fail) return json({ error: stillOpen }, 409);
       return json(st());
     }
     if (url.pathname === "/api/state") return json(st());
@@ -138,4 +147,110 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.deepEqual(errors, []);
     });
   }
+}
+
+// A connected app running on the current settings has a Restart too: the
+// page's own action, not a shortcut to find after a change magpie can't
+// see. Codex's restarts only its app-server, as its stale-copy Restart does.
+for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium", "webkit"])) {
+  for (const lang of Object.keys(words)) {
+    test(`${engine} ${lang}: a running app has its own Restart`, async (t) => {
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      t.after(() => browser.close());
+      const page = await browser.newPage({ viewport: { width: 980, height: 800 } });
+      page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
+      const errors = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      const calls = [];
+      await page.route("**/*", serve(lang, calls));
+      await page.goto("http://magpie.test/?view=agents");
+      const w = await page.evaluate((lang) => {
+        const tr = (k, vars = {}) => ((lang === "en" ? k : I18N[lang]?.[k]) || k).replace(/\{(\w+)\}/g, (_, n) => vars[n]);
+        return {
+          restart: tr("Restart"),
+          aria: tr("Restart {agent}", { agent: "ZCode" }),
+          title: tr("Restart {agent} to read the current settings", { agent: "ZCode" }),
+          quit: tr("magpie quits {agent} and opens it again, so it reads the new settings. Anything running in it stops.", { agent: "ZCode" }),
+          done: tr("{agent} restarted", { agent: "ZCode" }),
+          appServer: tr("Only its app-server restarts, for the new settings; its window stays. A running turn stops."),
+        };
+      }, lang);
+      const go = page.locator(`${row("zcode")} .ag-restart-now`);
+      await go.waitFor();
+      assert.equal((await go.textContent()).trim(), w.restart);
+      assert.equal(await go.getAttribute("aria-label"), w.aria);
+      assert.equal(await go.getAttribute("title"), w.title);
+      const box = await go.boundingBox();
+      assert.ok(box.x >= 0 && box.x + box.width <= 980, "past the window: " + JSON.stringify(box));
+      const side = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      assert.ok(side <= 1, "scrolls sideways: " + side);
+
+      await go.click();
+      const ask = page.locator("dialog.action-confirm[open]");
+      await ask.waitFor();
+      assert.ok((await ask.locator("h2").textContent()).includes("ZCode"));
+      assert.ok((await ask.textContent()).includes(w.quit));
+      await ask.locator("button.primary").click();
+      await page.waitForFunction((want) => document.querySelector("#status")?.textContent === want, w.done);
+      assert.deepEqual(calls, ["POST restart-app zcode"]);
+      // the app still runs, so its Restart stays at hand
+      await page.locator(`${row("zcode")} .ag-restart-now`).waitFor();
+
+      // Codex's is the app-server's Restart, never a quit and reopen
+      const codex = page.locator(`${row("codex")} .ag-restart-now`);
+      await codex.click();
+      await ask.waitFor();
+      assert.ok((await ask.locator("h2").textContent()).includes("Codex"));
+      assert.ok((await ask.textContent()).includes(w.appServer));
+      await page.keyboard.press("Escape");
+      await ask.waitFor({ state: "detached" });
+      assert.deepEqual(calls, ["POST restart-app zcode"]);
+      assert.deepEqual(errors, []);
+    });
+  }
+
+  for (const [mode, width] of [["", 440], ["panel", 440]]) {
+    test(`${engine} ${mode || "window"} ${width}px: a running app's Restart fits`, async (t) => {
+      const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+      t.after(() => browser.close());
+      const page = await browser.newPage({ viewport: { width, height: 800 } });
+      page.setDefaultTimeout(5000);
+      page.setDefaultNavigationTimeout(60000);
+      const errors = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      await page.route("**/*", serve("en", [], false));
+      await page.goto("http://magpie.test/" + (mode ? "?mode=" + mode : "?view=agents"));
+      for (const id of ["zcode", "codex"]) {
+        const go = page.locator(`${row(id)} .ag-restart-now`);
+        await go.waitFor();
+        const box = await go.boundingBox();
+        assert.ok(box.x >= 0 && box.x + box.width <= width, id + " past the window: " + JSON.stringify(box));
+      }
+      const side = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      assert.ok(side <= 1, "scrolls sideways: " + side);
+      assert.deepEqual(errors, []);
+    });
+  }
+
+  test(`${engine}: a running app's Restart that fails says why, and comes back`, async (t) => {
+    const browser = await (engine === "webkit" ? webkit.launch() : chromium.launch({ channel: "chromium" }));
+    t.after(() => browser.close());
+    const page = await browser.newPage({ viewport: { width: 980, height: 800 } });
+    page.setDefaultTimeout(5000);
+    page.setDefaultNavigationTimeout(60000);
+    const errors = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    const calls = [];
+    await page.route("**/*", serve("en", calls, true));
+    await page.goto("http://magpie.test/?view=agents");
+    const go = page.locator(`${row("zcode")} .ag-restart-now`);
+    await go.click();
+    await page.locator("dialog.action-confirm[open] button.primary").click();
+    await page.waitForFunction(() => document.querySelector("#status").classList.contains("err"));
+    assert.equal(await page.locator("#status").textContent(), stillOpen);
+    assert.equal(await go.isDisabled(), false, "the button comes back for another try");
+    assert.deepEqual(calls, ["POST restart-app zcode"]);
+    assert.deepEqual(errors, []);
+  });
 }

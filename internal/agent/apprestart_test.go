@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -214,6 +215,113 @@ func TestWorkBuddyRestartOnWindows(t *testing.T) {
 	}
 }
 
+// A desktop app running on settings magpie has no file to compare (ZCode,
+// DeepSeek Harness) or on settings that are current has a Restart of its
+// own: it quits and opens the app again without waiting for a stale copy.
+func TestRestartRunningAppOnWindows(t *testing.T) {
+	home := restartSandbox(t)
+	restartOnWindows = true
+	appCloseWait, appBackWait = 50*time.Millisecond, time.Second
+	const exe = `C:\Program Files\WorkBuddy\WorkBuddy.exe`
+	start := time.Now()
+	alive := true
+	winProcs = func(name string) []winProc {
+		if !alive || !strings.EqualFold(name, "WorkBuddy.exe") {
+			return nil
+		}
+		return []winProc{
+			{pid: 11, parent: 10, image: exe, start: start.Add(time.Second)},
+			{pid: 10, parent: 4, image: exe, start: start},
+		}
+	}
+	var did []string
+	winClose = func(pids []int) error {
+		slices.Sort(pids)
+		did = append(did, "close "+strings.Trim(fmt.Sprint(pids), "[]"))
+		return nil
+	}
+	winEnd = func(pid int) error {
+		did = append(did, fmt.Sprint("end ", pid))
+		alive = false
+		return nil
+	}
+	winLaunch = func(p winProc) error {
+		did = append(did, "open "+p.image)
+		alive, start = true, time.Now()
+		return nil
+	}
+	a := workbuddy(home)
+	if err := a.Field("provider").Set("magpie"); err != nil {
+		t.Fatal(err)
+	}
+	// the app started after magpie's last write: nothing stale, but running
+	start = time.Now()
+	running, behind := a.AppState()
+	if running == nil || behind != nil {
+		t.Fatalf("running %+v, behind %+v; want running and not behind", running, behind)
+	}
+	if err := a.RestartAppNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"close 10 11", "end 10", "open " + exe}; !slices.Equal(did, want) {
+		t.Fatalf("did %q, want %q", did, want)
+	}
+
+	// not running: nothing is quit, and the row is told why
+	alive, did = false, nil
+	if running, _ := a.AppState(); running != nil {
+		t.Fatalf("not running: %+v", running)
+	}
+	err := a.RestartAppNow(context.Background())
+	if err == nil || err.Error() != noticeRestartNotRunning.say("agent", "WorkBuddy") {
+		t.Fatalf("not running: %v", err)
+	}
+	if len(did) > 0 {
+		t.Fatalf("quit something while not running: %q", did)
+	}
+}
+
+// A WSL agent's app runs in the distro, which magpie doesn't restart from
+// here.
+func TestRestartRunningAppRefusesWSL(t *testing.T) {
+	a := &Agent{ID: "workbuddy", Name: "WorkBuddy", WSL: "Ubuntu-24.04"}
+	if running, behind := a.AppState(); running != nil || behind != nil {
+		t.Fatalf("running %+v, behind %+v", running, behind)
+	}
+	err := a.RestartAppNow(context.Background())
+	if err == nil || err.Error() != noticeRestartNotHere.say("agent", "WorkBuddy") {
+		t.Fatalf("WSL: %v", err)
+	}
+}
+
+// The Codex app's Restart goes through its app-server, not quitting the
+// app; its failures read as the account switch's did.
+func TestRestartAppNowCodex(t *testing.T) {
+	old := restartAppServerNow
+	t.Cleanup(func() { restartAppServerNow = old })
+	calls := 0
+	restartAppServerNow = func(context.Context) error { calls++; return nil }
+	a := &Agent{ID: "codex", Name: "Codex"}
+	if err := a.RestartAppNow(context.Background()); err != nil || calls != 1 {
+		t.Fatalf("restart: %v, calls %d", err, calls)
+	}
+	for _, c := range []struct {
+		err  error
+		want notice
+	}{
+		{provider.ErrCodexAppGone, noticeRestartCodexGone},
+		{provider.ErrCodexAppNoEnd, noticeSwitchAppNoEnd},
+		{provider.ErrCodexAppNotBack, noticeSwitchAppNotBack},
+		{errors.New("ps: timed out"), noticeSwitchAppUnknown},
+	} {
+		restartAppServerNow = func(context.Context) error { return c.err }
+		err := a.RestartAppNow(context.Background())
+		if err == nil || err.Error() != c.want.say("agent", "Codex") {
+			t.Errorf("%v: said %v, want %q", c.err, err, c.want.say("agent", "Codex"))
+		}
+	}
+}
+
 // An app that closes its window to the tray (Claude Desktop on Windows
 // hides it in ~0.6s and keeps every process; CyberCaius on Discord, 10-29:
 // slower than quitting by hand) is ended once its windows are gone, not
@@ -311,6 +419,10 @@ func TestRestartAppsOnWindows(t *testing.T) {
 		{"workbuddy", `C:\Program Files\WorkBuddy\WorkBuddy.exe`, true},
 		{"workbuddy", `C:\Program Files\WorkBuddy AI\WorkBuddy.exe`, false},
 		{"workbuddy", `C:\Program Files\WorkBuddy\resources\cli\codebuddy.exe`, false},
+		{"zcode", `G:\Zcode\ZCode.exe`, true},
+		{"zcode", `G:\Zcode\resources\zcode-cli.exe`, false},
+		{"dsh", `C:\Users\u\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`, true},
+		{"dsh", `C:\Users\u\.dsh\bin\dsh.exe`, false},
 	}
 	for _, c := range cases {
 		if got := restartApps[c.id].win(c.image); got != c.want {
@@ -322,6 +434,31 @@ func TestRestartAppsOnWindows(t *testing.T) {
 	}
 	if _, ok := restartApps["codex"]; ok {
 		t.Error("the Codex app has its own Restart (codex_app.go)")
+	}
+}
+
+// The Codex app found running is the Store package's ChatGPT.exe, not
+// OpenAI's ChatGPT chat app beside it.
+func TestCodexAppRunningOnWindows(t *testing.T) {
+	restartSandbox(t)
+	restartOnWindows = true
+	start := time.Now().Add(-time.Hour)
+	winProcs = func(name string) []winProc {
+		if !strings.EqualFold(name, "ChatGPT.exe") {
+			return nil
+		}
+		return []winProc{
+			{pid: 50, parent: 4, image: `C:\Program Files\WindowsApps\OpenAI.ChatGPT-Desktop_1.2025.1.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe`, start: start},
+			{pid: 10, parent: 4, image: `C:\Program Files\WindowsApps\OpenAI.Codex_26.1021.3705.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe`, start: start.Add(time.Minute)},
+		}
+	}
+	c, ok := codexAppRunning()
+	if !ok || !c.since.Equal(start.Add(time.Minute)) {
+		t.Fatalf("running %+v, %v; want the Codex app since an hour and a minute ago", c, ok)
+	}
+	winProcs = func(string) []winProc { return nil }
+	if _, ok := codexAppRunning(); ok {
+		t.Fatal("found a Codex app where none runs")
 	}
 }
 

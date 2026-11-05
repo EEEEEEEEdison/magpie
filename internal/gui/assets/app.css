@@ -803,6 +803,8 @@ body.panel .ag-fix span { display: none; }
 /* the panel's Restart stays on its line, its word left to the hover */
 body.panel .ag-fix.ag-restart { position: static; width: auto; height: 18px; padding: 0 5px; background: color-mix(in srgb, var(--amber) 13%, transparent); color: var(--amber); box-shadow: none; }
 body.panel .ag-fix.ag-restart:hover { filter: none; background: color-mix(in srgb, var(--amber) 22%, transparent); }
+body.panel .ag-st .ag-restart-now { height: 18px; padding: 0 5px; }
+body.panel .who .ag-restart-now { height: 18px; margin-left: 4px; padding: 0 5px; }
 .row.drifted .field[data-key="model"] { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--drift) 38%, transparent); }
 
 /* the line over each kind of folded agent: hidden by hand, or nothing set */
@@ -4591,6 +4593,9 @@ body.window .row + .row.agent.conn > .who { min-height: 41px; } /* the line abov
 .ag-st.bad .ag-dot { background: var(--red); -webkit-mask: var(--x-mark) center / contain no-repeat; mask: var(--x-mark) center / contain no-repeat; border-radius: 0; transform: scale(1.5); }
 .ag-st.bad .ag-st-t { color: var(--red); }
 .ag-st .ag-fix { flex: none; }
+.ag-st .ag-restart-now { height: 20px; padding: 0 6px; font-size: 11.5px; color: var(--muted); }
+.ag-st .ag-restart-now:hover { color: var(--fg); }
+.ag-st .ag-restart-now.busy { opacity: .6; cursor: progress; }
 .ag-link, .ag-quiet { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--fg-2); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; transition: background-color .15s, color .15s; }
 .ag-link:hover, .ag-quiet:hover, .ag-link.open { background: var(--pill); color: var(--fg); }
 .ag-link .chev, .ag-quiet .chev { display: inline-flex; color: var(--faint); transition: transform .2s ease; }
@@ -4603,6 +4608,16 @@ body.window .row + .row.agent.conn > .who { min-height: 41px; } /* the line abov
 .row.agent.conn > .ag-show { margin-left: auto; align-self: center; }
 .row.agent.conn > .ag-show + .ag-link { margin-left: 8px; }
 .row.agent.conn > .fields + .ag-link { margin-left: 0; }
+.row.agent.conn > .ag-restart-now { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; margin-left: 6px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--pill); color: var(--fg-2); font: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; align-self: center; cursor: pointer; transition: background-color .15s, color .15s; }
+.row.agent.conn > .ag-restart-now:hover { background: var(--pill-hover); color: var(--fg); }
+.row.agent.conn > .ag-restart-now:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 1px; }
+.row.agent.conn > .ag-restart-now.busy { opacity: .6; cursor: progress; }
+.row.agent.conn > .who + .ag-restart-now { margin-left: auto; }
+.row.agent.conn > .ag-show + .ag-restart-now { margin-left: 8px; }
+.row.agent.conn > .ag-restart-now + .ag-link { margin-left: 6px; }
+.row.agent.conn > .ag-restart-now + .ag-conn { margin-left: 6px; }
+.row.agent.conn > .ag-restart-now + .field.launch { margin-left: 6px; }
+.row.agent.conn > .ag-restart-now + .field.ag-start { margin-left: 8px; }
 .row.agent.conn > .ag-conn { margin-left: 4px; align-self: center; cursor: pointer; }
 .row.agent.conn > .ag-link + .ag-conn { margin-left: 4px; }
 .row.agent.conn > .who + .ag-conn, .row.agent.conn > .who + .ag-add, .row.agent.conn > .who + .ag-cant { margin-left: auto; }

@@ -761,8 +761,9 @@ func RestartCodexAppWhenIdle(ctx context.Context, wait time.Duration) (ended int
 	return len(gone), left, nil
 }
 
-// What RestartSwitchedCodexApp found when it couldn't restart the app's
-// app-server; the agent package says each in the reader's language.
+// What RestartSwitchedCodexApp and RestartCodexAppServer found when they
+// couldn't restart the app's app-server; the agent package says each in
+// the reader's language.
 var (
 	ErrCodexAppGone    = errors.New("the Codex app isn't running")
 	ErrCodexAppNoEnd   = errors.New("the Codex app's app-server couldn't be ended")
@@ -780,6 +781,23 @@ var (
 // the ended ones are gone and a new one runs, and errs when either doesn't
 // happen in time: a listing that fails is unknown, never success.
 func RestartSwitchedCodexApp(ctx context.Context) error {
+	return restartCodexAppServer(ctx, "for the account switched to")
+}
+
+// RestartCodexAppServer is the Restart on the Agents page while the Codex
+// app runs: it restarts the app's own app-servers now, as
+// RestartSwitchedCodexApp does for an account switch, so the app reads
+// Codex's config and model list afresh. Its window, threads and drafts
+// stay; a running turn stops. It waits until the ended ones are gone and
+// a new one runs, and errs when either doesn't happen in time: a listing
+// that fails is unknown, never success.
+func RestartCodexAppServer(ctx context.Context) error {
+	return restartCodexAppServer(ctx, "from the Agents page")
+}
+
+// restartCodexAppServer restarts the Codex app's app-servers, saying why
+// in the log when one can't be ended.
+func restartCodexAppServer(ctx context.Context, why string) error {
 	home := codexHome()
 	list := func() ([]int, error) {
 		lctx, cancel := context.WithTimeout(ctx, codexAppListWait)
@@ -796,7 +814,7 @@ func RestartSwitchedCodexApp(ctx context.Context) error {
 	}
 	for _, p := range pids {
 		if err := endCodexAppServer(p); err != nil {
-			log.Printf("codex: restarting the Codex app's app-server %d for the account switched to: %v", p, err)
+			log.Printf("codex: restarting the Codex app's app-server %d %s: %v", p, why, err)
 			return ErrCodexAppNoEnd
 		}
 	}
