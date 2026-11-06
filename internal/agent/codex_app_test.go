@@ -155,3 +155,58 @@ func TestCodexAppReopenedOnWindows(t *testing.T) {
 		t.Fatalf("not Windows: %v, did %q", err, did)
 	}
 }
+
+// On Windows the Codex row's Restart quits the app and opens it again,
+// rather than ending its app-server under a window left running: the app
+// left running could no longer check its Windows sandbox afterwards.
+func TestRestartAppNowCodexOnWindows(t *testing.T) {
+	restartSandbox(t)
+	restartOnWindows = true
+	appCloseWait, appBackWait, appTrayGrace = time.Second, time.Second, 10*time.Millisecond
+	const image = `C:\Program Files\WindowsApps\OpenAI.Codex_26.1021.3705.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe`
+	start := time.Now().Add(-time.Hour)
+	alive := true
+	winProcs = func(name string) []winProc {
+		if !strings.EqualFold(name, "ChatGPT.exe") {
+			return nil
+		}
+		// the ChatGPT chat app beside it, always running
+		ps := []winProc{{pid: 50, parent: 4, image: `C:\Program Files\WindowsApps\OpenAI.ChatGPT-Desktop_1.2025.1.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe`, start: start}}
+		if alive {
+			ps = append(ps,
+				winProc{pid: 10, parent: 4, image: image, start: start, aumid: "OpenAI.Codex_2p2nqsd0c76g0!App"},
+				winProc{pid: 11, parent: 10, image: image, start: start.Add(time.Second)})
+		}
+		return ps
+	}
+	winShown = func([]int) bool { return false } // in the tray
+	var did []string
+	winClose = func(pids []int) error { did = append(did, fmt.Sprint("close ", pids)); return nil }
+	winEnd = func(pid int) error { did = append(did, fmt.Sprint("end ", pid)); alive = false; return nil }
+	winLaunch = func(p winProc) error { did = append(did, "open "+p.aumid); alive = true; return nil }
+
+	old := restartAppServerNow
+	t.Cleanup(func() { restartAppServerNow = old })
+	servers := 0
+	restartAppServerNow = func(context.Context) error { servers++; return nil }
+
+	a := &Agent{ID: "codex", Name: "Codex"}
+	if err := a.RestartAppNow(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if servers != 0 {
+		t.Fatalf("restarted the app-server %d times; want the app quit and opened", servers)
+	}
+	if want := []string{"close [10 11]", "end 10", "open OpenAI.Codex_2p2nqsd0c76g0!App"}; !slices.Equal(did, want) {
+		t.Fatalf("did %q, want %q", did, want)
+	}
+
+	// quit meanwhile: nothing is opened, and the row is told why
+	alive, did = false, nil
+	if err := a.RestartAppNow(context.Background()); err == nil || err.Error() != noticeRestartCodexGone.say("agent", "Codex") {
+		t.Fatalf("not running: %v", err)
+	}
+	if len(did) > 0 {
+		t.Fatalf("quit something while not running: %q", did)
+	}
+}

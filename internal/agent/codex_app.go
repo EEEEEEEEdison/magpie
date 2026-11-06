@@ -19,6 +19,12 @@ import (
 // user (the owner, 10-23): it ends the app's own app-server, and the app
 // starts another and keeps its window. Quitting the app and opening it
 // again, as it did before, opened a new window (yoshi037070, 10-27).
+//
+// On Windows the app-server is ended with TerminateProcess (proc.End), and
+// the app left running can then no longer check its Windows sandbox ("无法
+// 检查 Windows 配置" in its window). There the Restart quits the app and
+// opens it again, as codexAppReopen does when no app-server comes back, so
+// the app starts clean.
 
 // appQuit and appOpen ask macOS to quit a bundle and to open it; vars so
 // tests don't touch a real app.
@@ -107,10 +113,22 @@ func RestartSwitchedCodexApp(ctx context.Context) error {
 	return errors.New(noticeSwitchAppUnknown.say("agent", "Codex"))
 }
 
-// restartCodexNow restarts the app-server of the Codex app running here
-// for the Agents row's Restart, and says in the reader's language what
-// went wrong when it didn't. Its window, threads and drafts stay.
+// restartCodexNow restarts the Codex app running here for the Agents row's
+// Restart, and says in the reader's language what went wrong when it
+// didn't. On Windows it quits the app and opens it again, so its Windows
+// sandbox starts afresh; elsewhere it restarts the app-server, and its
+// window, threads and drafts stay.
 func restartCodexNow(ctx context.Context, a *Agent) error {
+	if restartOnWindows {
+		c, ok := findRestartable(codexWinApp)
+		if !ok {
+			return restartErr(noticeRestartCodexGone, a)
+		}
+		if c.main.aumid == "" {
+			c.main.aumid = codexWinAUMID
+		}
+		return a.restartWin(ctx, codexWinApp, c)
+	}
 	err := restartAppServerNow(ctx)
 	switch {
 	case err == nil:

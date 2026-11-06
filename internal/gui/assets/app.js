@@ -1561,7 +1561,9 @@ function connectRow(a, row, who, { fields, extras, fieldBtn, sw, kind }) {
   if (start) fields.querySelector(`:scope > [data-key="${CSS.escape(start.key)}"]`)?.remove();
   if (kind === "ok") {
     if (a.wired) {
-      // a click on the row off its controls opens it, as on the Mac (NG_shiyu)
+      // its desktop app runs now: a Restart at hand left of Details, not
+      // only when a change left it on an older settings file (agent.AppState)
+      if (a.appRunning && !a.appRestart) row.append(appRestartNow(a));
       const link = expandLink(a);
       row.append(link);
       row.onclick = (ev) => {
@@ -1569,9 +1571,6 @@ function connectRow(a, row, who, { fields, extras, fieldBtn, sw, kind }) {
         if (!getSelection()?.isCollapsed) return; // words being selected
         link.click();
       };
-      // its desktop app runs now: a Restart at hand beside Details and model,
-      // not only when a change left it on an older settings file (agent.AppState)
-      if (a.appRunning && !a.appRestart) row.append(appRestartNow(a));
     }
     // the square copying the command that starts it on magpie (agy), the
     // only way it takes magpie: on the row, before the model
@@ -2119,13 +2118,13 @@ function appRestartNow(a) {
   go.append(svg(REAPPLY, 11, 1.8), el("span", "", t("Restart")));
   go.onclick = async (e) => {
     e.stopPropagation();
-    if (!(await confirmRestart(a.name, a.id === "codex" ? t("Only its app-server restarts, for the new settings; its window stays. A running turn stops.") : undefined))) return;
+    if (!(await confirmRestart(a.name, a.id === "codex" ? t("Codex restarts to read the new settings. A running turn stops.") : undefined))) return;
     go.disabled = true;
     go.classList.add("busy");
     try {
       state = await api("agents/restart-app/" + a.id, {});
       renderAgents();
-      status(a.id === "codex" ? t("Codex app-server restarted") : t("{agent} restarted", { agent: a.name }));
+      status(t("{agent} restarted", { agent: a.name }));
     } catch (err) {
       if (go.isConnected) { go.disabled = false; go.classList.remove("busy"); }
       status(tNotice(err.message), "err");
@@ -18726,15 +18725,15 @@ function ledGroupSpeed(x) {
 // their mean wait for the first token, 0 for none
 const ledTTFT = (x) => x?.timed > 0 ? x.ttft_ms / x.timed : 0;
 // a metric's value of a point or a share, as the chart counts it
-const ledValue = (m, x) => m === "speed" ? ledSpeed(x) : m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : allTokens(x);
+const ledValue = (m, x) => m === "speed" ? ledSpeed(x) : m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : m === "credits" ? +x.credits || 0 : allTokens(x);
 // of a share in the ranking: a speed is what its row says first, the one of
 // more replies (ledGroupSpeed)
 const ledRankValue = (m, x) => m === "speed" ? ledGroupSpeed(x)?.v || 0 : ledValue(m, x);
-// of a point's part, which has its calls, tokens, cost and speed
-const ledPart = (m, x) => m === "speed" ? ledSpeed(x) : m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : +x.tokens || 0;
+// of a point's part, which has its calls, tokens, cost, credits and speed
+const ledPart = (m, x) => m === "speed" ? ledSpeed(x) : m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : m === "credits" ? +x.credits || 0 : +x.tokens || 0;
 // a metric as its axis and its values say it
-const ledFormat = (m, v) => m === "cost" ? ledMoney(v) : (m === "speed" ? ledNum : fmtN)(Math.round(v));
-const ledFormatLong = (m, v) => m === "speed" ? (v > 0 ? t("{n} tok/s", { n: ledNum(Math.round(v)) }) : "—") : m === "cost" ? (fmtCost({ cost: v, unpriced: 0 }) || "—") : ledNum(Math.round(v));
+const ledFormat = (m, v) => m === "cost" ? ledMoney(v) : m === "credits" ? (v > 0 && v < 0.01 ? "<0.01" : (+v.toFixed(2)).toLocaleString(intlLang())) : (m === "speed" ? ledNum : fmtN)(Math.round(v));
+const ledFormatLong = (m, v) => m === "speed" ? (v > 0 ? t("{n} tok/s", { n: ledNum(Math.round(v)) }) : "—") : m === "cost" ? (fmtCost({ cost: v, unpriced: 0 }) || "—") : m === "credits" ? t("{n} credits", { n: v > 0 && v < 0.01 ? "<0.01" : (+v.toFixed(2)).toLocaleString(intlLang()) }) : ledNum(Math.round(v));
 
 // an axis's top with four steps under it: round numbers, the top at least the largest value
 function ledAxis(max) {
@@ -18796,7 +18795,7 @@ function drawLedColumns(box, l, split, metric, compact, chooseDay, focusDay) {
   const speed = metric === "speed";
   const max = Math.max(0, ...totals, ...(speed ? pts.flatMap((p) => Object.values(p.by?.[split] || {}).map(ledSpeed)) : []));
   if (!(max > 0)) {
-    plot.append(el("div", "none", t(metric === "cost" ? "No known price for these requests" : speed ? "No streamed replies timed in this period" : "Nothing in this period")));
+    plot.append(el("div", "none", t(metric === "cost" ? "No known price for these requests" : metric === "credits" ? "No credits recorded for these requests" : speed ? "No streamed replies timed in this period" : "Nothing in this period")));
     return;
   }
   const topV = ledAxis(max);
@@ -18976,7 +18975,7 @@ function drawLedRank(box, l, split, metric, picked, choose, compact) {
     // credits belong to a plan, not a model: a row summing several
     // providers' calls (Model, Agent, Gateway key, the Other row)
     // can't add them
-    if (x.credited && !plain && (split === "provider" || split === "modelAt")) more.push(ledCredits(x));
+    if (metric !== "credits" && x.credited && !plain && (split === "provider" || split === "modelAt")) more.push(ledCredits(x));
     // how fast its replies came, beside what they cost (#860)
     if (metric !== "speed" && gs) more.push(Object.assign(el("span", "rk-speed", gs.text), { title: gs.title }));
     if (ledTTFT(x)) more.push(t("TTFT {ms}", { ms: ledTook(ledTTFT(x)) }));

@@ -30,7 +30,8 @@ import (
 // magpie never restarts one unasked: the button asks first, in magpie's
 // own dialog, and only then quits the app as its own Quit does and opens
 // it again. The Codex app's own Restart (codex_app.go) ends its app-server
-// and leaves its window, behind the same question.
+// and leaves its window on macOS; on Windows it quits the app and opens it
+// again, behind the same question.
 
 // restartable is how one such app is found running: its macOS bundle (an
 // id and the names it is installed under), and on Windows its executable's
@@ -299,8 +300,8 @@ type AppRun struct {
 // nil when the app isn't running, or when magpie doesn't restart it here.
 // It is only for an agent connected to magpie, or one disconnected from
 // it in magpie: those are the changes magpie made. behind is nil for
-// Codex, whose app-server is restarted separately while its window stays
-// (codex_app.go).
+// Codex, whose app-server is restarted separately on macOS and whose app is
+// quit and opened again on Windows (codex_app.go).
 func (a *Agent) AppState() (running, behind *AppRun) {
 	if a.WSL != "" {
 		return nil, nil
@@ -458,10 +459,10 @@ func (a *Agent) RestartApp(ctx context.Context) error {
 }
 
 // RestartAppNow quits the agent's desktop app and opens it again now, or
-// for Codex restarts the app-server of the app that runs (codex_app.go),
-// whether or not it has the current settings. The Agents row offers it
-// while the app runs, so a change made outside magpie's sight still has a
-// Restart at hand. The caller has asked first.
+// for Codex restarts its app-server (macOS) or quits and opens the app
+// (Windows) (codex_app.go), whether or not it has the current settings.
+// The Agents row offers it while the app runs, so a change made outside
+// magpie's sight still has a Restart at hand. The caller has asked first.
 func (a *Agent) RestartAppNow(ctx context.Context) error {
 	if a.WSL != "" {
 		return restartErr(noticeRestartNotHere, a)

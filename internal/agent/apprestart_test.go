@@ -298,6 +298,9 @@ func TestRestartRunningAppRefusesWSL(t *testing.T) {
 // The Codex app's Restart goes through its app-server, not quitting the
 // app; its failures read as the account switch's did.
 func TestRestartAppNowCodex(t *testing.T) {
+	wasWin := restartOnWindows
+	t.Cleanup(func() { restartOnWindows = wasWin })
+	restartOnWindows = false
 	old := restartAppServerNow
 	t.Cleanup(func() { restartAppServerNow = old })
 	calls := 0

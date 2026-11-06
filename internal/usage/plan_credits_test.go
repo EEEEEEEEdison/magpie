@@ -59,6 +59,20 @@ func TestPlanCreditsSummed(t *testing.T) {
 	if got := FormatCredits(page.Sum); got != "0.7 credits" {
 		t.Fatalf("FormatCredits %q", got)
 	}
+	var seriesCredits float64
+	var modelCredits float64
+	for _, pt := range page.Series {
+		seriesCredits += pt.Credits
+		if part, ok := pt.By["model"]["gemini-3.5-flash"]; ok {
+			modelCredits += part.Credits
+		}
+	}
+	if !near(seriesCredits, 0.7) {
+		t.Fatalf("series credits: %v, want 0.7", seriesCredits)
+	}
+	if !near(modelCredits, 0.7) {
+		t.Fatalf("series model credits: %v, want 0.7", modelCredits)
+	}
 	// the CSV's credits column: the reply's figure, empty where it said none
 	rows, _, _ := Ledger(All, Filter{})
 	var b strings.Builder

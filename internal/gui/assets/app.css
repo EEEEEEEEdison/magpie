@@ -1334,6 +1334,7 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
 /* the totals and the two sources: one block of cells, a line between them, as
    the totals above have it */
 .led-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.led-strip.has-credits { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .led-strip .blk { min-width: 0; padding: 11px 15px 10px; }
 .led-strip .blk + .blk { border-left: 1px solid var(--line-2); }
 .led-strip .k { display: block; font-size: 11px; color: var(--muted); }
@@ -1341,6 +1342,7 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
    to a second line before its count, never cut */
 .led-strip .v { display: block; margin-top: 2px; font-size: 22px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; }
 .led-strip .v.cost { color: var(--green); }
+.led-strip .v.credits { color: var(--accent); }
 /* a figure in parts, as the Output speed card's speed and the replies it is
    of: each part kept whole, the second going under the first in a card too
    narrow for both (#1623, fanbuz: "48 token/秒（781 次）" ran past it) */
@@ -4682,7 +4684,7 @@ body.window .row + .row.agent.conn > .who { min-height: 41px; } /* the line abov
 .row.agent.conn > .ag-show { margin-left: auto; align-self: center; }
 .row.agent.conn > .ag-show + .ag-link { margin-left: 8px; }
 .row.agent.conn > .fields + .ag-link { margin-left: 0; }
-.row.agent.conn > .ag-restart-now { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; margin-left: 6px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--pill); color: var(--fg-2); font: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; align-self: center; cursor: pointer; transition: background-color .15s, color .15s; }
+.row.agent.conn > .ag-restart-now { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; margin-left: auto; padding: 0 8px; border: 0; border-radius: 6px; background: var(--pill); color: var(--fg-2); font: inherit; font-size: 12px; font-weight: 500; white-space: nowrap; align-self: center; cursor: pointer; transition: background-color .15s, color .15s; }
 .row.agent.conn > .ag-restart-now:hover { background: var(--pill-hover); color: var(--fg); }
 .row.agent.conn > .ag-restart-now:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 1px; }
 .row.agent.conn > .ag-restart-now.busy { opacity: .6; cursor: progress; }

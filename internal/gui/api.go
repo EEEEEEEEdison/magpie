@@ -232,9 +232,9 @@ type agentJSON struct {
 	// DeepSeek Harness) running on what it read before magpie's last
 	// change, for the row's amber Restart (agent.AppBehind)
 	AppRestart *agent.AppRun `json:"appRestart,omitempty"`
-	// AppRunning: its desktop app (or the Codex app's app-server) running
-	// now, for the row's ordinary Restart even when it has the current
-	// settings (agent.AppState)
+	// AppRunning: its desktop app (or, for the macOS Codex app, its
+	// app-server) running now, for the row's ordinary Restart even when it
+	// has the current settings (agent.AppState)
 	AppRunning *agent.AppRun `json:"appRunning,omitempty"`
 	// Joined: connected with its own models still in its list (Codex
 	// signed in with ChatGPT, agent.Agent.Join)

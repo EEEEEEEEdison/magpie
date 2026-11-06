@@ -173,11 +173,20 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           title: tr("Restart {agent} to read the current settings", { agent: "ZCode" }),
           quit: tr("magpie quits {agent} and opens it again, so it reads the new settings. Anything running in it stops.", { agent: "ZCode" }),
           done: tr("{agent} restarted", { agent: "ZCode" }),
-          appServer: tr("Only its app-server restarts, for the new settings; its window stays. A running turn stops."),
+          codex: tr("Codex restarts to read the new settings. A running turn stops."),
         };
       }, lang);
       const go = page.locator(`${row("zcode")} .ag-restart-now`);
       await go.waitFor();
+      const beforeDetails = await page.evaluate((id) => {
+        const restart = document.querySelector(`.row.agent[data-id="${id}"] .ag-restart-now`);
+        const details = document.querySelector(`.row.agent[data-id="${id}"] .ag-link`);
+        return Boolean(restart && details && restart.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }, "zcode");
+      assert.equal(beforeDetails, true, "the Restart stands before Details");
+      const restartBox = await go.boundingBox();
+      const detailsBox = await page.locator(`${row("zcode")} .ag-link`).boundingBox();
+      assert.ok(restartBox.x + restartBox.width <= detailsBox.x + 1, "the Restart stands left of Details");
       assert.equal((await go.textContent()).trim(), w.restart);
       assert.equal(await go.getAttribute("aria-label"), w.aria);
       assert.equal(await go.getAttribute("title"), w.title);
@@ -202,7 +211,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await codex.click();
       await ask.waitFor();
       assert.ok((await ask.locator("h2").textContent()).includes("Codex"));
-      assert.ok((await ask.textContent()).includes(w.appServer));
+      assert.ok((await ask.textContent()).includes(w.codex));
       await page.keyboard.press("Escape");
       await ask.waitFor({ state: "detached" });
       assert.deepEqual(calls, ["POST restart-app zcode"]);

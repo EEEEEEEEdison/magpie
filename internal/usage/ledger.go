@@ -1085,6 +1085,8 @@ type Part struct {
 	Calls  int     `json:"calls"`
 	Tokens int     `json:"tokens"`
 	Cost   float64 `json:"cost"`
+	Credits  float64 `json:"credits,omitempty"`
+	Credited int     `json:"credited,omitempty"`
 	// how fast its replies came, as Totals has it: a chart of speed says
 	// each one's at each point (#860)
 	Timed     int   `json:"timed,omitempty"`
@@ -1101,6 +1103,10 @@ func (p *Part) add(r Row) {
 	p.Tokens += r.Input + r.Output + r.CacheRead + r.CacheWrite
 	if r.Priced {
 		p.Cost += r.Cost
+	}
+	if r.Credits != nil {
+		p.Credits += *r.Credits
+		p.Credited++
 	}
 	if r.TTFT > 0 && !r.Failed() {
 		p.Timed++
@@ -1120,6 +1126,8 @@ func (p *Part) plus(d *Totals) {
 	p.Calls += d.Calls
 	p.Tokens += d.AllTokens()
 	p.Cost += d.Cost
+	p.Credits += d.Credits
+	p.Credited += d.Credited
 	p.Timed += d.Timed
 	p.TTFT += d.TTFT
 	p.DecodeMs += d.DecodeMs
