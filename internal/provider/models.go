@@ -424,11 +424,25 @@ func relistPicks(q *Provider, now map[string]bool) bool {
 }
 
 // fetch is Fetch without the picks looked after. A Remote magpie's list
-// also tells whether it is this magpie (noteSelf).
+// also tells whether it is this magpie (noteSelf), and that magpie is
+// asked whether it serves its MCP router (noteRemoteHub).
 func (p Provider) fetch(ctx context.Context) ([]catalog.Model, error) {
 	ms, err := p.fetchList(ctx)
+	if err != nil && p.IsRemoteMagpie() {
+		// one that took another address on its network is asked there
+		// (remote_moved.go)
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), seekFor)
+		defer cancel()
+		if q, ok := SeekMoved(sctx, p, err); ok {
+			p, ctx = q, sctx
+			ms, err = p.fetchList(ctx)
+		}
+	}
 	if err == nil {
 		noteSelf(p, ms)
+		if len(ms) > 0 {
+			noteRemoteHub(ctx, p)
+		}
 	}
 	return ms, err
 }
@@ -501,13 +515,24 @@ func (p Provider) fetchList(ctx context.Context) ([]catalog.Model, error) {
 // nothing: a provider still being added (#578, the add form's Fetch models)
 // is shown its vendor's list to pick from before it is saved.
 func (p Provider) List(ctx context.Context) ([]catalog.Model, error) {
+	ms, err := p.ListAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return catalog.Chat(ms), nil
+}
+
+// ListAll is List with the models served on an API of their own kept:
+// embedding and rerank models, tagged Serves.
+func (p Provider) ListAll(ctx context.Context) ([]catalog.Model, error) {
 	ctx = p.ownRequests(p.Via(ctx), probelog.KindList)
 	if pr := Preset(p.Preset); pr != nil && pr.NoList && strings.TrimSpace(p.ModelsURL) == "" && !p.listRegion(pr) {
-		return catalog.Chat(p.planModels(nil)), nil
+		// with its embedding and rerank models, marked so (Voyage AI's)
+		return append(p.planModels(nil), p.PlanRetrieval("")...), nil
 	}
 	if p.IsCline() && strings.TrimSpace(p.ModelsURL) == "" {
 		if ms, _, err := p.clineFeed(ctx); err == nil {
-			return catalog.Chat(ms), nil
+			return ms, nil
 		}
 	}
 	if p.IsKilo() && strings.TrimSpace(p.ModelsURL) == "" {
@@ -515,13 +540,13 @@ func (p Provider) List(ctx context.Context) ([]catalog.Model, error) {
 		if err != nil {
 			return nil, err
 		}
-		return catalog.Chat(ms), nil
+		return ms, nil
 	}
 	l, err := p.fetchOne(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return catalog.Chat(l.models), nil
+	return l.models, nil
 }
 
 // ListAsks says List asks a vendor over the network, with p's own key,
@@ -1231,26 +1256,48 @@ func (p Provider) planModels(ms []catalog.Model) []catalog.Model {
 // region's plan. They are resolved by the embeddings API but kept out of
 // agents' chat-model lists.
 func (p Provider) PlanEmbeddings() []catalog.Model {
-	return p.planMedia(func(r *Region) []string { return r.Embeddings }, false, false)
+	return p.planMedia(func(r *Region) []string { return r.Embeddings }, false, false, catalog.ServesEmbedding)
+}
+
+// PlanRerankers are the rerank models the preset names, as PlanEmbeddings
+// are its embedding models.
+func (p Provider) PlanRerankers() []catalog.Model {
+	return p.planMedia(func(r *Region) []string { return r.Rerankers }, false, false, catalog.ServesRerank)
+}
+
+// PlanRetrieval are the preset's models of kind's (catalog.ServesEmbedding
+// or ServesRerank), or both for "".
+func (p Provider) PlanRetrieval(kind string) []catalog.Model {
+	switch kind {
+	case catalog.ServesEmbedding:
+		return p.PlanEmbeddings()
+	case catalog.ServesRerank:
+		return p.PlanRerankers()
+	case "":
+		return append(p.PlanEmbeddings(), p.PlanRerankers()...)
+	}
+	return nil
 }
 
 // PlanDrawers are the image-generation models explicitly included in the
 // preset region's plan. They are separate from its chat models.
 func (p Provider) PlanDrawers() []catalog.Model {
-	return p.planMedia(func(r *Region) []string { return r.Drawers }, true, false)
+	return p.planMedia(func(r *Region) []string { return r.Drawers }, true, false, "")
 }
 
 // PlanVideos are the video-generation models explicitly included in the
 // preset region's plan.
 func (p Provider) PlanVideos() []catalog.Model {
-	return p.planMedia(func(r *Region) []string { return r.Videos }, false, true)
+	return p.planMedia(func(r *Region) []string { return r.Videos }, false, true, "")
 }
 
-func (p Provider) planMedia(ids func(*Region) []string, draws, films bool) []catalog.Model {
+func (p Provider) planMedia(ids func(*Region) []string, draws, films bool, serves string) []catalog.Model {
 	pr := Preset(p.Preset)
 	if pr == nil {
 		return nil
 	}
+	// a preset with no regions names its own (Voyage AI's)
+	own := &Region{Embeddings: pr.Embeddings, Rerankers: pr.Rerankers}
 	// keys on plans of their own (KeyAccount.Plan): each plan's, once
 	views := []Provider{p}
 	if p.plansMixed() {
@@ -1261,12 +1308,12 @@ func (p Provider) planMedia(ids func(*Region) []string, draws, films bool) []cat
 	for _, v := range views {
 		r := v.regionOf(pr)
 		if r == nil {
-			continue
+			r = own
 		}
 		for _, id := range ids(r) {
 			if !seen[id] {
 				seen[id] = true
-				out = append(out, catalog.Model{ID: id, Name: id, Provider: p.ID, Draws: draws, Films: films})
+				out = append(out, catalog.Model{ID: id, Name: id, Provider: p.ID, Draws: draws, Films: films, Serves: serves})
 			}
 		}
 	}
@@ -2688,6 +2735,26 @@ func BasePriceIn(s settings.Settings, providerID, model string) (catalog.Price, 
 	return pr, ok, p.RateWindows
 }
 
+// UserBasePriceIn is BasePriceIn without the catalogs' word: the price the
+// user set for a provider's model themselves, a zero included — the model's
+// own, else every model of that provider's, else every model's (settings'
+// ModelPrices) — with the peak a vendor bills by the hour marked on it and
+// the provider's windows as the third return, as BasePriceIn hands them.
+// It is the first place BasePriceIn looks, alone for a caller that asks for
+// the user's word before the catalogs' (#5340).
+func UserBasePriceIn(s settings.Settings, providerID, model string) (catalog.Price, bool, []RateWindow) {
+	p, known := byIDOrWas(providerID)
+	if !known {
+		p = Provider{ID: providerID}
+	}
+	pr, ok := userPrice(s, p, model)
+	if !ok {
+		return catalog.Price{}, false, nil
+	}
+	pr.Peak = p.PeakOf(model)
+	return pr, true, p.RateWindows
+}
+
 // priceOf is EffectivePriceAt for a provider already looked up, for a
 // caller pricing many models at once: byIDOrWas reads every provider's
 // accounts each time. The window's rate scales every price the call is
@@ -2946,7 +3013,7 @@ func EntryPricer(st settings.Settings, find func(string) (Group, []Member, bool)
 // entryPricerAt is EntryPricer with a provider's rate window taken at
 // now, or left out for a zero now.
 func entryPricerAt(st settings.Settings, find func(string) (Group, []Member, bool), now time.Time) func(Entry) (catalog.Price, bool) {
-	all := All()
+	all := sharedAll() // priceIn only reads them
 	return func(e Entry) (catalog.Price, bool) {
 		if e.Group == "" {
 			return priceIn(st, all, e.Provider.ID, e.Model, now)
@@ -2985,7 +3052,7 @@ func entryPricerAt(st settings.Settings, find func(string) (Group, []Member, boo
 // each call's window.
 func AgentPricer(st settings.Settings, find func(string) (Group, []Member, bool)) func(Entry) (catalog.Price, bool) {
 	var base time.Time
-	same, all := entryPricerAt(st, find, base), All()
+	same, all := entryPricerAt(st, find, base), sharedAll()
 	return func(e Entry) (catalog.Price, bool) {
 		if pr, ok := same(e); ok || e.Group == "" {
 			return pr, ok
@@ -2995,6 +3062,35 @@ func AgentPricer(st settings.Settings, find func(string) (Group, []Member, bool)
 			return catalog.Price{}, false
 		}
 		return priceIn(st, all, ms[0].Provider.ID, ms[0].Model, base)
+	}
+}
+
+// FoundOnce is find answering each group once: an agent's list asked a
+// group's members for its compaction, its price twice and its protocols
+// and tiers twice, each walking the group's members and resolving each
+// (~8 MB in 2 minutes of an idle magpie's list rebuilds). What it gives
+// is shared between the calls: only for reading.
+func FoundOnce(find func(string) (Group, []Member, bool)) func(string) (Group, []Member, bool) {
+	type found struct {
+		g  Group
+		ms []Member
+		ok bool
+	}
+	var (
+		mu sync.Mutex
+		of = map[string]found{}
+	)
+	return func(id string) (Group, []Member, bool) {
+		mu.Lock()
+		f, ok := of[id]
+		mu.Unlock()
+		if !ok {
+			f.g, f.ms, f.ok = find(id)
+			mu.Lock()
+			of[id] = f
+			mu.Unlock()
+		}
+		return f.g, f.ms, f.ok
 	}
 }
 
@@ -3189,6 +3285,10 @@ type Entry struct {
 	// told it whole rather than magpie's default working window
 	// (CompactFor, #1809).
 	WindowSet bool `json:"-"`
+	// MaxContext is the most a prompt may hold when asked for, above
+	// Context, as the provider's list says it (catalog.Model's: a Codex
+	// entry's max_context_window, which Codex is handed and may work to)
+	MaxContext int `json:"-"`
 	// Output is the most tokens a reply may hold, when known (a group's:
 	// the least of its members')
 	Output int `json:"output,omitempty"`
@@ -3481,7 +3581,7 @@ func entryFor(p Provider, m catalog.Model, s settings.Settings) Entry {
 	// an agent's list showed the whole magpie/<provider>/<model> (#955)
 	name := cmp.Or(m.Name, m.ID)
 	e := Entry{ID: p.ID + "/" + m.ID, Model: m.ID, Family: p.Family, Name: name, Efforts: effortsOf(m), Provider: p,
-		Images: images, ImageInput: imageInput, Context: ctx, WindowSet: p.ContextOf(m.ID) > 0, Output: output, OutputSet: outputOf(s, p.ID, m.ID) > 0, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Tiers: m.Tiers, Released: m.Released,
+		Images: images, ImageInput: imageInput, Context: ctx, WindowSet: p.ContextOf(m.ID) > 0, MaxContext: m.MaxContext, Output: output, OutputSet: outputOf(s, p.ID, m.ID) > 0, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Tiers: m.Tiers, Released: m.Released,
 		Inputs: m.InputModalities, Outputs: m.OutputModalities, Codex: m.Codex,
 		AlwaysThinks: m.AlwaysThinks, DynamicTools: m.DynamicTools, DefaultEffort: m.DefaultEffort}
 	if lv, ok := catalog.CodexLevels(m.Codex); ok {
@@ -3636,8 +3736,8 @@ func resolveIn(entries []Entry, id string) (Provider, string, bool) {
 	if pid, model, ok := strings.Cut(id, "/"); ok {
 		// the providers a request holds (All): an agent's value of a
 		// model not listed lands here
-		if p := lookIn(All(), pid); p != nil && p.On() && !p.ServesNone() {
-			return *p, model, true
+		if p := lookIn(sharedAll(), pid); p != nil && p.On() && !p.ServesNone() {
+			return p.clone(), model, true
 		}
 	}
 	for i := range entries {

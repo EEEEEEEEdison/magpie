@@ -143,6 +143,17 @@ glance is never saved in the index (`savable`) nor taken by a refresh as a
 parse (`parsed`). See
 [`internal/sessions/manage_quick.go`](../../internal/sessions/manage_quick.go),
 `TestManageAnswersBeforeFirstReads` and `sessions-pending-fill.test.cjs`.
+A Claude Code session's folder is its first line's `cwd`, unless
+Claude Code's `/cd` moved it: the file goes to the new folder's project
+directory with a `{"type":"relocated","relocatedCwd":…}` line, while the
+lines before it keep the old `cwd`, and the last such line names the folder
+(`ccRelocated`; a glance reads it in the file's last 64 KB too). A parse
+saved by a magpie that didn't read those lines (`state.CdRead` unset) whose
+folder isn't the one the file is in is read again (`ccStale`). Magpie's own
+project move rewrites `relocatedCwd` and judges the session by its last
+move. See `TestClaudeCdListedUnderNewFolder` and the fixtures in
+`internal/sessions/testdata/claude-cd` (Claude Code 2.1.316's own lines,
+usrname1833 on Discord).
 Gateway projections have no path,
 resume command or terminal action: the agent's own files of them are not on
 this computer. Their rows carry `gateway: true`; the Sessions page groups them
@@ -429,7 +440,9 @@ affinity see the request as the client sent it. The existing protocol
 readers handle Chat, Anthropic, Responses and Gemini; streaming replies use the
 existing decoders, with completed Responses items retaining custom tool calls.
 Only content actually sent through the gateway is available. Images are shown
-as placeholders; hidden reasoning, client-only operations and unsupported wire
+as placeholders, their base64 taken out before the 8 MiB input cap
+(`leanImages`), so a turn of pictures keeps its text (matrix0487 on Discord;
+`TestFileIDConversationStillShows`); hidden reasoning, client-only operations and unsupported wire
 items cannot be reconstructed. This is not a raw request archive or remote
 session synchronization, and existing S3 archives are not imported.
 
@@ -939,7 +952,8 @@ for: `provider_test`, `api_detect` or `model_list`
   all leaves them out.
 - **A model list answered is no row:** magpie fetches lists by itself
   (start-up's `FetchNew`, the panel's and the Providers page's, and
-  `KeepListsFresh`, which asks a Remote magpie every 10 minutes), so a
+  `KeepListsFresh`, which asks a Remote magpie every 10 minutes, and
+  `KeepRemoteListsFollowed`, as soon as its list changes there), so a
   `model_list` row with a 2xx/3xx status and no error is neither written
   (`usage`'s `probelog.Sink`) nor read back from an older log
   (`quietProbe`, in the index's parse): ferock on Discord, a Requests page

@@ -445,7 +445,30 @@ func desktopNames(entries []provider.Entry) []string {
 // or without Claude Code's "[1m]"; or Claude Science's,
 // claude-magpie-<number>.
 func aliased(id string) (string, bool) {
-	return provider.DesktopAlias(id)
+	if model, ok := provider.DesktopAlias(id); ok {
+		return model, true
+	}
+	number := aliasDigits(id)
+	if len(number) != 10 {
+		return "", false
+	}
+	// the catalog Desktop and Science are listed from
+	for _, e := range provider.CatalogOf("claude-desktop") {
+		if aliasNumber(e.ID) == number {
+			return e.ID, true
+		}
+	}
+	// a model listed once more for a tier after the first it is picked
+	// for (desktopTierAlias), by whichever tier, so a session saved on it
+	// is served after the picks change too
+	for _, e := range provider.CatalogOf("claude-desktop") {
+		for _, t := range DesktopTierNames {
+			if aliasNumber(desktopTierKey(e.ID, t)) == number {
+				return e.ID, true
+			}
+		}
+	}
+	return "", false
 }
 
 // magpieAliasAsked says asked is one of magpie's own alias ids for Claude

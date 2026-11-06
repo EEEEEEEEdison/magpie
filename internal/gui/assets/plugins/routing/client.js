@@ -21,8 +21,7 @@ magpie.plugin("routing", (ctx) => {
     title: "Routing",
     html: `
     <div class="row-head"><span class="label" data-t>Routing</span><span class="rt-livedot" aria-hidden="true"></span><span class="note" data-t>live, as the gateway decides</span><span class="grow"></span>
-      <button class="text rt-gogroups" id="rtGoGroups" type="button" data-tt="Go to the routing groups, below the requests"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v9.5M4 8.5l4 4 4-4"/></svg><span data-t>Routing groups</span></button>
-      <button class="text rt-newgroup" id="rtNewGroup" type="button" data-feature="groups" data-tt="Make a routing group of any models you like — agents pick it as one model"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9"/></svg><span data-t>New group</span></button>
+      <button class="text rt-togroups" type="button" id="rtToGroups"><span data-t>Routing groups</span> ›</button>
       <button class="text rt-mask" id="rtMask" aria-pressed="false" data-tt="Mask the accounts on every page — email addresses and account names — for a screenshot to share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 4.2A10.4 10.4 0 0 1 12 4c6.5 0 10 8 10 8a17.6 17.6 0 0 1-2.2 3.2M6.6 6.6C3.9 8.4 2 12 2 12s3.5 8 10 8a9.7 9.7 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2M2 2l20 20"/></svg><span data-t>Hide accounts</span></button></div>
     <section class="rt" id="rt"></section>
     <div class="rt-more" id="rtMore"></div>
@@ -36,6 +35,16 @@ magpie.plugin("routing", (ctx) => {
       return ready.then(() => routingPage(this));
     },
   });
+  // Routing groups, a page of their own beside Routing (11-06): under the
+  // stage and every request they were a long scroll down, and New group
+  // with them. The same script draws them (routingPage), into this page.
+  ctx.slots.add("page", {
+    key: "groups",
+    title: "Routing groups",
+    html: `<div class="rt-gpage" id="rtGroups"></div>`,
+    // Try again filled the page with its markup anew: the groups go back in
+    mount(main) { window.routingGroupsHome?.(main); },
+  });
 });
 
 // The page, drawn once app.js is set up; part is its part, given the hooks
@@ -43,14 +52,20 @@ magpie.plugin("routing", (ctx) => {
 function routingPage(part) {
   const box = $("#rt");
   if (!box) return;
+  // the groups' way in where the header's row has no tab for them (markNav)
+  const toGroups = $("#rtToGroups");
+  if (toGroups) toGroups.onclick = () => window.show("groups");
   const NS = "http://www.w3.org/2000/svg";
   const still = calm;
   const shown = () => !$("#view-routing").hidden && !document.hidden;
+  // the Routing groups page, which this script draws too (gsec)
+  const gView = () => $("#view-groups");
+  const gShown = () => !gView().hidden && !document.hidden;
   // steady redraws a part of the page where the reader is: WebKit has no
   // scroll anchoring, and a part emptied and filled again, measured between,
   // pulls the page up to what was left of it for that moment
-  function steady(fn) {
-    const v = $("#view-routing"), top = v.scrollTop;
+  function steady(fn, v = $("#view-routing")) {
+    const top = v.scrollTop;
     try { return fn(); } finally { if (v.scrollTop !== top) v.scrollTop = top; }
   }
 
@@ -458,6 +473,35 @@ function routingPage(part) {
     const d = decodeOf(r, ms, flow);
     return d ? d.n / (d.w / 1000) : 0;
   };
+  // floorOf is the least a request that tells no speed of its own wrote
+  // at, as the Usage page's Requests tab tells it for a gateway call
+  // (usage/page.js's ledFloor_, zzzkl3994 on Discord: Routing left the speed
+  // out of rows the Requests tab gave one): one that reasoned with no first
+  // text recorded, its answer over the time after its first token, unless
+  // its content came in a burst; else its output over its whole time, from
+  // the request to its last token, when that is 1,000 tokens or more over a
+  // second or more. answer says which. null when it tells none.
+  function floorOf(r) {
+    if (speedOf(r)) return null;
+    const out = r.out || 0, ms = r.ms || 0, ttft = r.ttft || 0, think = reasoningOf(r);
+    const n = out - think, w = ms - ttft;
+    if (ttft > 0 && think > 0 && !(r.firstText > 0) && n >= 100 && w >= 1000 && n * 1000 <= 10000 * w && !(r.flow > 0 && r.flow * 4 < w)) return { n, w, answer: true };
+    return out >= 1000 && ms >= 1000 && out * 1000 <= 10000 * ms ? { n: out, w: ms } : null;
+  }
+  // rowSpeed is a done request's speed as its row says it: measured, else
+  // floorOf's "≥", with what it was told from. null for none
+  function rowSpeed(r, how) {
+    if (!r.done || how === "bad" || r.status >= 400) return null;
+    const v = speedOf(r);
+    if (v) return { v, text: t("{n} tok/s", { n: Math.round(v) }) };
+    const f = floorOf(r);
+    if (!f) return null;
+    return {
+      v: f.n * 1000 / f.w, text: "≥" + t("{n} tok/s", { n: Math.round(f.n * 1000 / f.w) }),
+      title: f.answer ? t("At least: {n} answer tokens in {ms} after the first token, the {r} reasoning tokens left out. No first text was recorded, so reasoning after the first token is counted too", { n: ledNum(f.n), ms: took(f.w), r: ledNum(reasoningOf(r)) })
+        : t("At least: {n} output tokens in {ms}, from the request to its last token, the wait for the first one counted too", { n: ledNum(f.n), ms: took(f.w) }),
+    };
+  }
   function promptOf(r) {
     let prompt = 0, read = 0;
     // Input excludes both cache tiers. Include writes in the denominator,
@@ -496,14 +540,14 @@ function routingPage(part) {
     // Both times start at the request, so subtracting them leaves the
     // reply's decode window even after a retry. Output is the reply's,
     // not the prompt or the output of earlier billable tries.
-    const speed = r.done && how !== "bad" ? speedOf(r) : 0;
+    const speed = rowSpeed(r, how);
     const values = {
       duration: ["duration", "Duration", r.done && r.ms ? took(r.ms) : "—", ""],
       ttft: ["ttft", "First token", r.done && r.ttft ? took(r.ttft) : "—", t("First token")],
       tokens: ["tokens", "Tokens", r.tokens ? tokens(r.tokens) : "—", tokenBreakdown([r])],
       cache: ["cache-hit", "Cache", prompt ? pct(100 * read / prompt) : "—",
         t("Cache hit rate") + ": " + t("The share of the prompt read from the cache")],
-      speed: ["speed", "Speed", speed ? t("{n} tok/s", { n: Math.round(speed) }) : "—",
+      speed: ["speed", "Speed", speed ? speed.text : "—", speed?.title ||
         t("Output tokens a second over the whole turn, over the streamed replies") + ". " + t("Every token a reply wrote, its reasoning among them, over its whole turn: the wait for its first token is in that time") + ". " + t("A reply held back and let go in a burst at its end tells none: its content came in a small part of its turn")],
       cost: ["cost", "Cost", routeCost(r), [r.priced ? costNote() : routeCredits([r]) ? "" : t("No known price or token counts for this request"), routeCredits([r]) ? creditsNote() : ""].filter(Boolean).join("\n")],
     };
@@ -554,11 +598,15 @@ function routingPage(part) {
     : (w.limit > 0 ? quotaCount(w) + " · " : "") + t(quotaLeft ? left : used, { n: pct(share(w)), ...vars });
   const fill = (w) => Math.max(0, Math.min(100, share(w))) + "%";
   const FAIL = { rate: "rate limited", credit: "out of credit", quota: "quota used up", other: "failed", auth: "sign-in required", canceled: "canceled", foreign: "another account's reasoning", floor: "reply too short", verify: "needs verification", refused: "refused (safety filter)", shape: "request not understood", sight: "images not taken", proxy: "proxy not reachable", offline: "network down", overloaded: "servers overloaded", effort: "reasoning effort not in its plan", overflow: "too long for its model", room: "reply asked past the window left", slow: "slow to start", prompt: "agent's prompt turned away", restricted: "account restricted by the vendor" };
-  const failWord = (why) => t(FAIL[why] || "failed");
+  // a refusal the vendor called a rate limit, resting as out of quota
+  // until the time it named (Rest.Rate), says rate limited: WorkBuddy's
+  // per-model "频率限制" read as the account's quota used up, its credits
+  // left (taoxiaoxin on Discord)
+  const failWord = (why, rest) => t(why === "quota" && rest?.rate ? FAIL.rate : FAIL[why] || "failed");
   // a resting row: a failure that names no kind says the status it
   // answered, and the vendor's own words are over it (restTip), as
   // "failed · back in 16s" alone said nothing of why (GanHei37443 on X)
-  const restSay = (rest) => `${!FAIL[rest.why] || rest.why === "other" ? (rest.status ? rest.status + " · " : "") : ""}${failWord(rest.why)} · ${restWhen(rest)}`;
+  const restSay = (rest) => `${!FAIL[rest.why] || rest.why === "other" ? (rest.status ? rest.status + " · " : "") : ""}${failWord(rest.why, rest)} · ${restWhen(rest)}`;
   const restTip = (rest) => (typeof rest.error === "string" && rest.error) || "";
   // a try that answered: one whose reply broke off after it began (its 200
   // sent, then the vendor's error, #733) didn't, and has a fail
@@ -987,7 +1035,7 @@ function routingPage(part) {
         continue;
       }
       if (x.sunk && !x.rest) out.push(t("{who} was rate limited at {time} while it had quota left, so it went to the back: it comes round again once those ahead of it are rate limited in turn.", { who: who(x), time: clock(x.sunk) }));
-      else if (x.rest) out.push(t("{who} is resting — {why}, {when} — so it waits at the back.", { who: who(x), why: `${x.rest.status} · ${failWord(x.rest.why)}`, when: restWhen(x.rest, at(r.time)) }));
+      else if (x.rest) out.push(t("{who} is resting — {why}, {when} — so it waits at the back.", { who: who(x), why: `${x.rest.status} · ${failWord(x.rest.why, x.rest)}`, when: restWhen(x.rest, at(r.time)) }));
       else if (smart(x) && x.known && group(x) === "spent" && x.credits) out.push(t("{who} is at {n} of its allowance but goes on on its credits — ahead of those used up with nothing to go on with, after those with allowance left.", { who: who(x), n: pct(x.used) }));
       else if (smart(x) && x.known && group(x) === "spent" && weighedWith(r, x).length > 1) out.push(t("{who} is at {n} — all but used up, it answers only when nothing else can.", { who: who(x), n: pct(x.used) }));
       else if (smart(x) && x.known && group(x) === "low" && weighedWith(r, x).length > 1) out.push(t("{who} is at {n} — kept for when the others can't.", { who: who(x), n: pct(x.used) }));
@@ -1400,7 +1448,7 @@ function routingPage(part) {
     if (tr.status < 400 && tr.fail)
       return tr.rest
         ? t("{who} began answering, then broke off · {fail}. {agent} got what was said before the error; {how}, so {agent}'s next request goes to another first.",
-          { who: name, fail: failWord(tr.fail), how: restHow(tr.rest, at(tr.start) + (tr.ms || 0)), agent })
+          { who: name, fail: failWord(tr.fail, tr.rest), how: restHow(tr.rest, at(tr.start) + (tr.ms || 0)), agent })
         : t("{who} began answering, then broke off. {agent} got what was said before the error; the conversation isn't kept on {who} for its next request.", { who: name, agent });
     if (tr.status < 400) {
       const tk = (r.tokens ? " · " + t("{n} tokens", { n: tokens(r.tokens) }) : "") + firstNote(r, tr);
@@ -1467,17 +1515,17 @@ function routingPage(part) {
     // story ends there, not on a retry that never came
     if (tr.gone)
       return t("{who} answered {status} · {fail}, and was to be asked again in {d}, but {agent} canceled the request before then, so nobody is asked again.",
-        { who: name, status: tr.status, fail: failWord(tr.fail), d: took(tr.again), agent });
+        { who: name, status: tr.status, fail: failWord(tr.fail, tr.rest), d: took(tr.again), agent });
     if (tr.replan)
       return t("{who} answered {status} · {fail}, and every member had failed with an error that may pass, so after {d} the {n} of them are asked again, in turn, before any of the reply reaches {agent}. The group waits up to {p} for one to answer.",
-        { who: name, status: tr.status, fail: failWord(tr.fail), d: took(tr.again), n: tr.replan, p: took((tr.patience || 0) * 1000), agent });
+        { who: name, status: tr.status, fail: failWord(tr.fail, tr.rest), d: took(tr.again), n: tr.replan, p: took((tr.patience || 0) * 1000), agent });
     // kept on it for its cache, so asked once more before it moves (jiabubu)
     if (tr.again && tr.kept)
       return t("{who} answered {status} · {fail}, a failure that may pass. The conversation is kept on {who} for what its vendor cached of it, so it is asked once more in {d} before the request moves to another.",
-        { who: name, status: tr.status, fail: failWord(tr.fail), d: took(tr.again) });
+        { who: name, status: tr.status, fail: failWord(tr.fail, tr.rest), d: took(tr.again) });
     if (tr.again)
       return t("{who} answered {status} · {fail}, and nobody else is left to ask — a failure that may pass, so it is tried again in {d}, before any of the reply reaches {agent}.",
-        { who: name, status: tr.status, fail: failWord(tr.fail), d: took(tr.again), agent });
+        { who: name, status: tr.status, fail: failWord(tr.fail, tr.rest), d: took(tr.again), agent });
     // the last one left out of its allowance, after another failed
     // otherwise: the agent was told that one's error (Try.Earlier)
     if (tr.earlier && !next)
@@ -1488,12 +1536,12 @@ function routingPage(part) {
     if (next)
       return tr.rest
         ? t("{who} answered {status} · {fail}. {how}; the request goes on to {next} before any of the reply reaches {agent}.",
-          { who: name, status: tr.status, fail: failWord(tr.fail), how, next: nw ? who(nw) : t("the next"), agent })
+          { who: name, status: tr.status, fail: failWord(tr.fail, tr.rest), how, next: nw ? who(nw) : t("the next"), agent })
         : t("{who} answered {status}, and the request goes on to {next} before any of the reply reaches {agent}. {who} doesn't rest for it.",
           { who: name, status: tr.status, next: nw ? who(nw) : t("the next"), agent });
     if (tr.rest)
       return t("{who} answered {status} · {fail}. {how}; nobody is left to try, so {agent} gets the error.",
-        { who: name, status: tr.status, fail: failWord(tr.fail), how, agent });
+        { who: name, status: tr.status, fail: failWord(tr.fail, tr.rest), how, agent });
     // the gateway stopped here with accounts left in the order: one it
     // would not go on from (the same history refused on every account of
     // a vendor, with no other vendor left)
@@ -1532,11 +1580,16 @@ function routingPage(part) {
   // the title of the session a request is of, as its agent named it, or
   // nothing: never one matched to it by its prompt (parentMatched), which
   // the list's head says is a guess (connor_yang on Discord)
-  const titleOf = (r) => !r || r.parentMatched ? "" : r.agent === "codex" ? codexNames.get(groupSession(r)) || "" : otherTitles.get(ownKey(r)) || "";
+  const titleOf = (r) => oneLine(!r || r.parentMatched ? "" : r.agent === "codex" ? codexNames.get(groupSession(r)) || "" : otherTitles.get(ownKey(r)) || "");
   // sessionName is what a request's session is called where it has a
   // name: its agent's title for it (the trace's, or one read since), else
   // nothing
-  const sessionName = (r) => r.sessionTitle || titleOf(r) || "";
+  const sessionName = (r) => oneLine(r.sessionTitle) || titleOf(r);
+  // oneLine is a title as one line. A title is often its session's first
+  // prompt, and WebKit breaks a line at U+2028/U+2029 even under nowrap, so
+  // a session's block meant for one line of it stacked every line of the
+  // prompt (tz_188 on Discord)
+  function oneLine(s) { return s ? String(s).replace(/[\s\u0085]+/g, " ").trim() : ""; }
   const subs = new Map();   // a group in the group's way down → its heading { li, wire, key, up }
   // A provider's keys serving one model, FOLD_AT or more of them side by
   // side, fold into one row that tells of them all (#1319: 53 keys for one
@@ -2353,7 +2406,7 @@ function routingPage(part) {
     b.append(icon(w.icon || (w.preset ? w.preset : "generic")));
     const name = el("span", "who", who(w));
     // the provider's name heads the card; a row names what differs
-    const sub = el("span", "", w.fallback ? w.name : w.kind === "provider" ? "" : w.plan || "");
+    const sub = el("span", "", rowSub(w, false));
     b.append(name, " ", sub, el("code", "mdl", w.fixed ? `${w.model}:${w.fixed}` : w.model));
     if (w.fixed) b.title = t("{level} reasoning, fixed on this model in the group", { level: w.fixed });
     if (w.fast) {
@@ -2376,8 +2429,13 @@ function routingPage(part) {
     st.onpointerleave = () => delete st.dataset.cut;
     li.append(el("i", "dot"), b, st, bar, tg);
     li.title = w.id;
-    return { li, wire: path(), st, bi, tg, w };
+    return { li, wire: path(), st, bi, tg, w, subEl: sub };
   }
+  // rowSub is what a row says after the name: a fallback's provider, an
+  // account's plan; and the provider of a key or account named as one of
+  // another provider's on the stage is (twin), so two providers' Key-01
+  // rows, each of the same model, are told apart (iamleehom on Discord)
+  const rowSub = (w, twin) => w.fallback ? w.name : w.kind === "provider" ? "" : twin ? [w.name || w.provider, w.plan].filter(Boolean).join(" · ") : w.plan || "";
 
   // sync puts the staged routes on the stage: each agent on the left, and
   // the accounts they weighed, each route's in the order it weighed them —
@@ -2478,6 +2536,13 @@ function routingPage(part) {
       // its way down: its route's heading, then the groups in the group
       row.path = ways ? [wayAt.get(id), ...(row.w.via || [])] : row.w.via || [];
     }
+    // a name more than one provider's rows go by says the provider too
+    const provsOf = new Map();
+    for (const id of ids) {
+      const w = rows.get(id).w;
+      if (w.kind !== "provider") { const n = who(w); provsOf.set(n, (provsOf.get(n) || new Set()).add(w.provider)); }
+    }
+    for (const id of ids) { const row = rows.get(id); setText(row.subEl, rowSub(row.w, provsOf.get(who(row.w))?.size > 1)); }
     // a group in the group heads its models, which it routes by its own
     // routing, set in under it
     // keys or accounts side by side that fold together, FOLD_AT or more
@@ -2640,26 +2705,40 @@ function routingPage(part) {
       if (e.title !== title) e.title = title;
     } else for (const a of ["data-go", "tabindex", "role", "title"]) e.removeAttribute(a);
   }
-  function goRouting(e, go) {
+  async function goRouting(e, go) {
     const i = go.indexOf(":"), kind = go.slice(0, i), id = CSS.escape(go.slice(i + 1));
     const row = kind === "group" ? gList.querySelector(`.rt-group[data-id="${id}"]`) : pList.querySelector(`.rt-pool[data-provider="${id}"]`);
     if (!row) return;
-    if (window.scrollOnPurpose?.(e)) row.scrollIntoView({ block: "center", behavior: still() ? "auto" : "smooth" });
+    // they are on the Routing groups page: it opens, and the row comes
+    // into sight as the reader's click asked. A page just opened is at the
+    // row at once, and that is where the reader is in it (arrived): else
+    // the page put itself back where the reader last left it
+    const asked = window.scrollOnPurpose?.(e), opens = gView().hidden;
+    if (opens && !(await window.show("groups"))) return;
+    if (asked) {
+      readerScrolls(1000);
+      row.scrollIntoView({ block: "center", behavior: opens || still() ? "auto" : "smooth" });
+      if (opens) window.arrived?.(gView());
+    }
     row.classList.remove("rt-found");
     void row.offsetWidth;
     row.classList.add("rt-found");
     row.querySelector(".segs .opt.on")?.focus({ preventScroll: true });
   }
-  $("#view-routing").addEventListener("click", (e) => {
-    const g = e.target.closest(".rt-go[data-go]");
-    if (g) goRouting(e, g.dataset.go);
-  });
-  $("#view-routing").addEventListener("keydown", (e) => {
-    const g = (e.key === "Enter" || e.key === " ") && e.target.closest?.(".rt-go[data-go]");
-    if (!g) return;
-    e.preventDefault();
-    goRouting(e, g.dataset.go);
-  });
+  // on both pages: a request's group, and a group or provider named in
+  // another group's card
+  for (const v of [$("#view-routing"), gView()]) {
+    v?.addEventListener("click", (e) => {
+      const g = e.target.closest(".rt-go[data-go]");
+      if (g) goRouting(e, g.dataset.go);
+    });
+    v?.addEventListener("keydown", (e) => {
+      const g = (e.key === "Enter" || e.key === " ") && e.target.closest?.(".rt-go[data-go]");
+      if (!g) return;
+      e.preventDefault();
+      goRouting(e, g.dataset.go);
+    });
+  }
 
   // lightRow lights a row and its wire: on for the one answering or that
   // answered the request shown, now and a flowing wire only while a
@@ -2747,8 +2826,8 @@ function routingPage(part) {
         named = titleOf(trying.get(id));
       }
       else if (answered.has(id)) { s = (agents.size > 1 ? t("answered {agent}", { agent: agentName(r.agent) }) : t("answered this request")) + (said && " · " + said); named = titleOf(r); }
-      else if (gave.has(id)) s = t("{status} · {fail} · passed to {agent}", { status: gave.get(id).status, fail: failWord(gave.get(id).fail), agent: agentName(r.agent) });
-      else if (went.has(id)) s = t("{status} · {fail} · went on to the next", { status: went.get(id).status, fail: failWord(went.get(id).fail) });
+      else if (gave.has(id)) s = t("{status} · {fail} · passed to {agent}", { status: gave.get(id).status, fail: failWord(gave.get(id).fail, gave.get(id).rest), agent: agentName(r.agent) });
+      else if (went.has(id)) s = t("{status} · {fail} · went on to the next", { status: went.get(id).status, fail: failWord(went.get(id).fail, went.get(id).rest) });
       else if (w.noURL) s = noURLWord(w);
       else if (w.reserve) s = t("in reserve · {n} at once", { n: w.reserve });
       else if (w.sunk && !lifted(sunkKey(w), at(w.sunk))) s = t("rate limited at {time} · at the back", { time: clock(w.sunk) });
@@ -3437,6 +3516,7 @@ function routingPage(part) {
       case "claude-tier": return t("{agent} asked for {model} by Claude's full id; magpie served it on {to}, the model set for that tier.", v);
       case "stand-in": return t("{agent} asked for {model}, which magpie doesn't serve; magpie served it on {to}, the model its config names.", v);
       case "codex-turn": return t("{agent} asked for {model} for a call of its own, which magpie doesn't serve; magpie served it on {to}, the model its last turn was answered on.", v);
+      case "codex-follow": return t("{agent} asked for {model}, one of its own default models, for its memories, and its config names no model for them; magpie served it on {to}, the model of its conversation.", v);
       case "privacy": return t("Masking would have changed this request, so magpie sent it as written to {to}, the model set for that in Settings › Privacy.", v);
       default: return t("magpie served it on {to} in place of {model}.", v);
     }
@@ -3515,7 +3595,7 @@ function routingPage(part) {
   // last one's place, the route says that one's kind (fail): an
   // earlier 529 overload read "529 · quota used up" beside the last
   // account's usage limit (danzi002 on Discord)
-  const endWord = (r, last) => `${r.status} · ${failWord(last.gone ? "canceled" : r.fail || last.fail)}`;
+  const endWord = (r, last) => `${r.status} · ${failWord(last.gone ? "canceled" : r.fail || last.fail, (!r.fail || r.fail === last.fail) && last.rest)}`;
 
   // what a request not yet out at a vendor is doing: being masked
   // (Settings → Privacy, the gateway's "redact" phase), or being routed
@@ -4430,7 +4510,7 @@ function routingPage(part) {
         } else {
           a.tried++;
           if (tryOk(tr)) { a.ok++; a.last = Math.max(a.last, end); const m = tr.model || r.order.find((x) => x.id === tr.id)?.model; if (m) a.models.add(m); }
-          else a.fails[tr.fail || "other"] = (a.fails[tr.fail || "other"] || 0) + 1;
+          else { const k = tr.fail === "quota" && tr.rest?.rate ? "rate" : tr.fail || "other"; a.fails[k] = (a.fails[k] || 0) + 1; }
         }
         const rm = tr.rest ? restModel(tr.rest, tr.model || r.order.find((x) => x.id === tr.id)?.model) : "";
         if (rm) modelRest(a, rm, tr.rest, end);
@@ -4896,7 +4976,7 @@ function routingPage(part) {
         // of its 1.8s (yuancjun on Discord). A failure again on the row
         // starts the 1.8s over
         rerun(row.li, "hit", "rthit"); row.li.classList.add("tagged", "lift");
-        row.tg.textContent = `${tr.status} · ${failWord(tr.fail)}`;
+        row.tg.textContent = `${tr.status} · ${failWord(tr.fail, tr.rest)}`;
         clearTimeout(tagFor.get(row.li));
         tagFor.set(row.li, setTimeout(() => {
           row.li.classList.remove("tagged");
@@ -5468,11 +5548,21 @@ function routingPage(part) {
   };
   const gOffBox = el("div", "list rt-goffbox");
   gOffBox.append(el("div", "rt-goffwhy", t("Routing groups are off in Plugins › Built-in: the groups magpie finds, one model several providers serve, still route, but your own can't be made or changed here.")), gOn);
-  gOff.append(el("div", "row-head", el("span", "label", t("Routing groups"))), gOffBox);
-  gsec.append(gHead, gFound, gNames, gList, gOff, pHead, pList);
-  // after the requests: a request picked in the list plays on the stage,
-  // so the list sits right under it
-  more.append(gsec);
+  gOff.append(gOffBox);
+  // the settings that hold for every group, under the list (11-06)
+  const sHead = el("div", "row-head rt-gset-head");
+  sHead.dataset.feature = "groups";
+  sHead.append(el("span", "label", t("Settings")));
+  const gSet = el("div", "list rt-gset");
+  gSet.dataset.feature = "groups";
+  gSet.append(gFound, gNames);
+  gsec.append(gHead, gList, gOff, sHead, gSet, pHead, pList);
+  // on the Routing groups page, a page of their own; Try again on it puts
+  // them back in its markup made anew
+  const gHome = () => $("#rtGroups");
+  window.routingGroupsHome = (main) => (main?.querySelector("#rtGroups") || gHome())?.append(gsec);
+  window.routingGroupsHome();
+  if (gHome()) byWidth(gHome(), { max520: (w) => w <= 520 });
   const ROUTE_OPTS = [["", "Smart"], ["order", "In order"], ["drain", "Until used up"], ["rotate", "In turn"], ["usage", "Least used"], ["pace", "Use before expiry"], ["free", "Free first"], ["fast", "Speed first"]];
   // a group may also be routed by hand: every request to the member the
   // user picks on its card (provider.Manual, #317) — a provider's keys can't
@@ -5612,8 +5702,8 @@ function routingPage(part) {
       // calling it on a row already in view would drop the hold the next editor
       // opens under (backToReader, app.js, guards the same way).
       const saved = body.id || body.from || "";
-      const row = saved && document.querySelector(`#view-routing .rt-group[data-id="${CSS.escape(saved)}"]`);
-      const view = row && gFolded !== saved && document.getElementById("view-routing");
+      const row = saved && gList.querySelector(`.rt-group[data-id="${CSS.escape(saved)}"]`);
+      const view = row && gFolded !== saved && gView();
       if (view) {
         const rr = row.getBoundingClientRect(), vb = view.getBoundingClientRect();
         if (rr.bottom > vb.bottom || rr.top < vb.top) { readerScrolls(1000); row.scrollIntoView({ block: "nearest" }); }
@@ -5695,7 +5785,7 @@ function routingPage(part) {
   // there, rather than leaving the slot empty.
   const openGroupEditor = async (g) => {
     if (groupDirty() && !(await confirmDiscard())) return false;
-    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, accounts: [...(g.accounts || [])], routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink, unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: patienceOf(g.patience), context: g.context || 0, classifier: g.classifier || "", effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
+    gEdit = { id: g.id, draft: { name: g.name, members: [...g.members], match: [...(g.match || [])], matched: [...(g.matched || [])], fast: [...(g.fast || [])], off: [...(g.off || [])], weights: { ...(g.weights || {}) }, accounts: [...(g.accounts || [])], routing: g.routing || "", pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink, unlists: !!g.unlists, firstToken: g.firstToken || 0, patience: patienceOf(g.patience), context: g.context || 0, classifier: g.classifier || "", intentSure: g.intentSure ?? null, effort: g.effort || "", levels: [...(g.levels || [])], rules: (g.rules || []).map((r) => ({ ...r, ...(r.more?.length ? { more: [...r.more] } : {}), intent: r.intent || "", agents: [...(r.agents || [])], folders: [...(r.folders || [])], exceptFolders: [...(r.exceptFolders || [])], time: r.time ? { ...r.time, days: [...(r.time.days || [])] } : null })) } };
     renderGroups();
     return true;
   };
@@ -5745,7 +5835,7 @@ function routingPage(part) {
     if (!groups) return;
     // not under a row being dragged: it is drawn when let go
     if (groupArranging) { groupRenderPending = true; return; }
-    steady(drawGroups);
+    steady(drawGroups, gView());
   }
   // gSel: the groups picked to be removed together, while picking (lc on
   // Discord: they could only be removed one at a time); null otherwise
@@ -5837,16 +5927,23 @@ function routingPage(part) {
     const shown = words.length ? all.filter((g) => gEdit?.id === g.id || groupMatches(g, words)) : all;
     if (gSel) gSel = new Set([...gSel].filter((id) => shown.some((g) => g.id === id)));
     if (gSel && !all.length) gSel = null;
-    const newBtn = el("button", "text rt-gnew");
+    // the page's toolbar (11-06): the filter and how many there are on the
+    // left, what makes or picks groups on the right, New group the one
+    // filled button
+    const newBtn = el("button", "text primary rt-gnew");
     newBtn.type = "button";
+    newBtn.dataset.feature = "groups"; // off with them, as the note says
     newBtn.append(svg(PLUS, 11, 1.8), el("span", "", t("New group")));
+    newBtn.title = t("Make a routing group of any models you like — agents pick it as one model");
     newBtn.onclick = () => newGroup();
-    const head = [el("span", "label", t("Routing groups")), el("span", "grow"), el("span", "note", t("models agents pick as one"))];
+    const head = [];
     if (all.length > 1 || gQ.value) {
       gQ.placeholder = t("Filter groups and models");
       gQ.setAttribute("aria-label", gQ.placeholder);
       head.push(gQ);
     }
+    if (all.length) head.push(el("span", "note rt-gcount", t("{n} groups · {m} on", { n: all.length, m: all.filter((g) => !g.disabled).length })));
+    head.push(el("span", "grow"));
     // templates: a group for a common need made of the user's own models
     // in a click (provider.Templates). Cards while the user has no group of
     // their own, a menu by New group after
@@ -5926,7 +6023,7 @@ function routingPage(part) {
   let gMorph = null, gSaved = null, gFolded = null;
   const slotKey = (n) => n.dataset?.gslot;
   function slotsOf() {
-    const m = new Map(), vt = document.getElementById("view-routing").getBoundingClientRect().top;
+    const m = new Map(), vt = gView().getBoundingClientRect().top;
     for (const n of gList.children) {
       const k = slotKey(n);
       if (k === undefined) continue;
@@ -5938,7 +6035,7 @@ function routingPage(part) {
   function morphSlots(was) {
     const alias = gMorph, saved = gSaved;
     gMorph = gSaved = gFolded = null;
-    if (still() || !shown()) return;
+    if (still() || !gShown()) return;
     for (const n of gList.children) {
       const k = slotKey(n);
       if (k === undefined) continue;
@@ -5980,7 +6077,7 @@ function routingPage(part) {
   // was above the window's; the page's scroll is read once the redraw
   // has put it back (steady).
   function foldInSight(n, grow, from, to, top) {
-    const view = document.getElementById("view-routing");
+    const view = gView();
     readerScrolls(1000);
     let s0, target;
     const step = () => {
@@ -6394,7 +6491,16 @@ function routingPage(part) {
     const edit = el("button", "text", t("Edit"));
     edit.onclick = (e) => { e.stopPropagation(); open(); };
     const open = () => openGroupEditor(g);
-    row.onclick = open;
+    // words dragged across on the card are being selected to copy
+    // (jiabubu on Discord), not a click that opens the editor; a click
+    // with something else selected still opens it
+    let selAtDown = "";
+    row.onpointerdown = () => { selAtDown = String(getSelection() || ""); };
+    row.onclick = () => {
+      const s = getSelection();
+      if (s && !s.isCollapsed && row.contains(s.focusNode) && String(s) !== selAtDown) return;
+      open();
+    };
     row.oncontextmenu = (e) => { e.preventDefault(); groupMenu(ics, g); };
     row.append(ics, main, tags, edit);
     // a group of the user's switches off as a whole, kept as it is (PAMI
@@ -6440,7 +6546,7 @@ function routingPage(part) {
         closeProtoMenu();
         if (v === cur || (groupDirty() && !(await confirmDiscard()))) return b.focus({ preventScroll: true });
         const n = opts.find(([id]) => id === v)?.[1] || v;
-        await groupAction("save", { id: g.id, name: g.name, members: namedOf(g), match: g.match || [], routing: v, pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink && sinkable(v), firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, accounts: g.accounts || [], unlists: !!g.unlists },
+        await groupAction("save", { id: g.id, name: g.name, members: namedOf(g), match: g.match || [], routing: v, pick: g.pick || "", affinity: g.affinity || "", sink: !!g.sink && sinkable(v), firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, accounts: g.accounts || [], unlists: !!g.unlists },
           t("{name}: {routing}", { name: g.name, routing: t(n) }));
         // the rows were drawn anew: the keyboard stays on this one's routing
         gList.querySelector(`.rt-group[data-id="${CSS.escape(g.id)}"] .rt-groute`)?.focus({ preventScroll: true });
@@ -6573,7 +6679,7 @@ function routingPage(part) {
       b.onclick = (e) => {
         e.stopPropagation(); // the card opens the editor; this picks
         if (on) return;
-        groupAction("save", { id: g.id, name: g.name, members: namedOf(g), match: g.match || [], routing: "manual", pick: id, affinity: g.affinity || "", sink: !!g.sink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, accounts: g.accounts || [], unlists: !!g.unlists },
+        groupAction("save", { id: g.id, name: g.name, members: namedOf(g), match: g.match || [], routing: "manual", pick: id, affinity: g.affinity || "", sink: !!g.sink, firstToken: g.firstToken || 0, patience: g.patience || 0, rules: g.rules || [], effort: g.effort || "", classifier: g.classifier || "", intentSure: g.intentSure ?? null, context: g.context || 0, levels: g.levels || [], family: g.family || "", fast: g.fast || [], off: g.off || [], weights: g.weights || {}, accounts: g.accounts || [], unlists: !!g.unlists },
           t("{name}: every request to {model}", { name: g.name, model: memberName(id) }));
       };
       box.append(b);
@@ -6640,7 +6746,7 @@ function routingPage(part) {
     const sfxSaid = el("span", "hint");
     const sayLabel = () => {
       sfxSaid.textContent = t("Agents’ lists show “{label}”", { label: (d.name.trim() || t("New group")) + (suffixMode() === "on" ? " · routing group" : "") }) +
-        " · " + t("“· routing group” is set for every group above");
+        " · " + t("“· routing group” is set for every group, under the list");
     };
     name.oninput = () => { d.name = name.value; showId(); sayLabel(); };
     const nw = el("div");
@@ -7878,7 +7984,7 @@ function routingPage(part) {
       if (own && !d.levels.length) return status(t("Pick a level to offer, or leave them to its models"), "warn");
       saveBtn.classList.add("busy");
       // refused, Add can be pressed again (busy, it takes no clicks)
-      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: !!d.sink && sinkable(d.routing), firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
+      groupAction("save", { id: idOf(), from: g?.id, name: d.name.trim() || idOf(), members: namedOf(d), placed: d.members, match: d.match, routing: d.routing, pick: d.pick || "", affinity: d.affinity, sink: !!d.sink && sinkable(d.routing), firstToken: d.firstToken || 0, patience: d.patience || 0, rules: d.rules, effort: d.effort, classifier: d.rules.some((r) => r.intent) || d.effort === "auto" ? d.classifier : "", intentSure: d.intentSure ?? null, context: d.context || 0, levels: own ? d.levels : [], family: g?.family || "", fast: d.fast.filter((x) => d.members.includes(x)), off: d.off.filter((x) => d.members.includes(x)), weights: Object.fromEntries(Object.entries(d.weights).filter(([x, n]) => d.members.includes(x) && n > 1)), accounts: d.accounts.filter((a) => accountPids().includes(a.slice(0, a.indexOf("/")))), unlists: !!d.unlists }, t(g ? "{name} saved" : "{name} added", { name: d.name.trim() || idOf() }))
         .then(() => saveBtn.classList.remove("busy"));
     };
     // what goes wrong is said where it is seen, never a click that does nothing
@@ -7929,15 +8035,26 @@ function routingPage(part) {
   }
   // loaded when the view is shown, and again when the window comes back
   // back on the page, the same groups aren't drawn again either (#4652)
-  new MutationObserver(() => { if (!$("#view-routing").hidden) loadGroups(true); }).observe($("#view-routing"), { attributes: true, attributeFilter: ["hidden"] });
-  window.addEventListener("focus", () => { if (shown()) loadGroups(true); });
+  // on either page: Routing names the groups too (its stage, the story)
+  for (const v of [$("#view-routing"), gView()]) new MutationObserver(() => { if (!v.hidden) loadGroups(true); }).observe(v, { attributes: true, attributeFilter: ["hidden"] });
+  window.addEventListener("focus", () => { if (shown() || gShown()) loadGroups(true); });
+  // the groups' rows say what is left of their accounts, drawn again when
+  // the Usage page's readings come while the page is open (Routing's own
+  // second does it there); the page may be open already, from ?view=groups
+  let gTick = 0;
+  const gTicks = () => {
+    clearInterval(gTick);
+    gTick = gView().hidden ? 0 : setInterval(() => { if (gShown()) groupsReadAgain(); }, 1000);
+  };
+  gTicks();
+  new MutationObserver(gTicks).observe(gView(), { attributes: true, attributeFilter: ["hidden"] });
   // newGroupWith: a new group's editor, opened with the model in it — a
   // model of a provider kept for routing groups that no group has, which
   // agents can reach no other way. The picker and the provider's editor
   // ask it (and the tray panel, by ?newgroup= on the window it opens).
   window.newGroupWith = async (id, name, ev) => {
     // app.js's show, the page's: this one's own show is the stage's caption
-    if (document.body.classList.contains("window") && $("#view-routing").hidden && !(await window.show("routing"))) return;
+    if (document.body.classList.contains("window") && gView().hidden && !(await window.show("groups"))) return;
     if (!groups) await loadGroups();
     if (!groups) return;
     if (groupDirty() && !(await confirmDiscard())) return;
@@ -7947,9 +8064,7 @@ function routingPage(part) {
     if (ed && window.scrollOnPurpose?.(ev)) ed.scrollIntoView({ block: "center", behavior: "smooth" });
     ed?.querySelector("input")?.focus({ preventScroll: true });
   };
-  // newGroup: an empty new group's editor. The groups sit below the
-  // requests, out of sight on a first look, so the page's head has a New
-  // group too (mintonight, #944), which brings the editor into view.
+  // newGroup: an empty new group's editor, at the list's top
   async function newGroup(ev) {
     if (groupDirty() && !(await confirmDiscard())) return;
     gSel = null;
@@ -7960,71 +8075,21 @@ function routingPage(part) {
     if (ed && window.scrollOnPurpose?.(ev)) ed.scrollIntoView({ block: "center", behavior: "smooth" });
     ed?.querySelector("input")?.focus({ preventScroll: true });
   }
-  const headNew = $("#rtNewGroup");
-  if (headNew) headNew.onclick = async (ev) => {
-    if (!groups) await loadGroups();
-    if (groups) newGroup(ev);
-  };
-  // the head's Routing groups: the groups sit below the stage, the story
-  // and every request, a long scroll down with many models (shihh on
-  // Discord). Its click brings them to the top of the view, and the focus
-  // with them, so Tab goes on from there; the page is laid out as before
-  gsec.tabIndex = -1;
-  const headGo = $("#rtGoGroups");
-  if (headGo) headGo.onclick = (ev) => {
-    if (!window.scrollOnPurpose?.(ev)) return;
-    gsec.scrollIntoView({ block: "start", behavior: still() ? "auto" : "smooth" });
-    gsec.focus({ preventScroll: true });
-  };
-  // fitGo: it takes only room the head has spare, so nothing else in the
-  // head moves or wraps for it: named where its name fits, its arrow alone
-  // where only that does, and left out of a head with no room (a phone's)
-  const goHead = headGo?.parentElement, goGrow = goHead?.querySelector(".grow");
-  function fitGo() {
-    if (!goGrow || !goHead.offsetParent) return;
-    headGo.dataset.fit = "none";
-    const room = goGrow.getBoundingClientRect().width, gap = parseFloat(getComputedStyle(goHead).columnGap) || 0;
-    for (const fit of ["full", "icon"]) {
-      headGo.dataset.fit = fit;
-      if (room >= headGo.getBoundingClientRect().width + 6 + gap) return;
-    }
-    headGo.dataset.fit = "none";
-  }
-  let goFitting = 0;
-  const fitGoSoon = () => { if (!goFitting) goFitting = requestAnimationFrame(() => { goFitting = 0; fitGo(); }); };
-  if (goHead) {
-    const ro = new ResizeObserver(fitGoSoon);
-    for (const n of [goHead, ...goHead.querySelectorAll(".label, .note")]) ro.observe(n);
-    new MutationObserver(fitGoSoon).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
-  }
   const askedGroup = document.body.classList.contains("window") && params.get("newgroup");
   if (askedGroup) loadGroups().then(() => window.newGroupWith(askedGroup, ""));
   else loadGroups();
 
   // ---------- where the reader is, as requests come ----------
-  // Every request redraws what is above the routing groups: the stage gains
-  // or loses a row, the story a line, the lists theirs. The view kept its
-  // scrollTop, so all of it pushed the groups down or pulled them up under
-  // the reader, a group being edited too (Jerell.OvO on Discord). The view
-  // keeps a part of itself where it is on the screen instead (keepInView in
-  // app.js): the groups, while they are in the upper half of the view or a
-  // field in them has the focus, else the lists, while they are; with
-  // neither (the stage in sight at the top), the view stays as it is.
-  // The groups too while the pointer is on them, low in the view as they
-  // are at the page's foot: a manual group's card, its pick a click away,
-  // slid down from under the pointer as the requests list above it grew
-  // (cwfox67 on X).
+  // Every request redraws what is above the lists: the stage gains or
+  // loses a row, the story a line. The view keeps the lists where they are
+  // on the screen while they are in its upper half (keepInView in app.js);
+  // with the stage in sight at the top, the view stays as it is. The
+  // routing groups sat below them until they had a page of their own.
   const rv = $("#view-routing");
   keepInView(rv, () => {
     const mid = rv.getBoundingClientRect().top + rv.clientHeight / 2;
-    if ((gsec.contains(document.activeElement) || gsec.matches(":hover")) && gsec.offsetParent) return gsec;
-    return [gsec, hist].find((p) => p.offsetParent && p.getBoundingClientRect().top <= mid) || null;
+    return hist.offsetParent && hist.getBoundingClientRect().top <= mid ? hist : null;
   });
-  // the pointer coming onto the groups or off them changes the part kept,
-  // so where the reader is is taken again, as their scroll would
-  const repin = () => { if (held?.v !== rv && !rv.hidden) readerLeaves(rv); };
-  gsec.addEventListener("pointerenter", repin);
-  gsec.addEventListener("pointerleave", repin);
 
   // ---------- the tray panel's Routing tab ----------
   // The gateway's latest requests, as they come, from the same trace the
@@ -8419,8 +8484,8 @@ function routingPage(part) {
     if (r.done && r.ms) meta.push(took(r.ms));
     // and how fast it wrote, as the Routing page's row tells it (#2050):
     // none for one that failed or whose speed can't be told
-    const speed = r.done && how !== "bad" ? speedOf(r) : 0;
-    if (speed) meta.push(t("{n} tok/s", { n: Math.round(speed) }));
+    const speed = rowSpeed(r, how);
+    if (speed) meta.push(speed.text);
     // where it went and its totals share a line, and the totals, longer
     // with the speed, go under it, at the right, when both don't fit: the
     // panel is narrow, and neither the "served …" mark nor the speed is cut

@@ -62,6 +62,9 @@ type Server struct {
 	// gateway serves them at its URL, and the hub calls the plugin itself
 	// (plugin_tools.go)
 	Plugin string `json:"plugin,omitempty"`
+	// Bridge is the Remote magpie (its provider id) whose MCP router the
+	// server is, given a server of its own (bridge_mcp.go)
+	Bridge string `json:"bridge,omitempty"`
 	// Hub is how the MCP hub (Library.MCPHub) gives the server: "" shares
 	// it through the hub's one entry, as every server was before;
 	// HubDirect keeps it the agents' own entry, written as with the hub
@@ -263,6 +266,9 @@ type mcpFile struct {
 	// Literal: what reads the file reads no reference to a variable
 	// (pi-mcp-extension), whatever its format's syntax (refsOf)
 	Literal bool
+	// NoCmdRefs: the agent reads no reference in a command or its args,
+	// whatever its format's other agents do (Droid's, cmdRefs)
+	NoCmdRefs bool
 }
 
 // files are every file the servers are written into.
@@ -472,6 +478,11 @@ const gooseOldTimeout = 300
 // these, so it is left as it is.
 func (f *mcpFile) behind(s *Server, old map[string]any) bool {
 	if f.Format == fmtCodex && old != nil && startupBehind(s, old) {
+		return true
+	}
+	// a key Codex refuses for the entry's transport stops Codex from
+	// starting at all, so such an entry is written again without it
+	if f.Format == fmtCodex && slices.ContainsFunc(codexRefused(s), func(k string) bool { _, ok := old[k]; return ok }) {
 		return true
 	}
 	if selfTimeout(s, 0) == 0 {
@@ -1388,13 +1399,32 @@ func (f *mcpFile) merged(s *Server, old map[string]any) ordered {
 		}
 	}
 	keys := slices.Sorted(maps.Keys(old))
+	var refused []string
+	if f.Format == fmtCodex {
+		refused = codexRefused(s)
+	}
 	for _, k := range keys {
-		if slices.Contains(mine, k) || slices.ContainsFunc(o, func(e kv) bool { return e.k == k }) {
+		if slices.Contains(mine, k) || slices.ContainsFunc(o, func(e kv) bool { return e.k == k }) || slices.Contains(refused, k) {
 			continue
 		}
 		o = append(o, kv{k, old[k]})
 	}
 	return o
+}
+
+// codexRefused are the keys of the other transport, which Codex refuses
+// in an entry of s's: a command's beside a URL, a URL's beside a command.
+// Codex then won't load its config at all ("env_vars is not supported for
+// streamable_http"), so such a key, left from when the server was the
+// other kind, goes when magpie writes the entry; the user's keys of s's
+// own transport stay (codex-rs/config/src/mcp_types.rs, TryFrom
+// RawMcpServerConfig). bearer_token, which Codex refuses for both, is the
+// user's to take out.
+func codexRefused(s *Server) []string {
+	if s.Remote() {
+		return []string{"args", "env", "env_vars", "cwd"}
+	}
+	return []string{"url", "bearer_token_env_var", "http_headers", "env_http_headers", "http_headers_helper", "oauth", "oauth_resource", "auth"}
 }
 
 // put writes the server into the file, in place of one by its name.

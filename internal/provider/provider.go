@@ -318,6 +318,12 @@ type Provider struct {
 	// fitting, which a backend that isn't OpenAI's needs (#350).
 	CodexAsSent bool `json:"codexAsSent,omitempty"`
 
+	// ImageFilesOff, `image-files=off`, has DeepSeek's own API sent an
+	// agent's inline images inline on every turn. By default each goes up
+	// once through DeepSeek's Files API, for a day, and the turns name it
+	// by its file id (gateway's deepseek_files.go, #5407).
+	ImageFilesOff bool `json:"imageFilesOff,omitempty"`
+
 	// PromptAsWritten, on Antigravity's subscription, has the system prompt
 	// go to Google exactly as the agent wrote it. By default the few lines
 	// Google answers with a 429 "Resource has been exhausted" whatever
@@ -342,6 +348,18 @@ type Provider struct {
 	// AdditionalToolsOff, `additional-tools=off`, sends a loaded tool in
 	// the top-level tools even where magpie's default would send the item.
 	AdditionalToolsOff bool `json:"additionalToolsOff,omitempty"`
+
+	// PassErrors, `errors=pass`, is the user's word that the client, not
+	// magpie, deals with what the provider's errors say (ne9ko9 on
+	// Discord): a request to it is asked once, its error goes to the
+	// agent as it came (its status, and its body as written where the
+	// agent's API is the provider's own, else in the agent's shape with
+	// the vendor's type, code and words), nothing about it is inferred
+	// (a prompt too long, a busy relay), it is not asked again in place
+	// or of a fallback or a group's next member, and none of its keys
+	// rests for it. Off, the default, magpie handles them. Only a provider
+	// of a key takes it (TakesPassErrors).
+	PassErrors bool `json:"passErrors,omitempty"`
 
 	// Patience is how many seconds more a request to this provider alone,
 	// not through a group, may be kept once it has failed in a way that
@@ -409,6 +427,14 @@ type Provider struct {
 	// added takes it (TakesInsecureTLS), and only for the hosts of its own
 	// base URLs (UncheckedHosts); see Via.
 	InsecureTLS bool `json:"insecureTLS,omitempty"`
+
+	// HTTP1 has magpie speak HTTP/1.1 to the provider's own hosts, never
+	// HTTP/2 (kepner_53726 on Discord: a company gateway whose HTTP/2
+	// connections broke mid-reply with "tls: bad record MAC" while
+	// HTTP/1.1 to it held). Only a provider the user added takes it
+	// (TakesInsecureTLS), for the hosts of its own base URLs
+	// (UncheckedHosts); see Via.
+	HTTP1 bool `json:"http1,omitempty"`
 
 	// Proxy is the proxy magpie's requests to this provider go through
 	// (#237: Codex through one, a vendor at home without): "" follows
@@ -791,20 +817,38 @@ func store(f file) error {
 // item or a CLI's among them, and Codex's /models asked for it seven times
 // over, past the 5 s Codex waits for the list (#746).
 func All() []Provider {
+	shared := sharedAll()
+	out := make([]Provider, len(shared))
+	for i, p := range shared {
+		out[i] = p.clone() // callers change theirs, Keys[i] and Headers included
+	}
+	return out
+}
+
+// sharedAll is All without its copies, only for reading: the providers a
+// request holds, less the accounts discovery off leaves out. Find, a
+// model's price and a value resolved each copied every provider, every
+// account's keys and headers, to read one (~15 MB in 2 minutes of an
+// idle magpie with its window open).
+func sharedAll() []Provider {
 	held := heldOf("all", allProviders)
-	out := make([]Provider, 0, len(held))
 	// asked once, from the settings a held look has read already: asked for
 	// each account, settings.json was parsed for every account of every
 	// model's price (agent.magpieModels, the GUI's drift every 15s and dsh's
 	// round every 30s), most of an idle magpie's CPU (xsw on Discord)
 	off := sync.OnceValue(func() bool { return settings.AccountDiscoveryOffIn(heldSettings()) })
-	for _, p := range held {
+	for i, p := range held {
 		if p.Account != nil && off() && !p.publicAccount() {
-			continue
+			out := held[:i:i] // the first append copies
+			for _, p := range held[i+1:] {
+				if p.Account == nil || p.publicAccount() {
+					out = append(out, p)
+				}
+			}
+			return out
 		}
-		out = append(out, p.clone()) // callers change theirs, Keys[i] and Headers included
 	}
-	return out
+	return held
 }
 
 // clone is p with its settings unshared: slices, maps and pointers copied.
@@ -865,8 +909,14 @@ func (p Provider) clone() Provider {
 // AllBuilt counts the times All built the list anew, for tests.
 var AllBuilt atomic.Int64
 
+// AllBuiltAt is when the build All last counted was asked for (allProviders
+// entered, the hold's rule read at once after), for a test to judge a build
+// by when it was asked, not by when the request that asked began (#2965).
+var AllBuiltAt atomic.Int64
+
 func allProviders() []Provider {
 	AllBuilt.Add(1)
+	AllBuiltAt.Store(time.Now().UnixNano())
 	f := load()
 	out, picks := ownOf(f)
 	for _, a := range Accounts() {
@@ -994,7 +1044,12 @@ func find(ps []Provider, id string) (Provider, bool) {
 
 // Find looks a provider up by id (or name, case-insensitively).
 func Find(id string) (*Provider, error) {
-	return findIn(All(), id)
+	p, err := findIn(sharedAll(), id)
+	if p != nil {
+		c := p.clone() // the caller's to change, as All's are
+		p = &c
+	}
+	return p, err
 }
 
 func findIn(all []Provider, id string) (*Provider, error) {
@@ -1116,6 +1171,9 @@ func Save(p Provider) error {
 		}
 		if p.InsecureTLS && !p.TakesInsecureTLS() {
 			return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can skip the certificate check", p.Name)
+		}
+		if p.HTTP1 && !p.TakesInsecureTLS() {
+			return fmt.Errorf("%s is a preset's: only a provider you added with your own base URL can be held to HTTP/1.1", p.Name)
 		}
 		if strings.Contains(p.Decide, WorkspaceID) {
 			return errors.New("Bailian's decision model is asked at your workspace's host: give its workspace ID (workspace=… or the editor's Workspace ID), or pick the Token Plan")

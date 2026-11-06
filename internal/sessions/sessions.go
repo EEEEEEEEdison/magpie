@@ -160,6 +160,16 @@ type Session struct {
 	// Convs are the ids magpie's gateway keys the session's requests by
 	// when they carry no session id of their own (dshConvs)
 	Convs []string `json:"-"`
+	// ResponseIDs are the ids of the replies the session's own requests
+	// got, as the gateway wrote them on its routes and the agent kept them
+	// with the reply (dsh's replay state): a fork's inherited replies are
+	// its source's, and are not counted here (Route.ResponseID)
+	ResponseIDs []string `json:"-"`
+	// ForkOf is the session a dsh fork was seeded from (its header's
+	// parentSession, isSeeded): the fork's requests open as that one's do,
+	// so a reply id that names the fork is taken over the opening only for
+	// a fork of the opening's session (gui's ownerOf)
+	ForkOf string `json:"-"`
 	// Copies are the ids of the sessions that are copies of its
 	// conversation, not listed apart from it (ccCopies)
 	Copies []string `json:"-"`
@@ -219,15 +229,23 @@ type state struct {
 	Custom                string            `json:"custom,omitempty"` // the name the user gave it
 	First                 string            `json:"first,omitempty"`  // the first message, when no prompt looked typed
 	Convs                 []string          `json:"convs,omitempty"`  // the gateway's ids for its requests (dshConvs)
-	Start                 time.Time         `json:"start"`
-	Last                  time.Time         `json:"last"`
-	Models                named[Tokens]     `json:"models,omitempty"`
+	// ResponseIDs are the ids of the replies its own requests got, as the
+	// gateway wrote them on its routes and the agent kept them with the
+	// reply (dsh's replay state): they name a request after the fact, where
+	// a conversation id is only its opening (Route.ResponseID)
+	ResponseIDs []string      `json:"response_ids,omitempty"`
+	Start       time.Time     `json:"start"`
+	Last        time.Time     `json:"last"`
+	Models      named[Tokens] `json:"models,omitempty"`
 	// Days is Models again, split by the local date each message was
 	// written on: a session that runs past midnight counts on both days.
 	Days named[*day] `json:"days,omitempty"`
 	// Claude Code: the entrypoint its first line naming one says, which
 	// tells a session Claude Desktop's Code tab ran (desktopEntrypoint)
 	Entry string `json:"entry,omitempty"`
+	// Claude Code: parsed by a magpie that reads /cd's relocated lines
+	// (ccRelocated), so Cwd is the folder the session was last moved to
+	CdRead bool `json:"cd_read,omitempty"`
 	// Claude Code: the message last counted, whose later lines repeat it,
 	// and the day it was counted on
 	Msg      string `json:"msg,omitempty"`
@@ -491,6 +509,7 @@ func (s *state) clone() *state {
 		c.Total = &t
 	}
 	c.Convs = slices.Clone(s.Convs)
+	c.ResponseIDs = slices.Clone(s.ResponseIDs)
 	c.CodexSpawnNames = maps.Clone(s.CodexSpawnNames)
 	c.CodexSpawnConflicts = maps.Clone(s.CodexSpawnConflicts)
 	c.CodexAgentIDs = maps.Clone(s.CodexAgentIDs)
@@ -837,7 +856,8 @@ func allFilesWith(zcode func() []file) []file {
 	lists := callFileLists(codexFiles())
 	lists = append(lists, openCodeFiles(), piFiles(), raftFiles(), cindyFiles(), wslFiles("pi", "raft", "omp", "kimi"), zcode())
 	lists = append(lists, dshFiles(), clineFiles(), ccFiles("qoder", QoderDir("qoder")), ccFiles("qoder-cn", QoderDir("qoder-cn")),
-		grokFiles(), workbuddyFiles(), workbuddyAIFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), kimiFiles(), agyFiles())
+		grokFiles(), workbuddyFiles(), workbuddyAIFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), kimiFiles(), agyFiles(),
+		antigravityFiles()) // #2190
 	// each lister asked Reads already; a file listed under another
 	// agent's name is held to that agent too
 	return allowed(distinctOf(lists...))
@@ -1269,7 +1289,13 @@ const cacheVersion = 30
 //
 // codex 2: only a fork's copies are; its own calls after them are its own,
 // whatever their numbers.
-var parseVersions = map[string]int{"codex": 3, "zcode": 1}
+//
+// dsh 1: the ids of the replies its own requests got (ResponseIDs), for
+// the routes that carry no session id and an opening a fork copies.
+//
+// antigravity 1: a Gemini deployment's name with any one letter after it
+// (gemini-4-argon-d) is its model's (GeminiDeployment), not -n alone.
+var parseVersions = map[string]int{"codex": 3, "zcode": 1, "dsh": 1, "antigravity": 1}
 
 type cacheFile struct {
 	Version int    `json:"version"`
@@ -1468,7 +1494,7 @@ func refresh(want, all []file) {
 		if f.cold {
 			continue // in a stopped WSL distro: what was read of it stands
 		}
-		if s := parsed(f.path); s == nil || s.Size != f.size || s.Mod != f.mod.UnixNano() || (f.agent == "hermes" && (f.m().hermes == nil || f.m().rev == "" || s.DBRevision != f.m().rev)) || ((f.agent == "alma" || f.agent == "cursor" || f.agent == "agy") && s.DBRevision != f.m().rev) {
+		if s := parsed(f.path); s == nil || s.Size != f.size || s.Mod != f.mod.UnixNano() || ccStale(f, s) || (f.agent == "hermes" && (f.m().hermes == nil || f.m().rev == "" || s.DBRevision != f.m().rev)) || ((f.agent == "alma" || f.agent == "cursor" || f.agent == "agy") && s.DBRevision != f.m().rev) {
 			if parsing[f.path] != nil {
 				// a refresh is reading it, another or this one (a path
 				// listed twice): its last parse stands until that one is
@@ -1483,11 +1509,15 @@ func refresh(want, all []file) {
 			// publish closed a nil channel (#2932)
 			parsing[f.path] = make(chan struct{})
 			todo = append(todo, f)
-		} else if s.Agent != f.agent && parsing[f.path] == nil {
+		} else if (s.Agent != f.agent || f.agent == "claude" && !s.CdRead) && parsing[f.path] == nil {
 			// kept by a magpie that didn't name the agent: named now, so
-			// a raise of another agent's parseVersions keeps it
+			// a raise of another agent's parseVersions keeps it. A Claude
+			// Code parse whose folder is the file's (not ccStale) is as a
+			// read of the relocated lines would make it, and is marked so,
+			// so the folder isn't worked out again on every refresh
 			n := *s
 			n.Agent = f.agent
+			n.CdRead = n.CdRead || f.agent == "claude"
 			cache[f.path] = &n
 			named = true
 		}
@@ -1979,6 +2009,10 @@ func assembleListed(fs []file, price func(string) *catalog.Price, codexTitle fun
 				s.App = "claude-desktop"
 			}
 			s.Convs = append(s.Convs, st.Convs...)
+			s.ResponseIDs = append(s.ResponseIDs, st.ResponseIDs...)
+			if d := st.Dsh; d != nil && d.Head.IsSeeded && d.Head.DelegationDepth == 0 {
+				s.ForkOf = d.Head.ParentSession
+			}
 		}
 		if s.Agent == "codex" && st.CodexNickname != "" {
 			s.Nickname = st.CodexNickname
@@ -2083,6 +2117,8 @@ func parserFor(agent string) sessionParser {
 		return sessionParser{grow: parseDroid}
 	case "agy":
 		return sessionParser{grow: parseAgy}
+	case "antigravity":
+		return sessionParser{whole: parseAntigravity} // #2190
 	case "cursor":
 		return sessionParser{whole: parseCursor}
 	case "codex":
@@ -2123,6 +2159,9 @@ func parseWith(f file, old *state, calls *callsRide) *state {
 	if parser.claude && old != nil && old.Claude == nil {
 		old = nil
 	}
+	if ccStale(f, old) {
+		old = nil
+	}
 
 	headBytes := headOf(f.path)
 	var s *state
@@ -2133,6 +2172,7 @@ func parseWith(f file, old *state, calls *callsRide) *state {
 	}
 	s.Size, s.Mod = f.size, f.mod.UnixNano()
 	s.Head, s.HeadSize = hashHead(headBytes), len(headBytes)
+	s.CdRead = parser.claude
 	s.ContentHash = prefixHash(f.path, f.size)
 	var head func([]byte) bool
 	if f.agent == "codex" {
@@ -2632,6 +2672,12 @@ func untagged(s string) string { return title(tag.ReplaceAllString(s, " ")) }
 // as far as it keeps, and one past: a pasted file as a prompt went through
 // a regexp and into runes whole, 0.45 GB of a cold start's first 2 minutes.
 func title(s string) string {
+	t, _ := titleCut(s)
+	return t
+}
+
+// titleCut is title(s), and whether words were left past what it kept.
+func titleCut(s string) (string, bool) {
 	const most = 160
 	s = strings.TrimLeftFunc(s, unicode.IsSpace)
 	b := make([]byte, 0, min(len(s), 4*most))
@@ -2649,10 +2695,10 @@ func title(s string) string {
 		}
 	}
 	if strings.IndexFunc(s[i:], func(r rune) bool { return !unicode.IsSpace(r) }) < 0 {
-		return strings.TrimRightFunc(string(b), unicode.IsSpace)
+		return strings.TrimRightFunc(string(b), unicode.IsSpace), false
 	}
 	// as []rune made it: each byte not UTF-8 one U+FFFD
-	return strings.TrimSpace(string([]rune(string(b)))) + "…"
+	return strings.TrimSpace(string([]rune(string(b)))) + "…", true
 }
 
 // ---- pricing ----------------------------------------------------------------
@@ -2906,24 +2952,29 @@ func Titles(keys []string) map[string]string {
 	loadCache()
 	defer useDBs()()
 	files := allFilesForTitles()
-	// ZCode files a subagent under sess_subagent_agent_<id>, with its
-	// conversation under the parent session's key (ocRoots). A request
-	// names it by the bare id, so its title is read from its own file
-	// when no group carries the key asked for.
-	subFiles := map[string]*file{}
+	// ZCode files a subagent as sess_subagent_agent_<id> and a fork as
+	// sess_<id> with the parent's id in parent_id; ocRoots files both under
+	// the parent session's key. A request names either by its own id, so its
+	// title is read from its own file when no group carries the key asked
+	// for.
+	// A top-level session is named by its own group, so only child
+	// sessions are indexed.
+	subFiles := map[string]*file{} // a ZCode child session's own id → its file
 	for i := range files {
 		f := &files[i]
-		if id, ok := strings.CutPrefix(f.m().sid, "sess_subagent_agent_"); ok && f.agent == "zcode" {
-			subFiles[id] = f
+		if f.agent != "zcode" || f.m().sid == "" || f.m().parent == "" {
+			continue
 		}
+		subFiles[f.m().sid] = f
+		subFiles[zcodeBareID(f.m().sid)] = f
 	}
-	subAsked := map[string]string{} // the key asked for → the subagent's file
+	subAsked := map[string]string{} // the key asked for → the child's file
 	for _, k := range keys {
 		agent, id, ok := strings.Cut(k, ":")
 		if !ok || agent != "zcode" {
 			continue
 		}
-		if f := subFiles[strings.TrimPrefix(id, "sess_subagent_agent_")]; f != nil {
+		if f := subFiles[zcodeBareID(id)]; f != nil {
 			want[f.key] = true
 			subAsked[k] = f.path
 		}
@@ -2972,6 +3023,16 @@ func Titles(keys []string) map[string]string {
 		}
 	}
 	return out
+}
+
+// zcodeBareID is a ZCode session id without the prefix its database gives
+// it: a subagent's sess_subagent_agent_, any other session's sess_. A
+// request names a session by the bare id.
+func zcodeBareID(id string) string {
+	if bare, ok := strings.CutPrefix(id, "sess_subagent_agent_"); ok {
+		return bare
+	}
+	return strings.TrimPrefix(id, "sess_")
 }
 
 // Get is the session whose files are grouped under key (a Summary's Key),
