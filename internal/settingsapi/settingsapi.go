@@ -47,6 +47,8 @@ var Keys = []string{
 	// models: replies, vision, images, search
 	"replyModel", "noLoopGuard", "claudeLeanPrompt", "claudePrintMode", "refusalRetries", "retryAfterCap",
 	"vision", "visionEffort", "imageGen", "imageTimeout", "classifyTimeout",
+	// what every routing group does that says nothing of its own
+	"groupSink", "groupFirstToken", "groupPatience",
 	"searcher", "searcherThen", "searcherEffort", "searchFirst",
 	// updates
 	"noUpdatePill", "noAutoUpdate", "updateEvery", "noAutoDownload", "autoRestart", "updateChannel",
@@ -211,6 +213,17 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	if _, sent := fields["classifyTimeout"]; !sent {
 		in.ClassifyTimeout = cur.ClassifyTimeout
 	}
+	// nor what every routing group does that says nothing of its own,
+	// which the Routing groups page sets (jiezhengj on Discord)
+	if _, sent := fields["groupSink"]; !sent {
+		in.GroupSink = cur.GroupSink
+	}
+	if _, sent := fields["groupFirstToken"]; !sent {
+		in.GroupFirstToken = cur.GroupFirstToken
+	}
+	if _, sent := fields["groupPatience"]; !sent {
+		in.GroupPatience = cur.GroupPatience
+	}
 	// nor whether animations are stilled (#3813)
 	if _, sent := fields["reduceMotion"]; !sent {
 		in.ReduceMotion = cur.ReduceMotion
@@ -292,9 +305,10 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.RequestArchiveLocal, in.RequestArchiveLocalMB = cur.RequestArchiveLocal, cur.RequestArchiveLocalMB
 	// used or left is the Usage page's toggle as much as Settings', set on its own
 	in.QuotaLeft = cur.QuotaLeft
-	in.QuotaReads = cur.QuotaReads // set on its own (quota-reads)
-	in.SearchAll = cur.SearchAll   // set on its own (search-all)
-	in.UsageOrder = cur.UsageOrder // the Usage page's, dragged there
+	in.QuotaReads = cur.QuotaReads   // set on its own (quota-reads)
+	in.SearchAll = cur.SearchAll     // set on its own (search-all)
+	in.SearchCount = cur.SearchCount // and so is this (search-count)
+	in.UsageOrder = cur.UsageOrder   // the Usage page's, dragged there
 	// and what the tray panel's Allowances tab leaves out, set there
 	in.PanelUsageHidden = cur.PanelUsageHidden
 	// and the clients the Usage page's Agents list leaves out, set there

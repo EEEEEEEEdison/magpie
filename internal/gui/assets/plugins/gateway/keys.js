@@ -226,7 +226,7 @@ function renderGatewayKeys() {
     tick.onclick = () => gatewayKeyAction(k.off ? "on-key" : "off-key", { key: k.id });
     // the copy sits by the key it copies (the owner: stranded among the
     // badges it read as nobody's); Rotate and Remove wait in the row's menu
-    row.append(tick, gatewayRename(k), el("span", "plan mono", k.masked), copyCallerKeyBtn(k), el("span", "grow"), ...(k.browser ? [gatewayBrowserTag()] : k.readOnly ? [gatewayReadOnlyTag()] : []), gatewayModelsBadge(k), gatewayQuotasBadge(k), gatewayLimitBadge(k), gatewayKeyMore(k));
+    row.append(tick, gatewayRename(k), el("span", "plan mono", k.masked), copyCallerKeyBtn(k), el("span", "grow"), ...(k.browser ? [gatewayBrowserTag()] : k.readOnly ? [gatewayReadOnlyTag()] : []), gatewayModelsBadge(k), ...gatewayMCPBadge(k), gatewayQuotasBadge(k), ...(k.browser || k.readOnly ? [] : [gatewayConcurrencyBadge(k)]), gatewayLimitBadge(k), gatewayKeyMore(k));
     const under = gatewayLimit?.id === k.id ? [gatewayLimitEditor(k)] : keyUsed(k).map((u) => gatewayLimitLine(k, u));
     if (under.length) row.classList.add("with-limit"), row.append(...under);
     list.append(row);
@@ -308,6 +308,7 @@ function gatewayKeyPage() {
 
 const ROTATE_GLYPH = "M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3.25h-3.25";
 const REMOVE_GLYPH = "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M7 7v4M9 7v4";
+const MCP_GLYPH = "M6 2.5v3M10 2.5v3M4.5 5.5h7V8a3.5 3.5 0 0 1-7 0zM8 11.5v2";
 const POWER_GLYPH = "M8 2.5v5M4.8 4.6a4.75 4.75 0 1 0 6.4 0";
 function gatewayKeyMore(k) {
   const more = el("button", "copy gw-key-more");
@@ -331,6 +332,9 @@ function gatewayKeyMore(k) {
       ...(k.browser ? [] : [k.readOnly
         ? { name: "Give full access", icon: EYE_GLYPH, run: () => gatewayKeyAccess(k, false) }
         : { name: "Make read-only", icon: EYE_GLYPH, run: () => gatewayKeyAccess(k, true), off: k.lan, why: k.lan ? t("The sharing key is given to agents, so it can't be read-only") : "" }]),
+      // the MCP servers and tools it may use (wakaka on Discord); the
+      // Browser key connects the extension alone
+      ...(k.browser ? [] : [{ name: "MCP servers", icon: MCP_GLYPH, run: () => gatewayMCPPick(k, more) }]),
       { name: "Rotate key", icon: ROTATE_GLYPH, run: () => askGatewayKey(k, true) },
       { name: "Remove", icon: REMOVE_GLYPH, sep: true, run: () => askGatewayKey(k, false) },
     ]);
@@ -540,6 +544,56 @@ function gatewayModelsBadge(k) {
   return b;
 }
 
+// gatewayMCPPick picks the MCP servers and tools a key may use (wakaka
+// on Discord), as gatewayModelsBadge picks its models: a server whole, or
+// some of its tools, or none. It opens from the row's menu, and from the
+// key's MCP badge once it holds some.
+async function gatewayMCPPick(k, anchor) {
+  const ms = k.mcp || [];
+  let list = [];
+  try { ({ servers: list } = await api("caller-keys/mcp")); } catch (err) { status(t(err.message), "err"); return; }
+  if (!anchor.isConnected) return;
+  const opts = [{ v: "", name: "All MCP servers", note: "" }, { v: "-", name: "No MCP server", note: "" }];
+  for (const sv of list || []) {
+    opts.push({ v: sv.name, name: sv.title || sv.name, note: sv.title && sv.title !== sv.name ? sv.name : "", literalName: true });
+    for (const tool of sv.tools || []) opts.push({ v: sv.name + "/" + tool, name: tool, note: sv.name + "/" + tool, literalName: true });
+  }
+  // what the CLI kept that the list hasn't: a server gone, or a tool it
+  // no longer lists
+  for (const v of ms) if (!opts.some((o) => o.v === v)) opts.push({ v, name: v, note: "Not served now", literalName: true });
+  openProtoMenu(anchor, opts, [...ms], (picked) => {
+    // "No MCP server" just ticked is none; left ticked beside a server
+    // ticked since, the server
+    const mcp = picked.includes("-") && !ms.includes("-") ? ["-"] : picked.length > 1 ? picked.filter((v) => v !== "-") : picked;
+    (async () => {
+      const out = await gatewayKeyAction("mcp-key", { key: k.id, mcp });
+      if (out) status(t(!mcp.length ? "{name} may use every MCP server" : mcp[0] === "-" ? "{name} may use no MCP server" : "{name} may use only the MCP servers and tools picked", { name: k.name }), "ok");
+    })();
+  }, "MCP servers this key may use", "sess-menu", "right");
+}
+
+// gatewayMCPBadge says which MCP servers a key held to some may use; a
+// key that may use any has none (the row's menu sets it)
+function gatewayMCPBadge(k) {
+  const ms = k.mcp || [];
+  if (!ms.length) return [];
+  const b = el("button", "amodels key-mcp set");
+  b.type = "button";
+  const servers = new Set(ms.map((v) => v.split("/")[0]));
+  b.textContent = ms[0] === "-" ? t("No MCP server") : ms.length === 1 ? ms[0] : t("{n} MCP servers", { n: servers.size });
+  b.title = ms[0] === "-" ? t("No MCP server") : t("Only these MCP servers and tools: {list}", { list: ms.join(", ") });
+  b.setAttribute("aria-label", t("MCP servers this key may use"));
+  b.setAttribute("aria-haspopup", "menu");
+  b.setAttribute("aria-expanded", "false");
+  b.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    gatewayMCPPick(k, b);
+  };
+  return [b];
+}
+
 // ---- the quotas a gateway key is told (#2216) ----
 
 // gatewayQuotasBadge turns on or off a key's being told the quotas of what
@@ -560,6 +614,58 @@ function gatewayQuotasBadge(k) {
     e.preventDefault();
     const out = await gatewayKeyAction("quotas-key", { key: k.id, quotas: !k.quotas });
     if (out) status(t(k.quotas ? "{name} is told no quotas" : "{name} is told the quotas of what it may use", { name: k.name }), "ok");
+  };
+  return b;
+}
+
+// a key's requests at once (young02036 on Discord), as an account's are
+// set on the Providers page: the app's menu, no limit, a number, or the
+// user's own; more wait in a queue and go in order
+const KEY_CONC = [1, 2, 3, 5, 10];
+function gatewayConcurrencyBadge(k) {
+  const own = k.maxConcurrency || 0;
+  const b = el("button", "amodels key-conc" + (own ? " set" : ""));
+  b.type = "button";
+  b.textContent = own ? t("{n} at once", { n: own }) : t("No limit at once");
+  b.title = own ? t("At most {n} requests of this key at once; more wait in a queue and go in order", { n: own }) : t("No limit on this key's requests at once");
+  b.setAttribute("aria-label", t("Requests at once"));
+  b.setAttribute("aria-haspopup", "menu");
+  b.setAttribute("aria-expanded", "false");
+  const set = async (v) => {
+    const out = await gatewayKeyAction("concurrency-key", { key: k.id, maxConcurrency: v });
+    if (out) status(v ? t("{who}: at most {n} requests at once", { who: k.name, n: v }) : t("{who}: no limit on requests at once", { who: k.name }), "ok");
+  };
+  // Other…: a number of the user's own, in the badge's place
+  const other = () => {
+    const i = input(own ? String(own) : "", "1–1000", "text");
+    i.className = "rename-in alane-in";
+    i.inputMode = "numeric";
+    i.setAttribute("aria-label", t("Requests at once"));
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      const s = i.value.trim();
+      const v = /^\d+$/.test(s) && +s <= 1000 ? +s : null;
+      if (save && s && v == null) { status(t("Concurrency: a whole number from 0 to 1000"), "err"); return renderGatewayKeys(); }
+      if (save && s && v !== own) set(v);
+      else renderGatewayKeys();
+    };
+    i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") finish(true); else if (e.key === "Escape") finish(false); };
+    i.onblur = () => finish(true);
+    b.replaceWith(i);
+    i.focus({ preventScroll: true });
+  };
+  b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.classList.contains("open")) return closeProtoMenu();
+    const nums = !own || KEY_CONC.includes(own) ? KEY_CONC : [...KEY_CONC, own].sort((x, y) => x - y);
+    const opts = [{ v: 0, name: "No limit", note: "Any number at once" }, ...nums.map((n) => ({ v: n, name: String(n), note: "", literalName: true })),
+      { v: -1, name: "Other…", note: "A number of your own, up to 1000" }];
+    openProtoMenu(b, opts, own, (v) => {
+      if (v === -1) return other();
+      if (v !== own) set(v);
+    }, "Requests at once", "sess-menu");
   };
   return b;
 }

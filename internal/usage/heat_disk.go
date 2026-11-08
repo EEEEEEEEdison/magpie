@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/yetone/magpie/internal/sessions"
@@ -92,10 +96,10 @@ func heatDiskWrite(key string, cut, since time.Time, days []Day) error {
 	return os.Rename(out.Name(), path)
 }
 
-// heatSettledKey 标识 cut 之前日期的统计输入：同一 root/meta 下，会话块用
-// 完整来源身份、路径、大小和修改时间标识；其他块用行内容标识。
-// 计数规则由 call shard 版本和 settledCountVersion 标识。
-// 无法这样标识的块（如每次查询新建的 probe）返回 false。
+// heatSettledKey names what the days before cut were counted of: each
+// chunk by its rows (a session file's through sourceDigest) under the
+// same root and meta, and the counting by the call shards' version and
+// settledCountVersion. False: no disk to keep the count on.
 func heatSettledKey(d heatDiskRef, cut, since time.Time, f Filter, identities map[string]sessions.CodexIdentity, settled [3][]*rowChunk, before heatSum) (string, bool) {
 	if d.root == "" {
 		return "", false
@@ -115,17 +119,21 @@ func heatSettledKey(d heatDiskRef, cut, since time.Time, f Filter, identities ma
 	rows := lentRows()
 	defer rows.release()
 	for k, set := range settled {
+		// by path: the sets are in mtime order, so a file touched moved,
+		// and a pairing breaks its ties by path (timedRef.newer)
+		set = slices.SortedStableFunc(slices.Values(set), func(a, b *rowChunk) int {
+			return strings.Compare(a.Source.Path, b.Source.Path)
+		})
 		for _, c := range set {
-			if c.serial == 0 {
-				return "", false
-			}
-			b = fmt.Appendf(b[:0], "\x01%d\x00%s\x00%d\x00%d\x00", k, c.Computer, c.Count, c.Latest.UnixNano())
+			// a chunk without a serial (a probe's, made again for each
+			// query) is named by its rows below, as pairSerials allows
+			b = fmt.Appendf(b[:0], "\x01%d\x00%s\x00%d\x00%d\x00%s\x00", k, c.Computer, c.Count, c.Latest.UnixNano(), c.Source.Path)
+			h.Write(b)
 			if c.Source.Path != "" {
-				h.Write(b)
-				hashCallSource(h, c.Source)
+				sum := sourceDigest(c, &rows)
+				h.Write(sum[:])
 				continue
 			}
-			h.Write(b)
 			if c.raw != nil {
 				// a gateway block by its rows as logged: meta names what
 				// prices them, and one not priced has no rows of its own
@@ -136,6 +144,48 @@ func heatSettledKey(d heatDiskRef, cut, since time.Time, f Filter, identities ma
 		}
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), true
+}
+
+// sourceDigests are session files' chunks' digests (sourceDigest) by
+// serial: those of the keys made since the last turn, and before it.
+var sourceDigests struct {
+	sync.Mutex
+	by, last map[uint64][sha256.Size]byte
+}
+
+// sourceDigestsKept is how many digests a turn holds, more than the
+// session files of a long history.
+const sourceDigestsKept = 1 << 16
+
+// sourceDigest names a session file's chunk by its rows, not the file's
+// size and mtime. An agent touches files it adds no call to (a hook's
+// line, a title, an mtime bumped), and a settled key named by the mtime
+// was new on each such touch: every poll of a page or the heatmap paired
+// the whole history again, 1-3 s each on 300k calls (GrayRabbit). A
+// chunk's serial names its file as read under one root and meta
+// (sourceSerial), so its rows are hashed once a process. Codex actors
+// are left out as before: the codex identities in the key decide them.
+func sourceDigest(c *rowChunk, rows *chunkRows) [sha256.Size]byte {
+	d := &sourceDigests
+	d.Lock()
+	sum, ok := d.by[c.serial]
+	if !ok {
+		sum, ok = d.last[c.serial]
+	}
+	d.Unlock()
+	if !ok {
+		h := sha256.New()
+		io.WriteString(h, c.Source.Agent+"\x00"+c.Source.Key+"\x00")
+		hashRows(h, rows.of(c))
+		copy(sum[:], h.Sum(nil))
+	}
+	d.Lock()
+	if d.by == nil || len(d.by) >= sourceDigestsKept {
+		d.last, d.by = d.by, map[uint64][sha256.Size]byte{}
+	}
+	d.by[c.serial] = sum
+	d.Unlock()
+	return sum
 }
 
 // hashRows writes an unpacked chunk's rows into h, each field as a number

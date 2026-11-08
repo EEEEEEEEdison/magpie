@@ -548,3 +548,104 @@ func TestGatewayKeyScopedLimitCLI(t *testing.T) {
 		t.Fatalf("a refused command left %d limits", len(ls))
 	}
 }
+
+// magpie gateway-key mcp sets, shows and takes off the MCP servers and
+// tools a key may use (wakaka on Discord), and refuses a flag or a bad
+// entry as one.
+func TestGatewayKeyMCPCLI(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := settings.Save(settings.Settings{LAN: true}); err != nil {
+		t.Fatal(err)
+	}
+	call := func(args ...string) (string, error) {
+		var out bytes.Buffer
+		err := gatewayKeysTo(&out, append([]string{"gateway-key"}, args...))
+		return out.String(), err
+	}
+	if _, err := call("add", "Phone"); err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := access.List()
+	id := keys[0].ID
+	if got, err := call("mcp", id); err != nil || got != "Phone: every MCP server\n" {
+		t.Fatal(got, err)
+	}
+	if got, err := call("mcp", id, "github", "fs/read_file"); err != nil || got != "Phone: only github, fs/read_file\n" {
+		t.Fatal(got, err)
+	}
+	if keys, _ = access.List(); !slices.Equal(keys[0].MCP, []string{"github", "fs/read_file"}) {
+		t.Fatal("kept", keys[0].MCP)
+	}
+	for _, args := range [][]string{{"mcp"}, {"mcp", id, "fs/"}, {"mcp", id, "--help"}, {"mcp", id, "-"}, {"mcp", "missing", "fs"}, {"mcp", "missing"}} {
+		if _, err := call(args...); err == nil {
+			t.Error("accepted", args)
+		}
+	}
+	if keys, _ = access.List(); !slices.Equal(keys[0].MCP, []string{"github", "fs/read_file"}) {
+		t.Fatal("a refused change was kept", keys[0].MCP)
+	}
+	if got, err := call("mcp", id, "none"); err != nil || got != "Phone: no MCP server\n" {
+		t.Fatal(got, err)
+	}
+	if got, err := call("mcp", id, "all"); err != nil || got != "Phone: every MCP server\n" {
+		t.Fatal(got, err)
+	}
+	if keys, _ = access.List(); keys[0].MCP != nil {
+		t.Fatal("all kept", keys[0].MCP)
+	}
+}
+
+// young02036 on Discord: a key's concurrency is set, shown and turned off
+// from the CLI; a value that isn't a whole number from 1 to the most is
+// refused and changes nothing, and --help names the command.
+func TestGatewayKeyConcurrencyCLI(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := settings.Save(settings.Settings{LAN: true}); err != nil {
+		t.Fatal(err)
+	}
+	call := func(args ...string) (string, error) {
+		var out bytes.Buffer
+		err := gatewayKeysTo(&out, append([]string{"gateway-key"}, args...))
+		return out.String(), err
+	}
+	if _, err := call("add", "Team"); err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := access.List()
+	id := keys[0].ID
+	if got, err := call("concurrency", id); err != nil || got != "Team: no concurrency limit\n" {
+		t.Fatal(got, err)
+	}
+	if got, err := call("concurrency", id, "3"); err != nil || got != "Team: at most 3 requests at once, the rest wait their turn\n" {
+		t.Fatal(got, err)
+	}
+	if got, err := call("concurrency", id, "1"); err != nil || got != "Team: at most 1 request at once, the rest wait their turn\n" {
+		t.Fatal(got, err)
+	}
+	if _, err := call("concurrency", id, "3"); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"concurrency"}, {"concurrency", id, "0"}, {"concurrency", id, "-1"}, {"concurrency", id, "1001"},
+		{"concurrency", id, "2.5"}, {"concurrency", id, "two"}, {"concurrency", id, "--help"}, {"concurrency", id, "3", "4"},
+		{"concurrency", "missing", "3"}, {"concurrency", "missing"}} {
+		if _, err := call(args...); err == nil {
+			t.Error("accepted", args)
+		}
+	}
+	if keys, _ = access.List(); keys[0].MaxConcurrency != 3 {
+		t.Fatalf("a refused call changed it: %d", keys[0].MaxConcurrency)
+	}
+	if got, err := call("concurrency", id, "off"); err != nil || got != "Team: no concurrency limit\n" {
+		t.Fatal(got, err)
+	}
+	if keys, _ = access.List(); keys[0].MaxConcurrency != 0 {
+		t.Fatal("not turned off")
+	}
+	if help := helpFor([]string{"gateway-key", "concurrency", "--help"}); !strings.Contains(help, "gateway-key concurrency <id> [<n>|off]") {
+		t.Fatal(help)
+	}
+}

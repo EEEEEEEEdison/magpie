@@ -427,6 +427,8 @@ func TestRestartAppsOnWindows(t *testing.T) {
 		{"zcode", `G:\Zcode\resources\zcode-cli.exe`, false},
 		{"dsh", `C:\Users\u\AppData\Local\Programs\DeepSeek Harness\DeepSeek Harness.exe`, true},
 		{"dsh", `C:\Users\u\.dsh\bin\dsh.exe`, false},
+		{"openmausbot", `C:\Users\u\AppData\Local\Programs\openmausbot\OpenMausBot.exe`, true},
+		{"openmausbot", `C:\Users\u\AppData\Local\Programs\openmausbot\resources\app.asar.unpacked\node_modules\@anthropic-ai\claude-code\bin\claude.exe`, false},
 	}
 	for _, c := range cases {
 		if got := restartApps[c.id].win(c.image); got != c.want {

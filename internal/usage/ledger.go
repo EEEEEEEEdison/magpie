@@ -46,8 +46,42 @@ type Row struct {
 
 // Failed is whether the call failed: the agent was answered an error status,
 // or, for a call read from a session file, which has no status, the file
-// says an error ended it.
-func (r Record) Failed() bool { return r.Status >= 400 || r.Error != "" }
+// says an error ended it. A call the agent canceled itself (Canceled) didn't
+// fail: the agent left before an answer, and was told no error.
+func (r Record) Failed() bool { return (r.Status >= 400 || r.Error != "") && !r.Canceled() }
+
+// AgentCanceled is what the usage log says of a request the agent canceled
+// before it was answered (the gateway's canceled), with the status
+// StatusCanceled.
+const AgentCanceled = "the agent canceled the request"
+
+// StatusCanceled is the status a request the agent canceled is logged
+// with: nginx's 499, the client closed the request.
+const StatusCanceled = 499
+
+// CanceledBy is whether a call that ended with status and error was
+// canceled by its agent: a person stopped the reply, or sent the next
+// message while it was coming and the agent asked again. Not magpie's own
+// limit running out on a request it asked of itself ("magpie stopped
+// waiting", #2318), which is logged 499 too and stays a failure.
+func CanceledBy(status int, err string) bool { return status == StatusCanceled && err == AgentCanceled }
+
+// CanceledErrType is the error type a call its agent canceled is logged
+// with (CanceledBy), as LoopErrType is a looping reply's: the record keeps
+// that it was the agent's cancel, whatever its message says.
+const CanceledErrType = "agent_canceled"
+
+// Canceled is whether the agent canceled the call before it was answered:
+// neither failed nor answered, counted apart (Totals.Canceled). A record
+// logged before CanceledErrType was is told by its status and message.
+func (r Record) Canceled() bool {
+	return r.Status == StatusCanceled && (r.ErrType == CanceledErrType || CanceledBy(r.Status, r.Error))
+}
+
+// Answered is whether the call ended with an answer: it neither failed nor
+// was canceled, so how long it took to its first token and its speed tell
+// something.
+func (r Record) Answered() bool { return !r.Failed() && !r.Canceled() }
 
 // Filter narrows the ledger: to a route, one agent (its id, as AgentOf gives it), to
 // one provider, to the failed calls, and to the rows whose model or served
@@ -691,7 +725,8 @@ var CSVHeader = []string{"time", "agent", "requested_model", "provider", "host",
 // 5-minute and 1-hour writes): times in RFC 3339 with
 // their offset, the cost in USD at the effective price (empty when unknown), error
 // "true" for a call that failed: answered with a status of 400 or more, or
-// ended by an error a session file tells. tries is how many tries the
+// ended by an error a session file tells (not one its agent canceled, whose
+// status is 499: Record.Failed). tries is how many tries the
 // gateway made at the request the row ends, when more than one, and
 // handed_on "true" for the row of a try that failed and handed the request
 // on: the request's outcome is the row with the same route_id after it.
@@ -837,7 +872,7 @@ func bucketIndex(bucket string, since, t time.Time) int {
 
 // addRow adds a ledger row, at the cost it already has.
 func (t *Totals) addRow(r Row) {
-	if r.TTFT > 0 && !r.Failed() {
+	if r.TTFT > 0 && r.Answered() {
 		t.Timed++
 		t.TTFT += r.TTFT
 	}
@@ -877,6 +912,7 @@ func (t *Totals) plus(d *Totals) {
 	t.Calls += d.Calls
 	t.Errors += d.Errors
 	t.Retried += d.Retried
+	t.Canceled += d.Canceled
 	t.Loops += d.Loops
 	t.Input += d.Input
 	t.Output += d.Output
@@ -940,7 +976,7 @@ func (r Row) Decode() (tokens int, w int64) {
 // Floor 保留会话文件的整轮下限接口。已计速的回复不再给下限，被流速规则排除的
 // 突发回复也不能经此重新计入；不再扣除首字等待或推理来构造另一种速度。
 func (r Row) Floor() (tokens int, ms int64) {
-	if r.Source != "log" || !FloorAgents[r.Agent] || r.Failed() {
+	if r.Source != "log" || !FloorAgents[r.Agent] || !r.Answered() {
 		return 0, 0
 	}
 	if _, w := r.Decode(); w > 0 {
@@ -1108,7 +1144,7 @@ func (p *Part) add(r Row) {
 		p.Credits += *r.Credits
 		p.Credited++
 	}
-	if r.TTFT > 0 && !r.Failed() {
+	if r.TTFT > 0 && r.Answered() {
 		p.Timed++
 		p.TTFT += r.TTFT
 	}

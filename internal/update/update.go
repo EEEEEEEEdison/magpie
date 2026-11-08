@@ -64,13 +64,28 @@ type Asset struct {
 	URL    string `json:"url"`
 	Size   int64  `json:"size"`
 	SHA256 string `json:"sha256"`
+	// API is GitHub's API address of the file, asked when URL is busy
+	// (apiroute.go); a feed without it has it looked up from URL.
+	API string `json:"api,omitempty"`
 }
 
 // client asks the feed and downloads a release through the proxy the rest
 // of magpie's requests take — Settings' Proxy, else the environment's, else
 // the system's (#294) — on a transport of its own, whatever the process has
-// done to http.DefaultTransport.
+// done to http.DefaultTransport. Its Timeout bounds the feed's small
+// answers; a release's file goes through fileClient, which has none.
 var client = &http.Client{Timeout: 10 * time.Minute, Transport: proxied()}
+
+// fileClient is client without its total Timeout, for a release's file: a
+// slow download still moving goes on however long it takes, and one that
+// stops sending is ended by fetch's stall timer (stallAfter) instead. The
+// Timeout failed an 83 MB Windows download under ~140 KB/s at 10 minutes,
+// part way and still coming (#5572).
+func fileClient() *http.Client {
+	c := *client
+	c.Timeout = 0
+	return &c
+}
 
 func proxied() http.RoundTripper {
 	t := http.DefaultTransport.(*http.Transport).Clone()
@@ -298,6 +313,7 @@ func Stage(ctx context.Context, rel *Release, bundle string) (string, error) {
 		return "", err
 	}
 	out := filepath.Join(dir, "unzip")
+	step(ctx, StepUnpack)
 	if b, err := proc.CommandContext(ctx, "ditto", "-x", "-k", zip, out).CombinedOutput(); err != nil {
 		os.RemoveAll(dir)
 		return "", fmt.Errorf("unzip: %v: %s", err, b)
@@ -314,6 +330,7 @@ func Stage(ctx context.Context, rel *Release, bundle string) (string, error) {
 	}
 	os.Remove(out)
 	unregister(unzipped) // in case it looked in that moment
+	step(ctx, StepSignature)
 	if err := sameSigner(ctx, bundle, app); err != nil {
 		os.RemoveAll(dir)
 		return "", err
@@ -1070,6 +1087,42 @@ func WithProgress(ctx context.Context, f func(done, total int64)) context.Contex
 	return context.WithValue(ctx, progressKey{}, f)
 }
 
+type stepKey struct{}
+
+// The steps an update made under WithStep's ctx goes through, in order.
+// After the download its percent says nothing, and a Mac's unpack and
+// signature check take seconds: each says its name instead (esir_tech on
+// Discord, a percent that sat still).
+const (
+	StepDownload  = "download"  // the bytes coming in
+	StepRetry     = "retry"     // the connection broke off or stalled: waiting to try again
+	StepVerify    = "verify"    // the file checked against its SHA-256
+	StepUnpack    = "unpack"    // the Mac's zip unpacked
+	StepSignature = "signature" // the Mac app's signature checked
+)
+
+// WithStep has an update made under ctx say each step it starts.
+func WithStep(ctx context.Context, f func(step string)) context.Context {
+	return context.WithValue(ctx, stepKey{}, f)
+}
+
+func step(ctx context.Context, s string) {
+	if f, ok := ctx.Value(stepKey{}).(func(string)); ok {
+		f(s)
+	}
+}
+
+// stallAfter is how long a download waits for its next byte. A
+// connection that sends nothing for that long (GitHub's asset host from
+// some networks holds one open with no data) is broken off and tried
+// again from where it stopped, as one that drops is; before, the download
+// sat at its percent until the update's 10 minutes ran out (esir_tech on
+// Discord, at 17%). A var for tests.
+var stallAfter = 30 * time.Second
+
+// errStalled is a try that got no byte for stallAfter.
+var errStalled = errors.New("no data came for a while")
+
 // retryWaits are the pauses before each try after the first: a
 // connection that drops at the start or part way (GitHub's asset host from
 // some networks: AIMetaPhD on X, "EOF" at 0.1.1618) is tried again, from
@@ -1089,17 +1142,36 @@ func download(ctx context.Context, a Asset, path string) error {
 	if err := clearFile(path); err != nil {
 		return err
 	}
-	var err error
+	var err, direct error
+	// on, the tries go through GitHub's API route (apiroute.go): once
+	// the address itself answered busy, which trying it again didn't get
+	// past on 2026-11-08, or for the last try after connections that
+	// broke. Never through a mirror the user gave.
+	on, tried := a, false
 	for try := 0; try <= len(retryWaits); try++ {
 		if try > 0 {
+			step(ctx, StepRetry)
 			select {
 			case <-ctx.Done():
 				return err
 			case <-time.After(retryWaits[try-1]):
 			}
 		}
-		if err = fetch(ctx, a, path); err == nil || ctx.Err() != nil || !Network(err) {
+		step(ctx, StepDownload)
+		tctx := ctx
+		if on.URL != a.URL {
+			tctx = withAPIRoute(ctx)
+		}
+		if err = fetch(tctx, on, path); err == nil || ctx.Err() != nil || !Network(err) {
 			break
+		}
+		if !tried && mirrorOf(ctx) == "" && (busyErr(err) || try == len(retryWaits)-1) {
+			tried = true
+			if api, aerr := apiRoute(ctx, a); api != "" {
+				on.URL, direct = api, err
+			} else if aerr != nil {
+				err = fmt.Errorf("%w (GitHub's API route couldn't be found: %v)", err, aerr)
+			}
 		}
 		// the tries after a connection that broke go over HTTP/1.1: a
 		// proxy that cuts HTTP/2 streams part way cuts every try made
@@ -1108,6 +1180,9 @@ func download(ctx context.Context, a Asset, path string) error {
 		ctx = netproxy.OverHTTP1(ctx)
 	}
 	if err != nil {
+		if direct != nil {
+			err = fmt.Errorf("%w, and through api.github.com: %v", direct, err)
+		}
 		if cerr := clearFile(path); cerr != nil {
 			err = errors.Join(err, cerr)
 		}
@@ -1145,6 +1220,9 @@ type NetError struct {
 }
 
 func (e *NetError) Error() string {
+	if s, ok := e.Err.(statusError); ok {
+		return fmt.Sprintf("download %s: %s, on every try", e.File, string(s))
+	}
 	cause := e.Err
 	var ue *url.Error
 	if errors.As(cause, &ue) {
@@ -1154,6 +1232,23 @@ func (e *NetError) Error() string {
 }
 
 func (e *NetError) Unwrap() error { return e.Err }
+
+// statusError is a reply a host gives when it is busy, not a refusal of
+// the file: its status line.
+type statusError string
+
+func (s statusError) Error() string { return string(s) }
+
+// busyStatus is a status trying again may get past: the host or its
+// gateway overloaded or timed out, or asking for a pause.
+func busyStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
 
 // Network reports whether err is a download the network broke off, which
 // trying again may get through.
@@ -1167,7 +1262,10 @@ func Network(err error) bool { return errors.As(err, new(*NetError)) }
 func fetch(ctx context.Context, a Asset, path string) error {
 	// through a mirror when one is given (mirror.go): the hash checked
 	// below is still the feed's
-	u := mirrored(mirrorOf(ctx), a.URL)
+	u := a.URL
+	if !onAPIRoute(ctx) {
+		u = mirrored(mirrorOf(ctx), a.URL)
+	}
 	mirror := strings.TrimSuffix(u, a.URL)
 	name := filepath.Base(path)
 	var have int64
@@ -1196,22 +1294,39 @@ func fetch(ctx context.Context, a Asset, path string) error {
 		}
 		have = 0
 	}
+	// a try that hears nothing for stallAfter, from the ask to the last
+	// byte, is broken off as the network's (errStalled)
+	tctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	idle := time.AfterFunc(stallAfter, func() { cancel(errStalled) })
+	defer idle.Stop()
+	netErr := func(err error) error {
+		if errors.Is(context.Cause(tctx), errStalled) {
+			err = errStalled
+		}
+		return &NetError{File: name, Err: err}
+	}
 	var res *http.Response
 	flag := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	for restarted := false; ; restarted = true {
-		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		req, err := http.NewRequestWithContext(tctx, "GET", u, nil)
 		if err != nil {
 			return err
 		}
 		if have > 0 {
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", have))
 		}
-		res, err = source.Do(client, req)
+		if onAPIRoute(ctx) {
+			// the file itself; GitHub redirects to it, and Go's client
+			// carries Accept and Range to where it is
+			req.Header.Set("Accept", "application/octet-stream")
+		}
+		res, err = source.Do(fileClient(), req)
 		if err != nil {
 			if ctx.Err() != nil {
 				return fail(err)
 			}
-			return fail(&NetError{File: name, Err: err})
+			return fail(netErr(err))
 		}
 		if res.StatusCode == http.StatusRequestedRangeNotSatisfiable && have > 0 && !restarted {
 			// what was kept isn't the start of the file the host has (it
@@ -1228,6 +1343,11 @@ func fetch(ctx context.Context, a Asset, path string) error {
 		flag = os.O_WRONLY | os.O_APPEND
 	case res.StatusCode == http.StatusOK:
 		have = 0 // the whole file again
+	case busyStatus(res.StatusCode):
+		// the host is busy or its edge timed out (GitHub's asset host
+		// answered 504 Gateway Timeout, 0.1.3316): tried again, as a
+		// connection that broke, with what came kept
+		return fail(&NetError{File: name, Err: statusError(res.Status)})
 	default:
 		if u != a.URL {
 			return fail(&MirrorError{Mirror: mirror, Err: fmt.Errorf("download %s through the mirror %s: %s", name, mirror, res.Status)})
@@ -1240,7 +1360,8 @@ func fetch(ctx context.Context, a Asset, path string) error {
 	}
 	// a read that fails is the network's; a write that fails (a full
 	// disk) is not, and isn't tried again
-	in := &readErr{r: res.Body}
+	idle.Reset(stallAfter)
+	in := &readErr{r: res.Body, idle: idle}
 	var body io.Reader = in
 	if report, ok := ctx.Value(progressKey{}).(func(done, total int64)); ok {
 		total := res.ContentLength
@@ -1258,11 +1379,13 @@ func fetch(ctx context.Context, a Asset, path string) error {
 	}
 	if err != nil {
 		if ctx.Err() == nil && in.err != nil {
-			err = &NetError{File: name, Err: err}
+			err = netErr(err)
 		}
 		return fail(err)
 	}
+	idle.Stop()
 	// the whole file, what earlier tries kept included, against the feed's
+	step(ctx, StepVerify)
 	if !strings.EqualFold(fileHash(path), a.SHA256) {
 		err = fmt.Errorf("%s does not match its checksum", name)
 		if u != a.URL {
@@ -1273,14 +1396,19 @@ func fetch(ctx context.Context, a Asset, path string) error {
 	return nil
 }
 
-// readErr keeps the error its reader returned, io.EOF aside.
+// readErr keeps the error its reader returned, io.EOF aside, and puts
+// idle off again with each byte.
 type readErr struct {
-	r   io.Reader
-	err error
+	r    io.Reader
+	err  error
+	idle *time.Timer
 }
 
 func (r *readErr) Read(p []byte) (int, error) {
 	n, err := r.r.Read(p)
+	if n > 0 && r.idle != nil {
+		r.idle.Reset(stallAfter)
+	}
 	if err != nil && err != io.EOF {
 		r.err = err
 	}
