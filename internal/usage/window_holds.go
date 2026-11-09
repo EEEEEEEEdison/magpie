@@ -221,7 +221,7 @@ func windowHolds(qs []provider.SubscriptionQuota, now, first time.Time, priceOf 
 	paidOtherwise := map[runKey]bool{} // the vendor answered a call after a reading of none left
 	inRun := map[slot][]runKey{}       // the dry runs a counted call fell in
 	read(func(r Record) {
-		if r.IsRejected() || r.IsReported() || r.Input+r.Output == 0 {
+		if r.IsRejected() || r.IsReported() || r.Input+r.Output+r.CacheRead+r.CacheWrite == 0 {
 			return
 		}
 		// who answered, not who a merge shows it under (Renames.Own)
@@ -260,7 +260,9 @@ func windowHolds(qs []provider.SubscriptionQuota, now, first time.Time, priceOf 
 				sums[s] = h
 			}
 			h.Routed.Calls++
-			h.Routed.Tokens += int64(r.Input + r.Output)
+			// the whole counts the Usage page's total: input, output and the
+			// cache read and written, not input and output alone
+			h.Routed.Tokens += int64(r.Input + r.Output + r.CacheRead + r.CacheWrite)
 			h.Routed.CacheRead += int64(r.CacheRead)
 			h.Routed.CacheWrite += int64(r.CacheWrite)
 			if pr := priceOf(r); pr != nil {

@@ -13,21 +13,21 @@ import (
 )
 
 // WindowHolds is a window's whole allowance reckoned from magpie's own
-// calls: Tokens of input and output (cache traffic aside, as the Usage
-// page counts tokens) and, when every call's model has an API list price,
-// Cost at those prices (cache reads and writes at the vendor's own rates).
+// calls: Tokens of input, output and cache reads and writes, the Usage
+// page's total, and, when every call's model has an API list price, Cost
+// at those prices (cache reads and writes at the vendor's own rates).
 // Routed is what magpie routed through the account in the window so far,
 // up to when the share was read, and Used that share. A call made with the
 // account outside magpie is in Used but not in Routed, so the estimate is
 // then lower than the window really holds.
 type WindowHolds struct {
-	Tokens int64   `json:"tokens"`
+	Tokens int64   `json:"tokens"` // input, output and cache read and written
 	Cost   float64 `json:"cost,omitempty"`
 	Priced bool    `json:"priced"`
 	Used   float64 `json:"used"`
 	Routed struct {
 		Calls      int     `json:"calls"`
-		Tokens     int64   `json:"tokens"`
+		Tokens     int64   `json:"tokens"` // input, output and cache read and written
 		CacheRead  int64   `json:"cacheRead,omitempty"`
 		CacheWrite int64   `json:"cacheWrite,omitempty"`
 		Cost       float64 `json:"cost,omitempty"`

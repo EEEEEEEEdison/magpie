@@ -92,11 +92,13 @@ func TestWindowHoldsReckonsWhatMagpieRouted(t *testing.T) {
 		cost           float64 // 0: not priced
 		calls          int
 	}{
-		{0, 0, (3000 + 4000) * 5, 7000, (opus(1000, 2000, 50000, 4000, 1000) + sonnet(3000, 1000, 20000)) * 5, 2},
-		{0, 1, (3000 + 4000 + 15000) * 100 / 40, 22000, (opus(1000, 2000, 50000, 4000, 1000) + sonnet(3000, 1000, 20000) + opus(10000, 5000, 0, 0, 0)) * 100 / 40, 3},
-		{0, 2, (3000 + 15000) * 2, 18000, (opus(1000, 2000, 50000, 4000, 1000) + opus(10000, 5000, 0, 0, 0)) * 2, 2},
+		// input, output and the cache read and written: 1000+2000+50000+4000
+		// and 3000+1000+20000, over the 20% used
+		{0, 0, (57000 + 24000) * 5, 81000, (opus(1000, 2000, 50000, 4000, 1000) + sonnet(3000, 1000, 20000)) * 5, 2},
+		{0, 1, (57000 + 24000 + 15000) * 100 / 40, 96000, (opus(1000, 2000, 50000, 4000, 1000) + sonnet(3000, 1000, 20000) + opus(10000, 5000, 0, 0, 0)) * 100 / 40, 3},
+		{0, 2, (57000 + 15000) * 2, 72000, (opus(1000, 2000, 50000, 4000, 1000) + opus(10000, 5000, 0, 0, 0)) * 2, 2},
 		// OpenAI lists no cache write: what was written is priced at nothing, not at input
-		{1, 0, 5000 * 10, 5000, (4000*1.25 + 1000*10 + 60000*0.125) / 1e6 * 10, 1},
+		{1, 0, (4000 + 1000 + 60000 + 2000) * 10, 67000, (4000*1.25 + 1000*10 + 60000*0.125) / 1e6 * 10, 1},
 		{2, 0, (8000 + 2000) * 4, 10000, 0, 2},
 	}
 	for _, x := range want {
@@ -141,6 +143,26 @@ func TestWindowHoldsReckonsWhatMagpieRouted(t *testing.T) {
 				t.Fatalf("the caller's %s %s was written to", q.Provider, w.Name)
 			}
 		}
+	}
+}
+
+// The whole counts the tokens the Usage page counts as its total: input,
+// output, and the cache read and written. A call whose prompt was all
+// cache counts even with no input or output of its own.
+func TestWindowHoldsCountsCacheInItsWhole(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(3 * 24 * time.Hour)
+	qs := []provider.SubscriptionQuota{{Provider: "claude", User: "dee@example.com", Windows: []provider.QuotaWindow{
+		{Name: "7 days", Used: 25, ResetsAt: &reset, Span: 7 * 24 * time.Hour}}}}
+	read := func(fn func(Record)) {
+		fn(Record{Time: now.Add(-time.Hour), Provider: "claude", ProviderAccount: "dee@example.com", Model: "claude-opus-4-7",
+			Input: 1000, Output: 500, CacheRead: 8000, CacheWrite: 500, Status: 200})
+		fn(Record{Time: now.Add(-2 * time.Hour), Provider: "claude", ProviderAccount: "dee@example.com", Model: "claude-opus-4-7",
+			CacheRead: 1000, Status: 200})
+	}
+	h := windowHolds(qs, now, now.Add(-30*24*time.Hour), func(Record) *catalog.Price { return nil }, provider.Renames{}, nil, nil, read)[0].Windows[0].Holds
+	if h == nil || h.Routed.Tokens != 11000 || h.Tokens != 44000 || h.Routed.CacheRead != 9000 || h.Routed.CacheWrite != 500 || h.Routed.Calls != 2 {
+		t.Fatalf("the whole must count input, output and cache: %+v, want 11000 routed (9000 read, 500 written) and 44000 at 25%%", h)
 	}
 }
 

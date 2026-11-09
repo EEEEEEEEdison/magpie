@@ -18577,9 +18577,9 @@ function holdsLine(h) {
   if (h.priced) line.append(" ", el("span", "", "≈ " + cost(h.cost)));
   const r = h.routed || {};
   line.title = [
-    h.priced ? t("The whole window ≈ {tokens} tokens of input and output, ≈ {cost} at API list prices", { tokens: fmtN(h.tokens), cost: cost(h.cost) })
-      : t("The whole window ≈ {tokens} tokens of input and output; some of its models have no API price", { tokens: fmtN(h.tokens) }),
-    t("Reckoned from what magpie routed through this account in this window: {tokens} tokens in {calls} calls, {cache} cache reads, over the {used} the vendor says is used", { tokens: fmtN(r.tokens || 0), calls: r.calls || 0, cache: fmtN(r.cacheRead || 0), used: Math.round(h.used) + "%" }),
+    h.priced ? t("The whole window ≈ {tokens} tokens of input, output and cache, ≈ {cost} at API list prices", { tokens: fmtN(h.tokens), cost: cost(h.cost) })
+      : t("The whole window ≈ {tokens} tokens of input, output and cache; some of its models have no API price", { tokens: fmtN(h.tokens) }),
+    t("Reckoned from what magpie routed through this account in this window: {tokens} tokens in {calls} calls, {cache} of them cache reads, over the {used} the vendor says is used", { tokens: fmtN(r.tokens || 0), calls: r.calls || 0, cache: fmtN(r.cacheRead || 0), used: Math.round(h.used) + "%" }),
     t("Only magpie's calls are counted: if this account is also used elsewhere, this reads low"),
     t("A heavier model fills a window sooner: this holds for the models used so far"),
   ].join("\n");
@@ -18812,15 +18812,15 @@ function ledGroupSpeed(x) {
 // their mean wait for the first token, 0 for none
 const ledTTFT = (x) => x?.timed > 0 ? x.ttft_ms / x.timed : 0;
 // a metric's value of a point or a share, as the chart counts it
-const ledValue = (m, x) => m === "speed" ? ledSpeed(x) : m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : allTokens(x);
+const ledValue = (m, x) => m === "speed" ? ledSpeed(x) : m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : m === "credits" ? +x.credits || 0 : allTokens(x);
 // of a share in the ranking: a speed is what its row says first, the one of
 // more replies (ledGroupSpeed)
 const ledRankValue = (m, x) => m === "speed" ? ledGroupSpeed(x)?.v || 0 : ledValue(m, x);
-// of a point's part, which has its calls, tokens, cost and speed
-const ledPart = (m, x) => m === "speed" ? ledSpeed(x) : m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : +x.tokens || 0;
+// of a point's part, which has its calls, tokens, cost, credits and speed
+const ledPart = (m, x) => m === "speed" ? ledSpeed(x) : m === "cost" ? +x.cost || 0 : m === "calls" ? +x.calls || 0 : m === "credits" ? +x.credits || 0 : +x.tokens || 0;
 // a metric as its axis and its values say it
-const ledFormat = (m, v) => m === "cost" ? ledMoney(v) : (m === "speed" ? ledNum : fmtN)(Math.round(v));
-const ledFormatLong = (m, v) => m === "speed" ? (v > 0 ? t("{n} tok/s", { n: ledNum(Math.round(v)) }) : "—") : m === "cost" ? (fmtCost({ cost: v, unpriced: 0 }) || "—") : ledNum(Math.round(v));
+const ledFormat = (m, v) => m === "cost" ? ledMoney(v) : m === "credits" ? (v > 0 && v < 0.01 ? "<0.01" : (+v.toFixed(2)).toLocaleString(intlLang())) : (m === "speed" ? ledNum : fmtN)(Math.round(v));
+const ledFormatLong = (m, v) => m === "speed" ? (v > 0 ? t("{n} tok/s", { n: ledNum(Math.round(v)) }) : "—") : m === "cost" ? (fmtCost({ cost: v, unpriced: 0 }) || "—") : m === "credits" ? t("{n} credits", { n: v > 0 && v < 0.01 ? "<0.01" : (+v.toFixed(2)).toLocaleString(intlLang()) }) : ledNum(Math.round(v));
 
 // an axis's top with four steps under it: round numbers, the top at least the largest value
 function ledAxis(max) {
@@ -18882,7 +18882,7 @@ function drawLedColumns(box, l, split, metric, compact, chooseDay, focusDay) {
   const speed = metric === "speed";
   const max = Math.max(0, ...totals, ...(speed ? pts.flatMap((p) => Object.values(p.by?.[split] || {}).map(ledSpeed)) : []));
   if (!(max > 0)) {
-    plot.append(el("div", "none", t(metric === "cost" ? "No known price for these requests" : speed ? "No streamed replies timed in this period" : "Nothing in this period")));
+    plot.append(el("div", "none", t(metric === "cost" ? "No known price for these requests" : metric === "credits" ? "No credits recorded for these requests" : speed ? "No streamed replies timed in this period" : "Nothing in this period")));
     return;
   }
   const topV = ledAxis(max);
@@ -19059,7 +19059,7 @@ function drawLedRank(box, l, split, metric, picked, choose, compact) {
     if (metric !== "calls") more.push(t(x.calls === 1 ? "{n} request" : "{n} requests", { n: fmtN(x.calls) }));
     if (metric !== "tokens") more.push(t("{n} tokens", { n: fmtN(allTokens(x)) }));
     if (metric !== "cost" && x.cost) more.push("≈" + fmtCost(x));
-    if (x.credited) more.push(ledCredits(x));
+    if (metric !== "credits" && x.credited) more.push(ledCredits(x));
     // how fast its replies came, beside what they cost (#860)
     if (metric !== "speed" && gs) more.push(Object.assign(el("span", "rk-speed", gs.text), { title: gs.title }));
     if (ledTTFT(x)) more.push(t("TTFT {ms}", { ms: ledTook(ledTTFT(x)) }));

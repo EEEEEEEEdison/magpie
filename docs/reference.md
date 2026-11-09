@@ -2592,8 +2592,10 @@ in `served.json` beside `providers.json`, so a restart keeps it.
 Each subscription window there also has the Usage page's whole-window
 estimate (#2333): `holds` (`tokens`, `cost` at API list prices, `priced`)
 reckoned from magpie's own calls through the account since the window
-began, over the share used. Where it can't be told honestly, `holdsWhy`
-says why instead: `low` (under 5% used), `clock` (no reset clock), `log`
+began, over the share used. `tokens` counts input, output and cache reads
+and writes, the same total the Usage page shows; `routed.cacheRead` and
+`routed.cacheWrite` are its cache part. Where it can't be told honestly,
+`holdsWhy` says why instead: `low` (under 5% used), `clock` (no reset clock), `log`
 (the window began before magpie's log), `none` (nothing routed in it) or
 `credits` (a call in it may have been paid from credits). A window with
 neither is one no whole is told for: a pool, a family, money, or a card
