@@ -21,6 +21,7 @@ func DesktopAliasNumber(id string) string {
 func DesktopAlias(id string) (string, bool) {
 	id = strings.TrimSuffix(id, "[1m]")
 	var number string
+	var modelFallback string
 	if n, ok := strings.CutPrefix(id, "anthropic/magpie-"); ok {
 		number = n
 	} else if n, ok := strings.CutPrefix(id, "mythos-magpie-"); ok {
@@ -31,6 +32,7 @@ func DesktopAlias(id string) (string, bool) {
 	} else if rest, ok := strings.CutPrefix(id, "magpie-"); ok {
 		if i := strings.Index(rest, ".anthropic."); i > 0 {
 			number = rest[:i]
+			modelFallback = rest[i+len(".anthropic."):]
 		}
 	}
 	if len(number) != 10 {
@@ -43,6 +45,9 @@ func DesktopAlias(id string) (string, bool) {
 		if DesktopAliasNumber(e.ID) == number {
 			return e.ID, true
 		}
+	}
+	if modelFallback != "" {
+		return modelFallback, true
 	}
 	return "", false
 }

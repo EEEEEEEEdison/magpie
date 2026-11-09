@@ -759,6 +759,10 @@ function renderUsage() {
     const box = typeof id === "string" ? $("#" + id) : id;
     keepIcons(box); // a logo made again blinks (keepIcons)
     box.replaceChildren();
+    // a plan's credits are its own: only a row of one plan (a model at a
+    // provider, an account) says them, not an agent's or a key's calls at
+    // several
+    const onePlan = id === "usageModels" || id === "usageAccounts";
     for (const g of groups) {
       const r = el("div", "row stat");
       r.dataset.id = g.id || "";
@@ -769,9 +773,9 @@ function renderUsage() {
       if (g.sub) sub.push(g.sub);
       sub.push(t(g.calls === 1 ? "{n} call" : "{n} calls", { n: g.calls }));
       // what the calls cost in their plan's credits, as the replies said
-      // (WorkBuddy's 积分): an account's, a model's, an agent's (lcyksp
-      // on Discord), not only their tokens
-      if (g.credited) sub.push(ledCredits(g).textContent);
+      // (WorkBuddy's 积分): an account's or a model at one provider's,
+      // not only their tokens
+      if (onePlan && g.credited) sub.push(ledCredits(g).textContent);
       // magpie's own calls apart from the agents' (#1839): magpie's row
       // says it is, and a model's, a key's or an account's how many of
       // its calls were
@@ -792,9 +796,12 @@ function renderUsage() {
       if (g.own?.calls) subLine.title = ownWhy();
       who.append(subLine);
       r.append(who);
-      const share = el("div", "share");
+      // a row that used no tokens has no share to draw: not the minimum
+      // width's stub in an empty track
+      const tokens = usageTokens(g);
+      const share = el("div", "share" + (tokens ? "" : " zero"));
       const fill = el("i");
-      fill.style.width = Math.max(1.5, 100 * usageTokens(g) / total).toFixed(1) + "%";
+      fill.style.width = tokens ? Math.max(1.5, 100 * tokens / total).toFixed(1) + "%" : "0%";
       share.append(fill);
       share.title = t("{n}% of tokens", { n: Math.round(100 * usageTokens(g) / total) });
       r.append(share);
@@ -1425,7 +1432,6 @@ function ledDetail(r, cols) {
     dl.lastChild.classList.add(cls);
     dl.lastChild.previousSibling.classList.add(cls);
   };
-  opt("Sent", r.model);
   opt("Effort", r.effort);
   // the cache hit rate's column stays while the raw cache columns go, and
   // goes only with the first token's
@@ -1491,6 +1497,8 @@ function ledDetail(r, cols) {
   // it was on, or not through the gateway
   if (!r.archive && !r.computer && (providers?.gateway?.archive?.on ?? state.settings?.requestArchive)) add("Request archive", t("Not archived"), "muted");
   if (r.source === "log") add("Data source", t("Read from the agent's session file. The account is shown only when local metadata identifies it; no service provider is inferred."), "muted");
+  add("Requested", r.req);
+  add("Sent", r.model);
   const tr = el("tr", "led-detail");
   const td = el("td");
   td.colSpan = cols;
@@ -2178,7 +2186,7 @@ new ResizeObserver(() => {
 const ledCacheHit = (r) => r.cache_unknown ? null : cacheHitOf({ input: r.in, cache_read: r.cache_read, cache_write: r.cache_write });
 const ledHitText = (h) => h === null ? "" : Math.round(100 * h) + "%";
 const LED_COLS = [
-  ["Time"], ["Agent"], ["Requested"], ["Provider · account"], ["Sent", "", true], ["Served"], ["Effort", "", true],
+  ["Time"], ["Agent"], ["Provider · account"], ["Served"], ["Effort", "", true],
   ["In", "n"], ["Out", "n"], ["Cache write", "n", true], ["Cache read", "n", true], ["Cache hit rate", "n", 2, "The share of the prompt read from the cache"], ["Cost", "n"], ["TTFT", "n", 2, "Time to first token"], ["Duration", "n"], ["Speed", "n"], ["Status"],
 ];
 
@@ -2282,15 +2290,15 @@ const ledNoSpeed_ = (r) => {
 };
 const ledFloorSpeed = (r) => { const f = ledFloor_(r); return f ? f.n / (f.w / 1000) : 0; };
 
-// the table as wide as the window, when leaving out what the row's details
-// say anyway makes it so: else it scrolls sideways (#799)
+// Desktop keeps every column, scrolling inside the table. Only a narrow
+// viewport folds secondary columns into each row's details.
 function ledFit() {
   const wrap = $("#ledWrap"), table = wrap.querySelector("table.led");
   let hint = $("#ledTight");
   if (!table) { if (hint) hint.hidden = true; return; }
   table.classList.remove("tight", "tight2", "tighter");
   const over = () => wrap.scrollWidth > wrap.clientWidth + 1;
-  const tight = over();
+  const tight = window.innerWidth < 768 && over();
   table.classList.toggle("tight", tight);
   // still too wide (#860: a Windows window at 175%, its wider fonts): the
   // price reference line goes too, in the cost's tooltip and the details
@@ -2610,7 +2618,6 @@ function renderLedger() {
       who.append(own);
     }
     td(who, "", [r.kind, r.session && t("session {id}", { id: r.session })].filter(Boolean).join(" · "));
-    td(r.req || "—", "model" + (r.req ? "" : " faint"), r.req || (probe ? "" : t("Not kept for requests before this version")));
     const local = r.source === "log";
     // A session file names the provider it was set up to call, which is
     // where a call that went straight to a vendor went: nothing stood
@@ -2677,9 +2684,6 @@ function renderLedger() {
       badges.append(k);
     }
     if (badges.childElementCount) wc.append(badges);
-    // the model sent is what the gateway sent the vendor: a session file has none
-    // The log names a model, but does not capture the outbound HTTP request.
-    td(r.model || "—", "model " + (r.model ? "model-value" : "faint"), r.source === "log" && r.model ? t("Model recorded in the local session log; the outbound HTTP request was not captured.") : r.model);
     td(ledServed(r), "model");
     td(r.effort || "—", r.effort ? "" : "faint");
     td(fmtN(r.in || 0), "n", exactN(r.in));
@@ -3388,14 +3392,17 @@ function renderSessions() {
 
   // the model and folder filters offer what the range has, under the other filters
   const byAgent = (x) => sessAgent === "all" || (x.app || x.agent) === sessAgent;
-  const byModel = (x) => !sessModel || x.model === sessModel;
+  // a model's own name, not the one it was sold under: the picker and the
+  // model bars offer that, so one model's calls at every provider are one
+  // row and one filter (yetone: 模型肯定是合并过的，不能出现前缀的)
+  const byModel = (x) => !sessModel || x.bare === sessModel;
   const byFolder = (x) => !sessFolder || x.cwd === sessFolder;
   const spent = (list, key) => {
     const m = new Map();
     for (const r of list) if (r[key]) m.set(r[key], (m.get(r[key]) || 0) + usageTokens(r));
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   };
-  const models = spent(rows.filter((r) => byAgent(r) && byFolder(r)), "model").map(([v, n]) => ({ v, name: v, note: t("{n} tokens", { n: fmtN(n) }) }));
+  const models = spent(rows.filter((r) => byAgent(r) && byFolder(r)), "bare").map(([v, n]) => ({ v, name: v, note: t("{n} tokens", { n: fmtN(n) }) }));
   const folders = spent(rows.filter((r) => byAgent(r) && byModel(r)), "cwd").map(([v, n]) => ({ v, name: baseName(v), note: v + " · " + t("{n} tokens", { n: fmtN(n) }) }));
   const agentSpent = new Map(spent(rows.filter((r) => byModel(r) && byFolder(r)), "agent"));
   const agentIcons = new Map(all.map((s) => [s.app || s.agent, s.icon]));
@@ -3415,7 +3422,7 @@ function renderSessions() {
   const from = !inRange && sessDays() && st.from ? sessDate(st.from) : null;
   const q = sessQuery.trim().toLowerCase();
   const list = all.filter((s) => byAgent(s) && (!sessFolder || s.cwd === sessFolder) &&
-    (!sessModel || s.models.some((m) => m.model === sessModel)) &&
+    (!sessModel || s.models.some((m) => m.bare === sessModel)) &&
     (inRange ? inRange.has(s.agent + ":" + s.id) : !from || new Date(s.last) >= from) &&
     (!q || [s.title, s.cwd, s.id, s.name, ...s.models.map((m) => m.model)].some((x) => (x || "").toLowerCase().includes(q))));
 
@@ -3425,7 +3432,7 @@ function renderSessions() {
   const unpriced = new Set();
   for (const r of used) {
     for (const k of ["input", "output", "cache_read", "cache_write", "cost"]) tot[k] += r[k];
-    if (!r.priced) unpriced.add(r.model);
+    if (!r.priced) unpriced.add(r.bare);
   }
   tot.unpriced = unpriced.size;
   // active time isn't told apart by model
@@ -3456,7 +3463,7 @@ function renderSessions() {
     const filtered = sessAgent !== "all" || sessModel || sessFolder || q;
     stats.append(el("div", "none", !all.length && !rows.length ? t("No sessions yet. Claude Code's, Codex's, Hermes, OpenCode's and Pi's sessions on this computer show up here, with what each cost and the command that resumes it.") : filtered ? t("No session matches.") : t("Nothing in this range.")));
     if (from && all.some((s) => byAgent(s) && byFolder(s) &&
-      (!sessModel || s.models.some((m) => m.model === sessModel)) &&
+      (!sessModel || s.models.some((m) => m.bare === sessModel)) &&
       (!q || [s.title, s.cwd, s.id, s.name, ...s.models.map((m) => m.model)].some((x) => (x || "").toLowerCase().includes(q))))) {
       stats.firstChild.textContent = t("No sessions in this range");
       const history = el("button", "text sess-show-history", t("All sessions"));
@@ -3519,7 +3526,7 @@ function renderSessions() {
     grid.hidden = false;
     // the folders and models to pick from, as the pickers offer them
     sessBars($("#sessProjects"), "Projects", sessSums(rows.filter((r) => byAgent(r) && byModel(r)), "cwd"), sessFolder, (v) => { sessFolder = v; renderSessions(); }, baseName);
-    sessBars($("#sessModels"), "Models", sessSums(rows.filter((r) => byAgent(r) && byFolder(r)), "model"), sessModel, (v) => { sessModel = v; renderSessions(); }, (v) => v);
+    sessBars($("#sessModels"), "Models", sessSums(rows.filter((r) => byAgent(r) && byFolder(r)), "bare"), sessModel, (v) => { sessModel = v; renderSessions(); }, (v) => v);
     renderSessHours($("#sessHours"), actsIn);
     renderSessTop();
     renderSessShape();
@@ -3648,12 +3655,22 @@ function renderSessChart(chart, st, used, ov, acts) {
   const value = (x) => metric === "cost" ? x.cost : metric === "sessions" ? x.sessions : metric === "messages" ? x.messages :
     metric === "active" ? x.active : metric === "output" ? x.output : usageTokens(x);
   const show = (v) => metric === "cost" ? "≈" + fmtCost({ cost: v }) : metric === "active" ? fmtDur(v) : fmtN(v);
-  const tip = (x, when) => {
-    const parts = [usageTokens(x) ? t("{n} tokens", { n: fmtN(usageTokens(x)) }) : "", x.cost && fmtCost(x) ? "≈" + fmtCost(x) : "",
-      x.messages ? t(x.messages === 1 ? "{n} message" : "{n} messages", { n: fmtN(x.messages) }) : "",
-      x.sessions ? t(x.sessions === 1 ? "{n} session" : "{n} sessions", { n: x.sessions }) : "", x.active ? t("{d} active", { d: fmtDur(x.active) }) : ""].filter(Boolean);
-    return parts.length ? when + " · " + parts.join(" · ") : t("{when} · nothing", { when });
+  // The tooltip says the one thing the cell is drawn by, the metric the
+  // reader picked: a day's whole story on every hover left the number under
+  // the pointer to be picked out of four others, and read the same however
+  // the calendar was told to count (yetone: 不论选什么活跃度，悬停展示的
+  // 信息都是全部的).
+  const said = (x) => {
+    const v = value(x);
+    if (!v) return "";
+    if (metric === "cost") return "≈" + fmtCost({ cost: v });
+    if (metric === "active") return t("{d} active", { d: fmtDur(v) });
+    if (metric === "sessions") return t(v === 1 ? "{n} session" : "{n} sessions", { n: v });
+    if (metric === "messages") return t(v === 1 ? "{n} message" : "{n} messages", { n: fmtN(v) });
+    if (metric === "output") return t("{n} output tokens", { n: fmtN(v) });
+    return t("{n} tokens", { n: fmtN(v) });
   };
+  const tip = (x, when) => { const one = said(x); return one ? when + " · " + one : t("{when} · nothing", { when }); };
   const shape = n <= 100 ? "day" : n <= 371 ? "calendar" : "week";
   // the page reads the sessions again every few seconds, and while an agent
   // is at work today's numbers change each time: the same days by the same

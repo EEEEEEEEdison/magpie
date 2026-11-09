@@ -118,10 +118,18 @@ func CanonicalModel(m string) string {
 // underscores beside it: a relay that lists its display name as the id spells
 // GPT-6 Astra's id "GPT-6-Astra" elsewhere, and GPT-6 Sol's "gpt-6- sol".
 func BareModel(m string) string {
+	if id, ok := DesktopAlias(m); ok {
+		m = id
+	}
 	m = ContextTail.ReplaceAllString(strings.ToLower(strings.TrimSpace(m)), "")
 	m = windowTail.ReplaceAllString(m, "")
 	if i := strings.LastIndexByte(m, '/'); i >= 0 {
 		m = m[i+1:]
+	}
+	if rest, ok := strings.CutPrefix(m, "magpie-"); ok {
+		if i := strings.Index(rest, ".anthropic."); i > 0 {
+			m = rest[i+len(".anthropic."):]
+		}
 	}
 	// a region is no part of a model's name, and catalog is the one that
 	// says what counts as one
