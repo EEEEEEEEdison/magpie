@@ -1,5 +1,5 @@
 ﻿; Build with Inno Setup 6:
-;   ISCC.exe /DMyAppVersion=0.11.2 build\windows\magpie.iss
+;   ISCC.exe /DMyAppVersion=0.11.3 build\windows\magpie.iss
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif

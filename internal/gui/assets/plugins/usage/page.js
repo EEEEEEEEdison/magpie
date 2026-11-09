@@ -1151,7 +1151,7 @@ const LED_PAGE = 100;
 let ledMetric = "tokens", ledSplit = "model";
 try {
   const m = localStorage.getItem("magpie.ledMetric");
-  if (["tokens", "cost", "calls", "speed"].includes(m)) ledMetric = m;
+  if (["tokens", "cost", "calls", "speed", "credits"].includes(m)) ledMetric = m;
 } catch {}
 // Columns or lines (molvqingtai on Discord), kept per viewer as the metric
 // is; anything but "line", or a read that fails, is columns.
@@ -1640,6 +1640,7 @@ function renderLedgerDash(l) {
   const rate = cacheHitOf(l);
   const strip = $("#ledKpi");
   strip.replaceChildren();
+  strip.classList.toggle("has-credits", !!l.credited);
   const block = (label, value, sub, cls, title) => {
     const b = el("div", "blk");
     if (title) b.title = title;
@@ -1696,6 +1697,19 @@ function renderLedgerDash(l) {
   }
   const c = fmtCost(l);
   block("Cost", c ? "≈" + c : "—", line(l.unpriced ? t(l.unpriced === 1 ? "{n} call had no known price and is not counted" : "{n} calls had no known price and are not counted", { n: l.unpriced }) : t("effective prices")), c ? "cost" : "");
+  if (l.credited) {
+    const credN = l.credits || 0;
+    const credVal = t("{n} credits", { n: credN > 0 && credN < 0.01 ? "<0.01" : (+credN.toFixed(2)).toLocaleString(intlLang()) });
+    const credCard = block("Credits", credVal, line(t(l.credited === 1 ? "{n} request" : "{n} requests", { n: ledNum(l.credited) })), "credits", t("What {n} of these requests cost in their plan's credits, as the replies said", { n: ledNum(l.credited) }));
+    credCard.style.cursor = "pointer";
+    credCard.onclick = () => {
+      if (ledMetric !== "credits") {
+        ledMetric = "credits";
+        try { localStorage.setItem("magpie.ledMetric", "credits"); } catch {}
+        drawLedTrend();
+      }
+    };
+  }
   const hit = block("Cache hit rate", rate === null ? "—" : (100 * rate).toFixed(1) + "%", cacheLeftOut(l) ? line(cacheLeftOut(l)) : null, "", t("The share of the prompt read from the cache"));
   const meter = el("div", "meter"), fill = el("i");
   fill.style.width = (100 * (rate || 0)).toFixed(1) + "%";
@@ -1839,7 +1853,9 @@ function drawLedTrend() {
     }
     slide(host, key);
   };
-  pill($("#ledMetric"), "ledMetric", LED_TREND, ledMetric, (id) => { ledMetric = id; try { localStorage.setItem("magpie.ledMetric", id); } catch {} drawLedTrend(); });
+  const hasCredits = (l.credited || 0) > 0 || (l.credits || 0) > 0 || ledMetric === "credits";
+  const metrics = hasCredits ? [LED_TREND[0], LED_TREND[1], ["credits", "Credits"], ...LED_TREND.slice(2)] : LED_TREND;
+  pill($("#ledMetric"), "ledMetric", metrics, ledMetric, (id) => { ledMetric = id; try { localStorage.setItem("magpie.ledMetric", id); } catch {} drawLedTrend(); });
   ledStyle($("#ledStyle"));
   const keyed = (l.callerKeys || []).length > 0;
   if (ledSplit === "callerKey" && !keyed) ledSplit = "model";
