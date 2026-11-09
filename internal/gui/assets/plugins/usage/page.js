@@ -645,8 +645,8 @@ function usageParts(texts) {
 // Requests tab's total always has them — the Overview's tiles, chart and
 // lists and, since #2591, the Sessions tab's alike. Kept as the reader
 // left it (magpie.usageWithCache).
-let usageWithCache = false;
-try { usageWithCache = localStorage.getItem("magpie.usageWithCache") === "1"; } catch {}
+let usageWithCache = true;
+try { usageWithCache = localStorage.getItem("magpie.usageWithCache") !== "0"; } catch {}
 const cacheOf = (x) => (x.cache_read || 0) + (x.cache_write || 0);
 const usageTokens = (x) => tokensOf(x) + (usageWithCache ? cacheOf(x) : 0);
 // the tokens tile's label: a pop-up of the two ways to count

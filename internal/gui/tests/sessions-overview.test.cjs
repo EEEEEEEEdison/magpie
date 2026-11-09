@@ -157,33 +157,27 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const alphaCache = sum("cache_read", "/work/alpha") + sum("cache_write", "/work/alpha");
         const tile = page.locator("#sessStats .kpi").nth(1);
         const bar = page.locator("#sessProjects .sess-bar").first();
-        // 默认不含缓存；显式选含缓存后，排序和各项合计一起改变。
-        assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
-        assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].tokens);
-        assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha));
-        await tile.locator(".kpi-pick").click();
-        await page.locator(".proto-menu:visible .pm-item").nth(1).click();
+        // 默认含缓存；显式选不含缓存后，排序和各项合计一起改变。
         assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io + cache));
         assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].withCache);
         assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha + alphaCache));
         assert.deepEqual(await page.locator("#sessTop .sess-top .name").allInnerTexts(), ["Top session 1", "Top session 0", "Top session 2"]);
         assert.equal(await page.locator("#sessTop .sess-top .v").first().innerText(), await fmt(3004000));
-        // the picker the Overview's tile carries is on this one too, and
-        // tells the Sessions tab, not the Overview, to draw again
         await tile.locator(".kpi-pick").click();
-        const menu = page.locator(".proto-menu:visible");
-        await menu.waitFor();
-        assert.equal((await menu.locator(".pm-head").textContent()).trim(), want[lang].head);
-        await menu.locator(".pm-item").nth(0).click();
+        await page.locator(".proto-menu:visible .pm-item").nth(0).click();
         await page.waitForTimeout(200);
         assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io));
         assert.equal((await tile.locator(".kpi-pick").textContent()).trim(), want[lang].tokens);
         assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha));
         assert.deepEqual(await page.locator("#sessTop .sess-top .name").allInnerTexts(), ["Top session 0", "Top session 1", "Top session 2"]);
         assert.equal(await page.locator("#sessTop .sess-top .v").first().innerText(), await fmt(905000));
-        // and the reader can have the cache back
+        // the picker the Overview's tile carries is on this one too, and
+        // tells the Sessions tab, not the Overview, to draw again
         await tile.locator(".kpi-pick").click();
-        await page.locator(".proto-menu:visible .pm-item").nth(1).click();
+        const menu = page.locator(".proto-menu:visible");
+        await menu.waitFor();
+        assert.equal((await menu.locator(".pm-head").textContent()).trim(), want[lang].head);
+        await menu.locator(".pm-item").nth(1).click();
         await page.waitForTimeout(200);
         assert.equal((await tile.locator("b").textContent()).trim(), await fmt(io + cache));
         assert.equal((await bar.locator(".v").textContent()).trim(), await fmt(alpha + alphaCache));
