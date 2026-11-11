@@ -1,7 +1,7 @@
 package provider
 
 import (
-	"regexp"
+	"github.com/yetone/magpie/internal/lazyre"
 	"strings"
 
 	"github.com/yetone/magpie/internal/catalog"
@@ -18,7 +18,7 @@ import (
 // versionTail is what a vendor puts after a model's name for the version
 // it answered with: a date, a build number, Bedrock's v1:0, latest,
 // preview. Not v3 alone: deepseek-v3 is another model than deepseek-v2.
-var versionTail = regexp.MustCompile(`(?:[-_@:](?:\d{4}-\d{2}-\d{2}|\d{2}-\d{2}|\d{6,8}|\d{3,4}|v\d+:\d+|latest|preview|exp))+$`)
+var versionTail = lazyre.New(`(?:[-_@:](?:\d{4}-\d{2}-\d{2}|\d{2}-\d{2}|\d{6,8}|\d{3,4}|v\d+:\d+|latest|preview|exp))+$`)
 
 // vVersion is a model's version written with a dash or an underscore where
 // its own name has a dot: Volcengine Ark and Mistral sell
@@ -26,7 +26,7 @@ var versionTail = regexp.MustCompile(`(?:[-_@:](?:\d{4}-\d{2}-\d{2}|\d{2}-\d{2}|
 // so the usage pages' Model split must count the two as one model and a
 // price set for either must cover both. Only a version after "v": Claude's
 // claude-opus-5-5 is that model's own name, not claude-opus-5.5.
-var vVersion = regexp.MustCompile(`v\d+(?:[-_.]\d+)+`)
+var vVersion = lazyre.New(`v\d+(?:[-_.]\d+)+`)
 
 // vendorDot is Bedrock's region and maker before a model's name
 // (us.anthropic.claude-…), the geography of an inference profile as
@@ -34,11 +34,11 @@ var vVersion = regexp.MustCompile(`v\d+(?:[-_.]\d+)+`)
 // makers are those models.dev's bedrock list names ids by (xai.grok-4.7,
 // writer.palmyra-x5, moonshot.kimi-k2-thinking, nvidia.nemotron), which
 // the reply names as Anthropic's own are, without the geography.
-var vendorDot = regexp.MustCompile(`^(?:(?:global|us-gov|[a-z]{2,4})\.)?(?:anthropic|amazon|meta|mistral|cohere|ai21|deepseek|qwen|openai|google|moonshotai|moonshot|minimax|nvidia|writer|xai|zai)\.`)
+var vendorDot = lazyre.New(`^(?:(?:global|us-gov|[a-z]{2,4})\.)?(?:anthropic|amazon|meta|mistral|cohere|ai21|deepseek|qwen|openai|google|moonshotai|moonshot|minimax|nvidia|writer|xai|zai)\.`)
 
 // ContextTail is what Claude Code writes after a model's name for the size of
 // its context: claude-opus-5[1m].
-var ContextTail = regexp.MustCompile(`\[[^\]]*\]$`)
+var ContextTail = lazyre.New(`\[[^\]]*\]$`)
 
 // sepRun is a run of separators with a space in it. A relay that lists its
 // display name as the id spells it "GPT-6 Astra" where the model's own id is
@@ -47,17 +47,17 @@ var ContextTail = regexp.MustCompile(`\[[^\]]*\]$`)
 // dashes and underscores beside the space go with it, as sameModel folds a
 // run of spaces, "_" and "-" into one "-" for a routing group's members. A
 // name with no space in it is left as it is.
-var sepRun = regexp.MustCompile(`[-_]*\s+[-_\s]*`)
+var sepRun = lazyre.New(`[-_]*\s+[-_\s]*`)
 
 // windowTail is the window magpie offers a model at beside its default
 // (grok-4.7@500k, Cursor's grok-4.7@256k): the vendor answers under the
 // plain name, which is the same model (#1645).
-var windowTail = regexp.MustCompile(`@\d+[km]?$`)
+var windowTail = lazyre.New(`@\d+[km]?$`)
 
 // modifierTail matches operational modifiers, promotional tags, and runtime
 // effort variants attached to a model name (e.g. "-free", "-thinking",
 // "-thought", "-high", "-low", "-medium", "-minimal", "-online", "-search").
-var modifierTail = regexp.MustCompile(`(?:[-_](?:free|thinking|thought|high|low|medium|minimal|online|search))+$`)
+var modifierTail = lazyre.New(`(?:[-_](?:free|thinking|thought|high|low|medium|minimal|online|search))+$`)
 
 // HasTurnTag reports whether a model id ends in a running tag a relay adds
 // to the model's own name — a promotional one (-free), an effort pinned in

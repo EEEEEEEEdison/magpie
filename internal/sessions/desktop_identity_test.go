@@ -103,7 +103,7 @@ func TestDesktopFallbackChangesWithoutTranscriptRewrite(t *testing.T) {
 						if tc.disk {
 							got = ReadCallSource(source)
 						} else {
-							got = readCalls(file{path: source.Path, key: source.Key, agent: source.Agent, noDesktopApp: source.NoDesktopApp, size: source.Size, mod: source.Modified}).Calls
+							got = readCalls(file{path: source.Path, key: source.Key, agent: source.Agent, noDesktopApp: source.NoDesktopApp, size: source.Size, mod: modOf(source.Modified)}).Calls
 						}
 					}
 				}

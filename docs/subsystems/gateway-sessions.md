@@ -91,7 +91,18 @@ the gateway's `omp|<sub id>` is its own in the same places as Raft's `pi|`
 key, and is never a second session counted again (Jumy, Discord 10-30:
 `TestOmpSubagentsAreTheSessionsToTheGateway`,
 `TestOmpSubagentCountedOnceWithTheGateway`). A Claude Code session's
-copies (`Copies`) are among its keys the same way. A Claude Code
+copies (`Copies`) are among its keys the same way. A ZCode session stands
+for its bare id too: a request names it by the id its database gives with
+a prefix stripped (`sess_…`, a subagent's `sess_subagent_agent_…`:
+`zcodeBareID`), its own as well as its forks' and subagents' (their files
+are in its group, `Subs`, and `idInFile` reads their ids). Without it a
+ZCode session whose files are here was a row under its folder and again a
+row under Seen through the gateway, and its spend counted twice
+(flandern1211_58540 on Discord, #5754;
+`TestZCodeGatewayRowIsTheSessionItself`). `requestIDs` is the one place
+that says which ids a request names a session by: `GatewayKeys` (the
+list, its spend, the stats' native set, `viaOf`, the management
+page's search) and `NativeIDs` (its count and delete) both read it. A Claude Code
 session Claude Desktop's Code tab ran may be in Claude Code's folder.
 Desktop metadata establishes ownership as described below, giving its native
 file and the gateway's `claude-desktop|<id>` one identity in `MergeExternal`,
@@ -184,9 +195,30 @@ record by its own model and keys its day and model rows by the alias, and
 [`alias.go`](../../internal/sessions/alias.go)) merge a native session's rows
 the same way, into new slices so the memo is never changed. The alias is read
 before any lock, and an unreadable settings.json keeps the last aliases read.
-Requests, the Requests ledger and model lists keep each call's own id.
+Found routing groups are also merged under their public `auto/<model>` id
+by this mapper: a native file or old usage row naming `group/auto-<slug>`
+and one naming `auto/<model>` form one model option. Vendor spellings of
+`auto/<model>` follow `PublicRef`; effort and `[1m]` suffixes are preserved.
+The mapping is a snapshot taken before usage locks and before grouping,
+so lists (`ListAgent` and `Manage` too), details, daily stats, summaries,
+filtered overviews and Codex's model/effort rows agree. Original parses,
+ledger rows and prices stay intact.
+An unavailable group or a user's pre-existing provider named `auto` keeps
+its original names. User usage aliases are applied after public spelling.
+`UsageNamesKey` invalidates named caches when the group catalog changes.
+
+Requests keep their original priced model ids internally; their model shares,
+chart legends and model filters treat both routing-group ids as one (the
+filter's model is made the kept `group/auto-…` once, in `usageapi.FilterOf`,
+so only an `auto/…` record reads the providers), and
+`usageapi.LedgerPage` displays the public spelling for both `model` and `req`.
+This does not apply user usage aliases to Requests. A clear made under either
+group id covers both spellings. Model lists continue to use the catalog ids.
 Verification: `TestUsageAliasCountsTwoIdsAsOne`,
-`TestSessionsCountAliasedModelsAsOne`, `TestAliasStatsLeavesItsInputAlone`.
+`TestSessionsCountAliasedModelsAsOne`, `TestAliasStatsLeavesItsInputAlone`,
+`TestSessionsFoundGroupNames`, `TestSessionsAPIFoundGroupNames`,
+`TestUsageFoundGroupNames`, `TestCodexEffortFoundGroupNames`,
+`TestLedgerFoundGroupNames`.
 
 The Usage page can clear its figures (CrazyMouse_TT on X): a model's row's
 "…" has "Clear usage…", and "Clear all usage…" sits under the lists. Each
@@ -209,6 +241,15 @@ of the same model or of everything takes an earlier one's place. Usage ›
 Sessions is not cleared. Verification: `TestClearedUsageLeavesThePages`,
 `TestClearUsageKeepsOneMarkAModel`, `TestUsageClearRoute`,
 `usage-clear.test.cjs`.
+
+Claude Code's sessions are read from every folder it is run in
+(`appdir.ClaudeHomes`, `sessions.ClaudeDirs`): `$CLAUDE_CONFIG_DIR` or
+`~/.claude`, a folder beside it or in the home folder whose name starts with
+`claude` or `.claude` (or one level down) and holds `projects/`, and the
+folders of the Claude accounts saved in magpie. A session id kept in two of
+them is one session, under the first. Verification:
+`TestClaudeHomesIn`, `TestCallsReadEveryClaudeFolder`,
+`TestListReadsEveryClaudeFolderOnce`.
 
 Claude Desktop gateway rows can have a local name even without a CLI
 transcript (#1675). [`DesktopTitles`](../../internal/sessions/desktop_titles.go)
@@ -640,6 +681,15 @@ summary and gets the ledger filtered to its own `CallerKey`, with its filter
 lists cut to its own rows (`usageapi.OwnPage`): the ledger's facets are drawn
 from every call in the period, so without the cut they would name other keys.
 `TestUsageOverGateway` covers both, and a red when either cut is removed.
+Each gateway row keeps the address its request came from
+(`Record.ClientIP`, set in `appendUsage` from `peerAddr`: the connection's
+own, never a forwarding header). The window's `/api/usage/requests` has it
+for the Usage page's request detail; `/v1/magpie/usage/requests` takes it
+out for every caller (`withoutClientIPs`), and sync's `OwnDays` leaves it
+out, so it never leaves this computer. CSV export, OTel and middleware
+points name their columns and don't carry it. `rowText` packs it, or the
+ledger's cache reads it back empty
+(`TestUsageRowsKeepTheClientsAddress`, `TestClientIPKeptHereNotShared`).
 A held key is refused (`refuseHeld`, 403 `provider.KeyHeldCode`) the
 quotas, their history, kept cards and refresh, and `/v1/magpie/concurrency`
 (#1981); `/v1/magpie/route` tells it only routes whose `callerKey` is its
@@ -662,6 +712,28 @@ cards only, and a scope with no card answers the cards routes as held.
 `TestHeldKeyToldItsOwnQuotas` covers each route for a provider-wide key,
 a key with some of a provider's models, an account-held key, a provider's
 only key, and a key told nothing, each red when its check is removed.
+
+### Bandwidth
+
+Each gateway request's row keeps `UpBytes` (the bytes its tries put on the
+wire, `sentUp`) and `DownBytes` (the bytes read from the vendors' replies,
+counted per `Read` by `downCount`, so a stream is counted as it arrives and
+nothing is buffered). The same two places add to the gateway's running
+totals (`Server.Traffic`, atomic, in
+[`upbytes.go`](../../internal/gateway/upbytes.go)), so the totals and the rows
+count the same bytes once. Rows sum into `Totals` and into each chart
+point's `Part` (`add` from rows, `plus` from the request page's cells).
+The Requests chart's Traffic metric draws them per hour/day by model,
+provider or agent. `GET /api/usage/traffic` answers the totals with the
+requests in flight (`{}` when another magpie serves the gateway); the
+Requests card reads it a second apart while it is shown and says
+"↑ x/s · ↓ y/s" over the last ~3s while requests are in flight. Not counted:
+Claude bridge turns (no HTTP to the vendor), and a plugin's row counts the
+local hop to the plugin host. An upload is counted when its try is sent, so
+a large body shows as a burst. `TestTrafficCountsWhatRowsCount`,
+`TestTrafficCountsAStreamAsItFlows`, `TestSeriesPartsKeepBytes`,
+`TestUsageTrafficSaysWhatTheGatewayCounted` and `usage-traffic.test.cjs`
+cover it.
 
 ### Calls read from the agents' own files
 
@@ -839,7 +911,7 @@ one record or an array of up to 5000 (32 MiB at most), in `usage.jsonl`'s
 shape: `t`, `agent`, `provider`, `model` and `rid` are required; `in`,
 `out`, `cache_read`, `cache_write`, `cache_write_1h`, `reasoning`, `ms`,
 `ttft_ms`, `first_text_ms`, `flow_ms`, `status`, `cost`, `effort`,
-`session` and `err` are optional.
+`session`, `err`, `req` and `served` are optional.
 Any other field, a quoted number, a negative or out-of-range count, a time
 more than an hour ahead or before 2000-01-01T00:00:00Z refuses the whole
 post with a 400 that names the record (`error.index`) and the field
@@ -862,6 +934,13 @@ however old, so a client's history can be backfilled.
   was appended since. The reply counts `accepted` and `skipped` and gives
   each record's `index`, `rid` and `status`, so a re-run of a batch is
   safe.
+- **Asked and answered:** `req` and `served` (#3534) are `Record.Requested`
+  and `Record.Served`, the Requests page's requested and served model:
+  what the client asked for (an alias, a group) and what its vendor's
+  reply said answered. Each is checked as `model` is (a string, at most
+  256 characters, no control characters) and kept only as sent; a record
+  without `served` says nothing of what answered, so it is never filled
+  from `model`. `TestUsageIngestRequestedAndServed`.
 - **Pricing:** a record with `cost` keeps it (`Record.OwnCost`, the
   `rowOwnCost` flag on a packed row). Without one it is priced at magpie's
   own prices, like a gateway row.

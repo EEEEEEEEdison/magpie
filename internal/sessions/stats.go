@@ -180,8 +180,10 @@ type Active struct {
 	Agent   string `json:"agent"`
 	Cwd     string `json:"cwd"`
 	Seconds int64  `json:"seconds"`
-	// Hours is Seconds again by the local hour of the day (24, or none)
-	Hours []int64 `json:"hours,omitempty"`
+	// Hours is Seconds again by the local hour of the day (24 in JSON, or
+	// none), only the hours with time held: each range statsFor keeps has
+	// one for every day, agent and folder, ~4.5 MB of mostly zeros at 24
+	Hours hours `json:"hours,omitempty"`
 }
 
 // StatsFor reads the usage of the last days days up to today, today
@@ -319,6 +321,7 @@ func statsKept(ranges []int, now time.Time, wantNative bool) ([]Stats, map[strin
 		keepRange(ranges[i], st, ranges)
 		out[i] = st
 	}
+	keptStats.titles.settle()
 	return out, keptStats.native
 }
 
@@ -354,12 +357,12 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 	type ak struct{ date, agent, cwd string }
 	type act0 struct {
 		ms    int64
-		hours []int64
+		hours hours
 	}
 	use := map[uk]Tokens{}
 	// hours is use by the hour each message was written in: what a vendor
 	// billing its hours differently (DeepSeek's peak hours) is priced by.
-	hours := map[uk]map[string]Tokens{}
+	hourUse := map[uk]map[string]Tokens{}
 	act := map[ak]*act0{}
 	dates := map[string]bool{}
 	// each session's share: its files' models and dates in range. A
@@ -387,7 +390,7 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 	shares := map[string]*share{}
 	apps := appsOf(files)
 	for _, f := range files {
-		if f.mod.Before(since) || (copies[f.key] != "" && copied[f.path] == nil) {
+		if f.mod.Before(modOf(since)) || (copies[f.key] != "" && copied[f.path] == nil) {
 			continue
 		}
 		st := cache[f.path]
@@ -425,10 +428,10 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 						continue
 					}
 					k := uk{date, agent, cwd, model}
-					h := hours[k]
+					h := hourUse[k]
 					if h == nil {
 						h = map[string]Tokens{}
-						hours[k] = h
+						hourUse[k] = h
 					}
 					u := h[key]
 					u.add(t)
@@ -443,12 +446,9 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 					act[k] = a
 				}
 				a.ms += d.Active
-				if len(d.Hours) == 24 {
-					if a.hours == nil {
-						a.hours = make([]int64, 24)
-					}
-					for h, ms := range d.Hours {
-						a.hours[h] += ms
+				if d.Hours != nil {
+					for _, e := range d.Hours {
+						a.hours.add(hourOf(e), msOf(e))
 					}
 				}
 				dates[date] = true
@@ -534,23 +534,32 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 		}
 	}
 
+	// each day's rows made to size: grown by append, every range kept
+	// held the slack of each doubling (#2278)
+	nUse, nAct := map[string]int{}, map[string]int{}
+	for k := range use {
+		nUse[k.date]++
+	}
+	for k := range act {
+		nAct[k.date]++
+	}
 	byDate := map[string]*Day{}
 	for date := range dates {
-		byDate[date] = &Day{Date: date, Usage: []Usage{}, Active: []Active{}}
+		byDate[date] = &Day{Date: date, Usage: make([]Usage, 0, nUse[date]), Active: make([]Active, 0, nAct[date])}
 	}
 	for k, t := range use {
 		u := Usage{Agent: k.agent, Cwd: k.cwd, Model: k.model, Bare: provider.BareModel(k.model), Tokens: t}
 		if p := price(k.model); p != nil {
-			u.Cost, u.Priced = hourCost(hours[k], t, *p), true
+			u.Cost, u.Priced = hourCost(hourUse[k], t, *p), true
 		}
 		byDate[k.date].Usage = append(byDate[k.date].Usage, u)
 	}
 	for k, a := range act {
 		v := Active{Agent: k.agent, Cwd: k.cwd, Seconds: a.ms / 1000}
 		if a.hours != nil {
-			v.Hours = make([]int64, 24)
-			for h, ms := range a.hours {
-				v.Hours[h] = ms / 1000
+			v.Hours = make(hours, len(a.hours))
+			for i, e := range a.hours {
+				v.Hours[i] = hourEntry(hourOf(e), msOf(e)/1000)
 			}
 		}
 		byDate[k.date].Active = append(byDate[k.date].Active, v)

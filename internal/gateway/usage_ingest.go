@@ -73,7 +73,11 @@ var ingestEarliest = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 // 速度由整轮 out / ms 得出，包含 reasoning 和首 token 等待（usage.DecodeOf）。
 // first_text_ms 仍校验并保留，但缺省不排除测速；flow_ms 用来识别末尾突发，
 // 缺省时无法区分供应商暂存后集中放行与正常流式回复。
-var ingestFields = []string{"t", "agent", "provider", "model", "in", "out", "cache_read", "cache_write", "cache_write_1h", "reasoning", "ms", "ttft_ms", "first_text_ms", "flow_ms", "status", "rid", "cost", "effort", "session", "err"}
+// req and served (#3534) are the model the client asked for (an alias, a
+// group) and the one its vendor's reply said answered: the Requested and
+// Served columns. Each is kept only as sent, so a record without served
+// says nothing of what answered; it is never taken from model.
+var ingestFields = []string{"t", "agent", "provider", "model", "req", "served", "in", "out", "cache_read", "cache_write", "cache_write_1h", "reasoning", "ms", "ttft_ms", "first_text_ms", "flow_ms", "status", "rid", "cost", "effort", "session", "err"}
 
 // ingestFault is what is wrong with one record of a post.
 type ingestFault struct {
@@ -271,6 +275,12 @@ func parseReported(i int, raw json.RawMessage, now time.Time) (usage.Record, *in
 		return rec, f
 	}
 	if rec.Model, f = text("model", true); f != nil {
+		return rec, f
+	}
+	if rec.Requested, f = text("req", false); f != nil {
+		return rec, f
+	}
+	if rec.Served, f = text("served", false); f != nil {
 		return rec, f
 	}
 	if rec.Effort, f = text("effort", false); f != nil {
