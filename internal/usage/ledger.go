@@ -436,7 +436,7 @@ func logRecord(c sessions.Call) Record {
 	if r.Requested != "" {
 		// sent as asked, less the size of its context Claude Code names it by
 		r.Model = provider.ContextTail.ReplaceAllString(r.Requested, "")
-		if id, ok := provider.DesktopAlias(r.Model); ok {
+		if id, ok := provider.DesktopAliasModel(r.Model); ok {
 			r.Model = id
 		}
 	}

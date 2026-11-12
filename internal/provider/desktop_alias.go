@@ -17,11 +17,13 @@ func DesktopAliasNumber(id string) string {
 // DesktopAlias resolves only magpie's compatibility aliases, including the
 // older spellings, Claude Science's and Claude Code's context suffix:
 // anthropic/magpie-<number>, mythos-magpie-<number>, claude-magpie-<number>
-// or magpie-<number>.anthropic.<claude model>. Unknown ids stay unknown.
+// or magpie-<number>.anthropic.<claude model>. Unknown ids stay unknown:
+// the gateway serves by it, and reads a tier's alias after it
+// (desktopTierAlias), so a number no catalog model has is never served
+// as the Claude model its tail names (DesktopAliasModel is for naming).
 func DesktopAlias(id string) (string, bool) {
 	id = strings.TrimSuffix(id, "[1m]")
 	var number string
-	var modelFallback string
 	if n, ok := strings.CutPrefix(id, "anthropic/magpie-"); ok {
 		number = n
 	} else if n, ok := strings.CutPrefix(id, "mythos-magpie-"); ok {
@@ -29,11 +31,8 @@ func DesktopAlias(id string) (string, bool) {
 	} else if n, ok := strings.CutPrefix(id, "claude-magpie-"); ok {
 		// Claude Science's (gateway/science.go)
 		number = n
-	} else if rest, ok := strings.CutPrefix(id, "magpie-"); ok {
-		if i := strings.Index(rest, ".anthropic."); i > 0 {
-			number = rest[:i]
-			modelFallback = rest[i+len(".anthropic."):]
-		}
+	} else if n, _, ok := desktopClaudeAlias(id); ok {
+		number = n
 	}
 	if len(number) != 10 {
 		return "", false
@@ -46,8 +45,33 @@ func DesktopAlias(id string) (string, bool) {
 			return e.ID, true
 		}
 	}
-	if modelFallback != "" {
-		return modelFallback, true
+	return "", false
+}
+
+// DesktopAliasModel is the model the usage pages count a call to a
+// compatibility alias under: DesktopAlias's, or for a
+// magpie-<number>.anthropic.<claude model> no catalog model has any more
+// (a session saved on a provider removed since) the Claude model it
+// names. Only for naming a call; never served by.
+func DesktopAliasModel(id string) (string, bool) {
+	if m, ok := DesktopAlias(id); ok {
+		return m, true
+	}
+	if _, model, ok := desktopClaudeAlias(strings.TrimSuffix(id, "[1m]")); ok && model != "" {
+		return model, true
 	}
 	return "", false
+}
+
+// desktopClaudeAlias splits magpie-<number>.anthropic.<claude model>.
+func desktopClaudeAlias(id string) (number, model string, ok bool) {
+	rest, ok := strings.CutPrefix(id, "magpie-")
+	if !ok {
+		return "", "", false
+	}
+	i := strings.Index(rest, ".anthropic.")
+	if i != 10 {
+		return "", "", false
+	}
+	return rest[:i], rest[i+len(".anthropic."):], true
 }

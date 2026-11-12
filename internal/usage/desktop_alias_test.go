@@ -31,6 +31,13 @@ func TestDesktopAliasesInLedger(t *testing.T) {
 			t.Errorf("unresolved/non-alias %s was guessed: %+v", asked, r)
 		}
 	}
+	// an alias no catalog model has any more (its provider removed since)
+	// whose tail names the Claude model is counted as that model, though
+	// the gateway serves it no more (provider.DesktopAliasModel)
+	const removed = "magpie-5377544721.anthropic.claude-opus-5-5[1m]"
+	if r := logRecord(sessions.Call{Agent: "claude", Requested: removed, Model: "claude-opus-5-5-xhigh"}); r.Model != "claude-opus-5-5" {
+		t.Errorf("an alias of a provider removed since: %+v", r)
+	}
 	now := holdClock(t, time.Date(2026, 10, 21, 10, 45, 0, 0, time.Local))
 	call := sessions.Call{Time: now.Add(-time.Minute), Agent: "claude", Session: "session", Requested: alias, Model: "deepseek-v4.1-flash",
 		Tokens: sessions.Tokens{Input: 1233, Output: 464, CacheRead: 112640}, RequestID: "local"}
