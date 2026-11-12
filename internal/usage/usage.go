@@ -820,7 +820,8 @@ func (t *Totals) addFrom(row Row, price *catalog.Price) {
 		t.Timed++
 		t.TTFT += r.TTFT
 	}
-	if !r.Failed() {
+	// a reply its agent canceled stopped where the agent left: no speed
+	if r.Answered() {
 		if n, w := row.Decode(); w > 0 {
 			t.DecodeMs += w
 			t.DecodeOut += n

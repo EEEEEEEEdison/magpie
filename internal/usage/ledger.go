@@ -904,7 +904,8 @@ func (t *Totals) addRow(r Row) {
 		t.Timed++
 		t.TTFT += r.TTFT
 	}
-	if !r.Failed() {
+	// a reply its agent canceled stopped where the agent left: no speed
+	if r.Answered() {
 		if n, w := r.Decode(); w > 0 {
 			t.DecodeMs += w
 			t.DecodeOut += n
@@ -1219,7 +1220,8 @@ func (p *Part) add(r Row) {
 		p.Timed++
 		p.TTFT += r.TTFT
 	}
-	if !r.Failed() {
+	// a reply its agent canceled stopped where the agent left: no speed
+	if r.Answered() {
 		if n, w := r.Decode(); w > 0 {
 			p.DecodeMs += w
 			p.DecodeOut += n

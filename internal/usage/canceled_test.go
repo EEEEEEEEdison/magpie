@@ -87,18 +87,33 @@ func TestAgentCanceledIsNoFailure(t *testing.T) {
 	}
 }
 
-// A Claude Code or Codex row read from its session file tells a speed
-// floor from its output over its time (Row.Floor). One its agent canceled
-// is timed nowhere, as Totals and the page leave its first token out: its
-// output stopped where the agent left, not where the reply ended.
+// A reply tells a speed over its whole turn (Decode), or a floor where it
+// tells none (Row.Floor). One its agent canceled is timed nowhere, as
+// Totals and the page leave its first token out: its output stopped where
+// the agent left, not where the reply ended. Failed() leaves a canceled
+// call out (#2398), so a speed counted for every call not Failed() took
+// it in, and a stopped reply pulled a model's average speed down: every
+// sum is asked, the Requests page's (addRow), the Usage page's (add) and
+// a chart point's part (LedgerSeries). Shaped as a Codex reply canceled
+// after 2,781 tokens in 26.6 s (usage.jsonl).
 func TestAgentCanceledTellsNoFloor(t *testing.T) {
-	canceled := Row{Source: "log", Record: Record{Agent: "claude", Model: "m", Status: StatusCanceled, Error: AgentCanceled, Output: 3000, Millis: 4000}}
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
+	at := time.Date(now.Year(), now.Month(), now.Day(), 0, 10, 0, 0, now.Location())
+	canceled := Row{Source: "log", Record: Record{Time: at, Agent: "codex", Provider: "p", Model: "m", Status: StatusCanceled, Error: AgentCanceled,
+		Output: 2781, Reasoning: 2410, Millis: 26595, TTFT: 2910, Flow: 16511}}
 	answered := canceled
 	answered.Status, answered.Error = 200, ""
-	if n, w := answered.Floor(); n == 0 || w == 0 {
-		t.Fatalf("the answered row tells no floor (%d in %d ms); the case doesn't test the cancel", n, w)
+	timed := func(r Row) (ledger, usage, part int) {
+		var row, rec Totals
+		row.addRow(r)
+		rec.add(r.Record, nil)
+		_, pts := LedgerSeries(Today, []Row{r})
+		return row.DecodeOut + row.FloorOut, rec.DecodeOut, pts[0].By["model"]["m"].DecodeOut
 	}
-	if n, w := canceled.Floor(); n != 0 || w != 0 {
-		t.Errorf("a canceled row tells a speed floor: %d tokens in %d ms", n, w)
+	if l, u, p := timed(answered); l == 0 || u == 0 || p == 0 {
+		t.Fatalf("the answered row tells no speed (%d, %d, %d tokens); the case doesn't test the cancel", l, u, p)
+	}
+	if l, u, p := timed(canceled); l != 0 || u != 0 || p != 0 {
+		t.Errorf("a canceled row is timed: %d tokens in the ledger's sums, %d in the usage page's, %d in a chart point's", l, u, p)
 	}
 }
