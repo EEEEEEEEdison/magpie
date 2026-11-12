@@ -88,6 +88,27 @@ func VariantName(id string) (string, bool) {
 	return "", false
 }
 
+// UsageModel is the name the usage pages count a model's calls under and
+// filter them by: its own name (BareModel), and for an id with a level a
+// relay pins after a versioned model's name (gemini-3.8-flash-high,
+// gpt-oss-120b-high, glm-5.3-flash-free) that model's name. Narrower than
+// VariantName on purpose: a word that names a model of its own
+// (mistral-medium, kimi-k2-thinking, gpt-4o-search) or an alias (k3) is
+// never folded, so two models never share a row.
+func UsageModel(m string) string { return UsageOfBare(BareModel(m)) }
+
+// usageLevel is a level or promotional tag after a model's name, the ones
+// UsageModel folds; the model's name before it must hold a digit.
+var usageLevel = lazyre.New(`^(.*\d.*?)(?:-(?:minimal|low|medium|high|xhigh|free))+$`)
+
+// UsageOfBare is UsageModel of a name BareModel already read.
+func UsageOfBare(bare string) string {
+	if m := usageLevel.FindStringSubmatch(bare); m != nil && m[1] != "" {
+		return m[1]
+	}
+	return bare
+}
+
 // CanonicalModel returns the normalized core model identifier by stripping
 // channel wrappers, operational tags, effort variants, and folding well-known
 // aliases, so disparate relay namings resolve to the same underlying model

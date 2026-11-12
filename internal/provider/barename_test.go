@@ -151,6 +151,40 @@ func TestAnyPriceCoversTheModelUnderItsOtherNames(t *testing.T) {
 	}
 }
 
+// The usage pages count a model asked for at a level a relay pins after a
+// versioned model's name (gemini-3.8-flash-high) or with -free as the model
+// itself: one row and one filter. An id that is its own name stays its
+// own: k3 is Kimi Code's plan name, gemini-3.8-flash-lite another model.
+func TestUsageModelFoldsARunningTag(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"gemini-3.8-flash-high", "gemini-3.8-flash"},
+		{"cpa/gemini-3.8-flash-high", "gemini-3.8-flash"},
+		{"antigravity/gemini-3.8-flash", "gemini-3.8-flash"},
+		{"gemini-3.8-flash", "gemini-3.8-flash"},
+		{"minimax-m3.1-flash-free", "minimax-m3.1-flash"},
+		{"kimi-k3-auto", "kimi-k3-auto"},
+		{"cn:deepseek-v4.1-flash", "deepseek-v4.1-flash"},
+		{"k3", "k3"},
+		{"gemini-3.8-flash-lite", "gemini-3.8-flash-lite"},
+		{"deepseek-v4-pro-202606", "deepseek-v4-pro"},
+		{"glm-5.3-flash-free", "glm-5.3-flash"},
+		{"gpt-oss-120b-high", "gpt-oss-120b"},
+		// a word that names a model of its own, or a base with no version,
+		// is not a level: mistral-medium is not mistral, kimi-k2-thinking
+		// and gpt-4o-search are not kimi-k2 and gpt-4o
+		{"mistral-medium-2505", "mistral-medium"},
+		{"magistral-medium", "magistral-medium"},
+		{"kimi-k2-thinking", "kimi-k2-thinking"},
+		{"gpt-4o-search-preview", "gpt-4o-search"},
+		{"deepseek-v4.1-flash-online", "deepseek-v4.1-flash-online"},
+		{"", ""},
+	} {
+		if got := UsageModel(tc.in); got != tc.want {
+			t.Errorf("UsageModel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestCanonicalModelNormalizesVariants(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"workbuddy2api/deepseek-v4.1-flash", "deepseek-v4.1-flash"},

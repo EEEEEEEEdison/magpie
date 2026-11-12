@@ -1287,10 +1287,23 @@ colon goes with them: `workbuddy2api/cn:deepseek-v4.1-flash` is
 `deepseek-v4.1-flash`, one row with the same model under its plain id. The
 region comes off only where what follows it is shaped like a model's id, a
 dash or a digit in it, so a relay's own `cn:auto` keeps its name.
+`bare` is `provider.UsageModel`: that own name, and for an id with a level
+or `-free` a relay pins after a versioned model's name
+(`gemini-3.8-flash-high`, `gpt-oss-120b-high`, `minimax-m3.1-flash-free`)
+that model's name. So `gemini-3.8-flash-high` and `gemini-3.8-flash` are
+one row and one filter, on this tab and in the Requests tab's Model split
+(`usage.Row.key`). It is narrower than the price rules' `VariantName` on
+purpose: a word that names a model of its own (`mistral-medium`,
+`kimi-k2-thinking`, `gpt-4o-search`), a base with no digit, an alias (`k3`)
+and a sibling model (`gemini-3.8-flash-lite`) stay their own. The level's
+own id still filters to its own calls, and the Model · provider split still
+names each id.
 `Stats.Overview`'s `model` matches a session's models either way round,
 as `usage.Filter.keepsRecord` matches a request. What is aggregated does not
 change: each name a call was made under keeps its own row, and a session's own
-line still names the models it called.
+line still names the models it called. See `TestUsageModelFoldsARunningTag`,
+`TestRequestPageModelRankingFoldsALevelInTheID` and
+`TestModelsFoldALevelInTheID`.
 
 A session's cost follows the hour of each call when its catalog price has
 peak hours (`catalog.Price.Peak`). A day's `Hourly` (`hm`) is `Models`

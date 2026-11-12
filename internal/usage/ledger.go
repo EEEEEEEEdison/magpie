@@ -213,11 +213,14 @@ func (f Filter) keepsRecord(r *Record, codexIdentity bool, subagent, parentAgent
 	if f.RouteID != 0 && r.RouteID != f.RouteID {
 		return false
 	}
-	// the pick is a model's own name from the "model" ranking (bareModel),
-	// or a "provider/model" from the "modelAt" one: either matches. A
-	// routing group named by its kept id matches a record's auto/<model>.
-	if f.Model != "" && r.Model != f.Model && bareModel(r.Model) != f.Model && !sameGroupModel(r.Model, f.Model) {
-		return false
+	// the pick is a model's own name from the "model" ranking (usageModel,
+	// a level pinned in the id folded into its model), or a "provider/model"
+	// from the "modelAt" one: either matches. A routing group named by its
+	// kept id matches a record's auto/<model>.
+	if f.Model != "" && r.Model != f.Model && !sameGroupModel(r.Model, f.Model) {
+		if b := bareModel(r.Model); b != f.Model && provider.UsageOfBare(b) != f.Model {
+			return false
+		}
 	}
 	if f.Agent != "" && ReportedAs(r.Agent) != f.Agent {
 		return false
@@ -1077,8 +1080,9 @@ func (r *Row) key(by string) string {
 		return r.Computer
 	}
 	// a model's own name, whatever maker or path prefix the provider sells
-	// it under, so one model's calls at every provider are one row
-	return bareModel(r.Model)
+	// it under or level it pins in the id, so one model's calls at every
+	// provider are one row
+	return usageModel(r.Model)
 }
 
 // keyer is Row.key for many rows, made once for each provider and model:
@@ -1087,11 +1091,14 @@ func (r *Row) key(by string) string {
 type keyer struct {
 	public func(string) string
 	models map[string]string
-	at     map[[2]string]string
+	// own is each model's usageModel, read once a page: its regexps are
+	// otherwise run again for each of thousands of rows
+	own map[string]string
+	at  map[[2]string]string
 }
 
 func newKeyer() keyer {
-	return keyer{public: provider.PublicRefs(), models: map[string]string{}, at: map[[2]string]string{}}
+	return keyer{public: provider.PublicRefs(), models: map[string]string{}, own: map[string]string{}, at: map[[2]string]string{}}
 }
 
 func (m keyer) key(r *Row, by string) string {
@@ -1109,14 +1116,19 @@ func (m keyer) key(r *Row, by string) string {
 	}
 	if by == "model" {
 		// a found group keeps its public id (PublicRefs above): "auto/" is
-		// magpie's namespace, not a provider's path, and bareModel would fold
+		// magpie's namespace, not a provider's path, and usageModel would fold
 		// it away. Any other model is grouped by its own name, whatever maker
-		// or path prefix the provider sells it under (bareModel), so one
-		// model's calls at every provider are one row
+		// or path prefix the provider sells it under or level it pins in the
+		// id (usageModel), so one model's calls at every provider are one row
 		if m.public != nil && strings.HasPrefix(model, provider.AutoPrefix) {
 			return model
 		}
-		return bareModel(model)
+		own, ok := m.own[model]
+		if !ok {
+			own = usageModel(model)
+			m.own[model] = own
+		}
+		return own
 	}
 	k, ok := m.at[[2]string{r.Provider, r.Model}]
 	if !ok {

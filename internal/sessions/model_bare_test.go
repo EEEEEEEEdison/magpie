@@ -42,3 +42,21 @@ func TestModelsCarryTheirOwnNames(t *testing.T) {
 		t.Fatalf("another model found %d sessions, want 0", n)
 	}
 }
+
+// A level a relay pins in a model's id is the model there too, as on the
+// Requests tab: gemini-3.8-flash-high is one row and one filter with
+// gemini-3.8-flash, and the overview asked for the model finds it.
+func TestModelsFoldALevelInTheID(t *testing.T) {
+	if !modelCalled([]string{"cpa/gemini-3.8-flash-high"}, "gemini-3.8-flash") {
+		t.Fatal("gemini-3.8-flash does not find a session that called gemini-3.8-flash-high")
+	}
+	if !modelCalled([]string{"cpa/gemini-3.8-flash-high"}, "gemini-3.8-flash-high") {
+		t.Fatal("the level's own id no longer finds its session")
+	}
+	if modelCalled([]string{"gemini-3.8-flash-lite"}, "gemini-3.8-flash") {
+		t.Fatal("another model is found as gemini-3.8-flash")
+	}
+	if got := externalSession(ExternalSession{Agent: "pi", ID: "s", Models: []ExternalModel{{Model: "cpa/gemini-3.8-flash-high"}}}, nil).Models[0].Bare; got != "gemini-3.8-flash" {
+		t.Fatalf("an external session's model is %q, want gemini-3.8-flash", got)
+	}
+}

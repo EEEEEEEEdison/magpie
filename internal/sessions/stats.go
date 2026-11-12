@@ -548,7 +548,7 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 		byDate[date] = &Day{Date: date, Usage: make([]Usage, 0, nUse[date]), Active: make([]Active, 0, nAct[date])}
 	}
 	for k, t := range use {
-		u := Usage{Agent: k.agent, Cwd: k.cwd, Model: k.model, Bare: provider.BareModel(k.model), Tokens: t}
+		u := Usage{Agent: k.agent, Cwd: k.cwd, Model: k.model, Bare: provider.UsageModel(k.model), Tokens: t}
 		if p := price(k.model); p != nil {
 			u.Cost, u.Priced = hourCost(hourUse[k], t, *p), true
 		}
@@ -767,7 +767,10 @@ type Skill struct {
 // modelCalled matches both the name a session used and its provider-free
 // name, so a model filter finds the session under either spelling.
 func modelCalled(names []string, model string) bool {
-	return slices.Contains(names, model) || slices.ContainsFunc(names, func(n string) bool { return provider.BareModel(n) == model })
+	return slices.Contains(names, model) || slices.ContainsFunc(names, func(n string) bool {
+		b := provider.BareModel(n)
+		return b == model || provider.UsageOfBare(b) == model
+	})
 }
 
 // Overview sums up st's sessions of agent, with model and in folder cwd

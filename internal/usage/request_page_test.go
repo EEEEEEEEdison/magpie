@@ -199,6 +199,64 @@ func TestRequestPageModelRankingIsOfTheModelPicked(t *testing.T) {
 	}
 }
 
+// A model asked for at a level a relay pins in its id is that model in the
+// Model split (gemini-3.8-flash-high is gemini-3.8-flash), as its price and
+// levels already are: one row, and a click on it lists the calls at every
+// level. The level's own id still finds its own calls alone, and the Model ·
+// provider split still names the id each provider was asked by.
+func TestRequestPageModelRankingFoldsALevelInTheID(t *testing.T) {
+	pageHome(t)
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
+	records := []Record{
+		{Time: now, Provider: "cpa", Agent: "claude", Model: "gemini-3.8-flash", Input: 10},
+		{Time: now, Provider: "cpa", Agent: "claude", Model: "gemini-3.8-flash-high", Input: 20},
+		{Time: now, Provider: "antigravity", Agent: "claude", Model: "antigravity/gemini-3.8-flash", Input: 30},
+		{Time: now, Provider: "kimi", Agent: "claude", Model: "k3", Input: 40},
+	}
+	gateway := &rowChunk{}
+	all := Ledgered{}
+	for i, r := range records {
+		row := Row{Record: r}
+		gateway.add(row, "", int64(i), false)
+		all.Rows = append(all.Rows, row)
+	}
+	for name, page := range map[string]RequestPage{
+		"compact": buildRequestPage(Today, Filter{}, 0, 100, gateway, nil),
+		"ledger":  pageFromLedger(Today, Filter{}, 0, 100, all),
+	} {
+		t.Run(name, func(t *testing.T) {
+			models := map[string]int{}
+			for _, s := range page.By["model"] {
+				models[s.ID] = s.Calls
+			}
+			if want := map[string]int{"gemini-3.8-flash": 3, "k3": 1}; !reflect.DeepEqual(models, want) {
+				t.Fatalf("model ranking = %v, want %v", models, want)
+			}
+			at := map[string]bool{}
+			for _, s := range page.By["modelAt"] {
+				at[s.ID] = true
+			}
+			if !at[ModelAtKey("cpa", "gemini-3.8-flash-high")] || !at[ModelAtKey("cpa", "gemini-3.8-flash")] {
+				t.Fatalf("the Model · provider split lost the id asked for: %+v", page.By["modelAt"])
+			}
+		})
+	}
+	for _, c := range []struct {
+		model string
+		calls int
+	}{{"gemini-3.8-flash", 3}, {"gemini-3.8-flash-high", 1}} {
+		f := Filter{Model: c.model}
+		for name, page := range map[string]RequestPage{
+			"compact": buildRequestPage(Today, f, 0, 100, gateway, nil),
+			"ledger":  pageFromLedger(Today, f, 0, 100, all),
+		} {
+			if page.Total != c.calls || page.Sum.Calls != c.calls {
+				t.Errorf("%s: model %q kept %d calls, want %d", name, c.model, page.Total, c.calls)
+			}
+		}
+	}
+}
+
 // A model searched for is the one the ranking is of: the GUI writes the
 // model picked into the search box, so a ranking that kept the alternatives
 // would list models the page's own rows leave out.

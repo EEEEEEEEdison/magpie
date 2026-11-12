@@ -24,6 +24,11 @@ import (
 // found under it too, so both sides read one implementation.
 func bareModel(m string) string { return provider.BareModel(m) }
 
+// usageModel is provider.UsageModel, the name the Model split counts a
+// call under and its filter matches: a level a relay pins after a
+// versioned model's name (gemini-3.8-flash-high) is that model.
+func usageModel(m string) string { return provider.UsageModel(m) }
+
 // Swapped reports whether served is another model than sent: not the same
 // name, however dated, pinned or prefixed. A call that went out as one level
 // of a model (an Antigravity account's gemini-3.8-flash-medium) answered
