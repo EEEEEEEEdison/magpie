@@ -19071,23 +19071,19 @@ function drawLedColumns(box, l, split, metric, compact, chooseDay, focusDay) {
   if (focusDay) box.querySelector(`.led-day[data-day="${CSS.escape(focusDay)}"]`)?.focus(NO_SCROLL);
 }
 
-// the ranking: who the requests were of, by the metric, the most first —
-// each with its share, its other figures, and a click that lists only its
-// requests (a provider or an agent), or those of its model. picked is the
-// one the filter has picked, if any; the ones past the chart's colours are
-// left out of it and said in a line.
+// the ranking: each one by the metric, the most first, a click listing its
+// requests; picked is the filter's pick. The page lists all (past the
+// chart's colours, faint), the tray panel (compact) folds those in a line.
 function drawLedRank(box, l, split, metric, picked, choose, compact) {
-  // a redraw (a pick, a refresh) leaves the ranking scrolled where it was
   const kept = box.scrollTop;
   box.replaceChildren();
   const { top, rest, list } = ledCategories(l, split, metric);
-  if (l.chartBy || metric === "speed") {
-    const colors = ledCategories(l.chartBy ? { by: l.chartBy } : l, split, metric, true).top;
-    for (const x of top) x.color = colors.find((c) => c.id === x.id)?.color || "var(--faint)";
-  }
+  const charted = ledCategories(l.chartBy ? { by: l.chartBy } : l, split, metric, true).top;
+  const colorOf = (x) => charted.find((c) => c.id === x.id)?.color || "var(--faint)";
+  const chartKey = (x) => metric === "speed" || charted.some((c) => c.id === x.id) ? x.id : "\0other";
   if (!list.length) return;
   const sum = list.reduce((a, x) => a + ledValue(metric, x), 0) || 1;
-  const leader = Math.max(1, ledRankValue(metric, top[0]));
+  const leader = Math.max(1, ledRankValue(metric, list[0]));
   const one = (x, color, plain) => {
     const b = el("button", "rk" + (plain ? " plain" : "") + (picked && picked === x.id ? " on" : ""));
     b.type = "button";
@@ -19126,12 +19122,13 @@ function drawLedRank(box, l, split, metric, picked, choose, compact) {
     if (x.loops) l2.append(" · ", Object.assign(el("span", "rk-bad rk-loop"), { textContent: t("{n} looped", { n: ledNum(x.loops) }), title: t("Replies magpie ended because the model kept repeating itself") }));
     b.append(l1, bar, l2);
     if (!plain) b.onclick = () => choose(x);
-    b.onpointerenter = () => box.chart?.emphasize?.(x.id);
+    const k = plain ? x.id : chartKey(x);
+    b.onpointerenter = () => box.chart?.emphasize?.(k);
     b.onpointerleave = () => box.chart?.emphasize?.(null);
     return b;
   };
-  for (const x of top) box.append(one(x, x.color));
-  if (rest.length) {
+  for (const x of compact ? top : list) box.append(one(x, colorOf(x)));
+  if (compact && rest.length) {
     const tot = rest.reduce((acc, x) => {
       for (const k of ["calls", "errors", "loops", "input", "output", "cache_read", "cache_write", "cache_unknown", "cache_unknown_calls", "cost", "credits", "credited", "timed", "ttft_ms", "decode_ms", "decode_out", "decode_n", "floor_out", "floor_ms", "floor_n", "up_bytes", "down_bytes"]) acc[k] = (acc[k] || 0) + (x[k] || 0);
       return acc;

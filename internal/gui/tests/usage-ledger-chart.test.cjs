@@ -449,6 +449,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     await t.test("a long ranking is as tall as the chart and scrolls in itself", async () => {
       const { p, errors, asked } = await open("en", "light", { variant: "many" });
       await p.locator("#ledRank .rk").nth(7).waitFor();
+      // every one is listed by its own name, none folded into an Other row;
+      // those past the chart's colours take its faint Other colour, and
+      // stay a click of their own
+      const listed = await p.locator("#ledRank .rk").evaluateAll((bs) => bs.map((b) => ({ name: b.querySelector(".rk-nm").textContent, plain: b.classList.contains("plain"), color: b.querySelector(".rk-sw").style.background })));
+      assert.deepEqual(listed.map((x) => x.name), Array.from({ length: 9 }, (_, i) => "Provider " + i));
+      assert(listed.every((x) => !x.plain), "each one is a click of its own");
+      assert.equal(new Set(listed.slice(0, 7).map((x) => x.color)).size, 7);
+      assert(listed.slice(7).every((x) => x.color === "var(--faint)"), "past the colours, the chart's faint Other");
       const box = async () => {
         const chart = await p.locator("#ledChart").boundingBox(), rank = await p.locator("#ledRank").boundingBox();
         const [top, height, client] = await p.locator("#ledRank").evaluate((r) => [r.scrollTop, r.scrollHeight, r.clientHeight]);
