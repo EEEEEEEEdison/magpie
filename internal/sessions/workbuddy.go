@@ -227,10 +227,15 @@ func workbuddyLine(s *state, b []byte, main bool) {
 	id := p.MessageID
 	if id != "" && id == s.Msg {
 		// another line of the reply counted: its usage stands for the whole
-		s.unuse(cmp.Or(dateOf(s.MsgAt), s.MsgDay), s.MsgModel, s.MsgUse)
-		s.hourly(s.MsgAt, s.MsgModel, s.MsgUse, -1)
+		was := s.more().MsgAt
+		s.unuse(cmp.Or(dateOf(was), s.MsgDay), s.MsgModel, s.MsgUse)
+		s.hourly(was, s.MsgModel, s.MsgUse, -1)
 	}
-	s.Msg, s.MsgModel, s.MsgUse, s.MsgDay, s.MsgAt = id, model, t, dateOf(at), at
+	s.Msg, s.MsgModel, s.MsgUse, s.MsgDay = id, model, t, dateOf(at)
+	// a subagent's file has no StateMore of its own to keep the time in
+	if !at.IsZero() || !s.more().MsgAt.IsZero() {
+		s.own().MsgAt = at
+	}
 	s.useAt(at, model, t)
 }
 

@@ -291,27 +291,11 @@ type StateMore struct {
 	// TurnConvs are the ids of its newest turn's user messages (the first
 	// of dshConvs each, the newest dshTurnKept), reset at the turn's start
 	// and not kept from a fork's seed (gui's ownerLast)
-	TurnConvs []string      `json:"turn_convs,omitempty"`
-	Start     time.Time     `json:"start"`
-	Last      time.Time     `json:"last"`
-	Models    named[Tokens] `json:"models,omitempty"`
-	// Days is Models again, split by the local date each message was
-	// written on: a session that runs past midnight counts on both days.
-	Days named[*day] `json:"days,omitempty"`
-	// Claude Code: the entrypoint its first line naming one says, which
-	// tells a session Claude Desktop's Code tab ran (desktopEntrypoint)
-	Entry string `json:"entry,omitempty"`
-	// Claude Code: parsed by a magpie that reads /cd's relocated lines
-	// (ccRelocated), so Cwd is the folder the session was last moved to
-	CdRead bool `json:"cd_read,omitempty"`
-	// Claude Code: the message last counted, whose later lines repeat it,
-	// and the day it was counted on
-	Msg      string `json:"msg,omitempty"`
-	MsgModel string `json:"msg_model,omitempty"`
-	MsgUse   Tokens `json:"msg_use"`
-	MsgDay   string `json:"msg_day,omitempty"`
-	// MsgAt is the time of the message last counted, as MsgDay is its date:
-	// what takes back its hour when the same message is counted again
+	TurnConvs []string `json:"turn_convs,omitempty"`
+	// WorkBuddy: the time of the message last counted (Msg), as MsgDay is
+	// its date: what takes back its hour when the same message is counted
+	// again. Written through own(): a subagent's file has no StateMore
+	// until its first reply is counted.
 	MsgAt time.Time `json:"msg_at,omitzero"`
 	// Claude Code: the uuids of the first and the last message of the
 	// file's own conversation (ccLink)
@@ -375,7 +359,7 @@ func (m *StateMore) zero() bool {
 		len(m.CodexSpawnNames) == 0 && len(m.CodexSpawnConflicts) == 0 && len(m.CodexAgentIDs) == 0 &&
 		len(m.CodexAgentConflicts) == 0 && m.Named == "" && m.Custom == "" && m.First == "" &&
 		len(m.Convs) == 0 && len(m.ResponseIDs) == 0 && len(m.SeedConvs) == 0 && len(m.TurnConvs) == 0 &&
-		m.Root == "" && m.Leaf == "" && len(m.Compacts) == 0 && m.Since.IsZero() &&
+		m.MsgAt.IsZero() && m.Root == "" && m.Leaf == "" && len(m.Compacts) == 0 && m.Since.IsZero() &&
 		m.Grok == nil && m.Droid == nil && m.Kimi == nil && m.Agy == nil && m.Dsh == nil && m.Cline == nil
 }
 
