@@ -26,10 +26,20 @@ func TestDesktopAliasesInLedger(t *testing.T) {
 			t.Errorf("alias %s: %+v", asked, r)
 		}
 	}
-	for _, asked := range []string{"mythos-magpie-0000000000", "mythos-magpie-12", "mythos-magpie-abcdefghij", "real-model[1m]"} {
+	for _, asked := range []string{"mythos-magpie-12", "mythos-magpie-abcdefghij", "real-model[1m]"} {
 		if r := logRecord(sessions.Call{Agent: "claude", Requested: asked, Model: "different-model"}); r.Model != provider.ContextTail.ReplaceAllString(asked, "") {
-			t.Errorf("unresolved/non-alias %s was guessed: %+v", asked, r)
+			t.Errorf("an id that is no alias was guessed: %+v", r)
 		}
+	}
+	// an alias whose provider has been removed since: no catalog entry
+	// carries its number, and it is named by the model the call's own
+	// reply named
+	gone := "mythos-magpie-" + provider.DesktopAliasNumber("removed-provider/glm-5.3-flash")
+	if r := logRecord(sessions.Call{Agent: "claude-desktop", Requested: gone + "[1m]", Model: "glm-5.3-flash"}); r.Model != "glm-5.3-flash" {
+		t.Errorf("an alias of a provider removed since: %+v", r)
+	}
+	if r := logRecord(sessions.Call{Agent: "claude-desktop", Requested: gone, Model: gone}); r.Model != gone {
+		t.Errorf("an alias whose reply names the alias itself: %+v", r)
 	}
 	// an alias no catalog model has any more (its provider removed since)
 	// whose tail names the Claude model is counted as that model, though

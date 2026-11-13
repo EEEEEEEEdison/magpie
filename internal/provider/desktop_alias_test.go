@@ -34,4 +34,25 @@ func TestDesktopAliasKeepsAnUnknownNumberUnknown(t *testing.T) {
 			t.Errorf("DesktopAliasModel(%s) = %q, guessed a model", id, got)
 		}
 	}
+	// naming a call: an alias no catalog entry carries is the model the
+	// call's own reply named; an id of no alias shape, or a reply that is
+	// one too, names none
+	for _, c := range []struct{ asked, served, want string }{
+		{"mythos-magpie-5487751739[1m]", "deepseek-v4.1-flash", "deepseek-v4.1-flash"},
+		{"anthropic/magpie-0000000000", "glm-5.3", "glm-5.3"},
+		{"mythos-magpie-0000000000", "", ""},
+		{"mythos-magpie-0000000000", "mythos-magpie-2931118810", ""},
+		{"mythos-magpie-0000000000", "mythos-magpie-0000000000", ""},
+		{"mythos-magpie-12", "glm-5.3", ""},
+		{"real-model", "glm-5.3", ""},
+	} {
+		if got := DesktopAliasName(c.asked, c.served); got != c.want {
+			t.Errorf("DesktopAliasName(%s, %s) = %q, want %q", c.asked, c.served, got, c.want)
+		}
+	}
+	// the tail of a magpie-<number>.anthropic.<model> is named under it
+	// whatever the reply says
+	if got := DesktopAliasName("magpie-5377544721.anthropic.claude-opus-5-5[1m]", "claude-opus-5-5-xhigh"); got != "claude-opus-5-5" {
+		t.Errorf("DesktopAliasName of a removed provider's Claude alias = %q", got)
+	}
 }
