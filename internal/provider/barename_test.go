@@ -169,6 +169,14 @@ func TestUsageModelFoldsARunningTag(t *testing.T) {
 		{"deepseek-v4-pro-202606", "deepseek-v4-pro"},
 		{"glm-5.3-flash-free", "glm-5.3-flash"},
 		{"gpt-oss-120b-high", "gpt-oss-120b"},
+		// Z.ai's maker and version with dashes, as Mistral lists them,
+		// are glm-5.3's: its open models keep their names
+		{"zai-glm-5-3", "glm-5.3"},
+		{"zai-glm-5-3-flash", "glm-5.3-flash"},
+		{"mistral/zai-glm-5-3", "glm-5.3"},
+		{"glm-4-9b", "glm-4-9b"},
+		{"glm-4-32b-0414", "glm-4-32b"},
+		{"deepseek-r1", "deepseek-r1"},
 		// a word that names a model of its own, or a base with no version,
 		// is not a level: mistral-medium is not mistral, kimi-k2-thinking
 		// and gpt-4o-search are not kimi-k2 and gpt-4o

@@ -1716,7 +1716,8 @@ provider sells it under, without a region a relay writes before it with a
 colon (`cn:deepseek-v4.1-flash` is `deepseek-v4.1-flash`), without a
 snapshot or context-size tail, in lower case, with a version's dash or
 underscore as the dot the model's own name has (`deepseek-v4-1-flash` is
-`deepseek-v4.1-flash`, as Volcengine Ark and Mistral sell it), and with a
+`deepseek-v4.1-flash`, as Volcengine Ark and Mistral sell it; so are GLM's,
+Mistral's `zai-glm-5-3` being Z.ai's `glm-5.3`), and with a
 run of spaces — and the dashes or underscores beside it — as one `-`. So a
 `*/gpt-6-astra`
 price is spent on a relay that lists the

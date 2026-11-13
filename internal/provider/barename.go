@@ -28,6 +28,12 @@ var versionTail = lazyre.New(`(?:[-_@:](?:\d{4}-\d{2}-\d{2}|\d{2}-\d{2}|\d{6,8}|
 // claude-opus-5-5 is that model's own name, not claude-opus-5.5.
 var vVersion = lazyre.New(`v\d+(?:[-_.]\d+)+`)
 
+// glmVersion is GLM's version written with a dash where Z.ai's own name has
+// a dot: Mistral lists glm-5.3 as zai-glm-5-3 and glm-5.3-flash as
+// zai-glm-5-3-flash. Only a number after a number with the name ending
+// there, so GLM's open models keep theirs: glm-4-9b, glm-4-32b-0414.
+var glmVersion = lazyre.New(`glm-(\d+)-(\d+)(-|$)`)
+
 // vendorDot is Bedrock's region and maker before a model's name
 // (us.anthropic.claude-…), the geography of an inference profile as
 // catalog's bedrockGeos has them: global. and us-gov. among them. The
@@ -156,6 +162,12 @@ func BareModel(m string) string {
 	// says what counts as one
 	m = catalog.WithoutRegion(m)
 	m = vendorDot.ReplaceAllString(m, "")
+	// Z.ai's name before a model of its own, with a dash where the maker
+	// list above writes a dot: Mistral lists glm-5.3 as zai-glm-5-3. Only
+	// zai: deepseek-r1 and deepseek-chat are DeepSeek's own names.
+	if rest, ok := strings.CutPrefix(m, "zai-"); ok && rest != "" {
+		m = rest
+	}
 	if loc := versionTail.FindStringIndex(m); loc != nil && loc[0] > 0 {
 		m = m[:loc[0]]
 	}
@@ -163,6 +175,7 @@ func BareModel(m string) string {
 	// opus, not "opus-"
 	m = strings.TrimSpace(m)
 	// a version a vendor spells with a dash is the model's own dotted one
+	m = glmVersion.ReplaceAllString(m, "glm-$1.$2$3")
 	m = vVersion.ReplaceAllStringFunc(m, func(s string) string {
 		return strings.NewReplacer("-", ".", "_", ".").Replace(s)
 	})

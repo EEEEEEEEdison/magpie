@@ -1276,7 +1276,9 @@ model bars and filters by it, so one model sold as `workbuddy2api/glm-5.3-flash`
 by one provider and as `glm-5.3-flash` by another is one row and one filter
 there. A version's dash or underscore is the dot the model's own name has
 (`deepseek-v4-1-flash` is `deepseek-v4.1-flash`, as Volcengine Ark and
-Mistral sell it). A run of spaces in a model's name is a `-` there, as it
+Mistral sell it), and GLM's is too (`zai-glm-5-3` is `glm-5.3`, Z.ai's name
+with the maker Mistral writes before it with a dash), while GLM's open
+models keep their own (`glm-4-9b`). A run of spaces in a model's name is a `-` there, as it
 is where a price is looked up (`provider.BareModel` is one judgement for
 both), and the dashes or underscores beside the space go with it: a relay
 that lists its
