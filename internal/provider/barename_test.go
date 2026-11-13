@@ -193,10 +193,8 @@ func TestUsageModelFoldsARunningTag(t *testing.T) {
 }
 
 // A name that is another model's own is that model in the usage pages: Kimi
-// Code's k3 is the API's kimi-k3, and the DeepSeek Flash OpenCode sells to Pi
-// is DeepSeek's deepseek-v4-flash. A model of its own beside them keeps its
-// name: k3.1-pro and kimi-k3-auto are not k3, and deepseek-v4-flash-vision is
-// not deepseek-v4-flash.
+// Code's k3 is the API's kimi-k3. A model of its own beside it keeps its
+// name: k3.1-pro and kimi-k3-auto are not k3.
 func TestUsageModelCountsAnAliasAsItsModel(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"k3", "kimi-k3"},
@@ -204,10 +202,6 @@ func TestUsageModelCountsAnAliasAsItsModel(t *testing.T) {
 		{"kimi-k3", "kimi-k3"},
 		{"k3.1-pro", "k3.1-pro"},
 		{"kimi-k3-auto", "kimi-k3-auto"},
-		{"deepseek-flash", "deepseek-v4-flash"},
-		{"openrouter/deepseek/deepseek-flash-latest", "deepseek-v4-flash"},
-		{"deepseek-v4-flash", "deepseek-v4-flash"},
-		{"deepseek-v4-flash-vision", "deepseek-v4-flash-vision"},
 	} {
 		if got := UsageModel(tc.in); got != tc.want {
 			t.Errorf("UsageModel(%q) = %q, want %q", tc.in, got, tc.want)

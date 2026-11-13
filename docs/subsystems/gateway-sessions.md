@@ -1293,10 +1293,9 @@ dash or a digit in it, so a relay's own `cn:auto` keeps its name.
 `-free` a relay pins after a versioned model's name
 (`gemini-3.8-flash-high`, `gpt-oss-120b-high`, `minimax-m3.1-flash-free`)
 that model's name, and for a name that is another model's own
-(`usageAlias`: `k3` is `kimi-k3`, `deepseek-flash` is `deepseek-v4-flash`)
-that model. So `gemini-3.8-flash-high` and `gemini-3.8-flash` are one row
-and one filter, as `k3` and `kimi-k3` are, on this tab and in the Requests
-tab's Model split (`usage.Row.key`). It is not the price rules'
+(`usageAlias`: `k3` is `kimi-k3`) that model. So `gemini-3.8-flash-high`
+and `gemini-3.8-flash` are one row and one filter, as `k3` and `kimi-k3`
+are, on this tab and in the Requests tab's Model split (`usage.Row.key`). It is not the price rules'
 `VariantName`: a word that names a model of its own (`mistral-medium`,
 `kimi-k2-thinking`, `gpt-4o-search`), a base with no digit and a sibling
 model (`gemini-3.8-flash-lite`) stay their own, and a name folded here is

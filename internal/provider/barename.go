@@ -110,14 +110,13 @@ func UsageModel(m string) string { return UsageOfBare(BareModel(m)) }
 var usageLevel = lazyre.New(`^(.*\d.*?)(?:-(?:minimal|low|medium|high|xhigh|free))+$`)
 
 // usageAlias is a name that is another model sold under a name of its own:
-// Kimi Code's plan name k3 is the API's kimi-k3, and the DeepSeek Flash
-// OpenCode sells to Pi is DeepSeek's deepseek-v4-flash. The usage pages
-// count the two as one model, as they count a level's id as its model's;
-// each call keeps the id it was made under for its price and the Model ·
-// provider split.
+// Kimi Code's plan name k3 is the API's kimi-k3. The usage pages count the
+// two as one model, as they count a level's id as its model's; each call
+// keeps the id it was made under for its price and the Model · provider
+// split. A name one vendor's plan used for a time is the user's alias
+// (`magpie model alias`), not a rule here.
 var usageAlias = map[string]string{
-	"k3":             "kimi-k3",
-	"deepseek-flash": "deepseek-v4-flash",
+	"k3": "kimi-k3",
 }
 
 // UsageOfBare is UsageModel of a name BareModel already read.

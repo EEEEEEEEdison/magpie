@@ -258,17 +258,14 @@ func TestRequestPageModelRankingFoldsALevelInTheID(t *testing.T) {
 }
 
 // A name that is another model's own is that model in the ranking: k3 is
-// kimi-k3 and deepseek-flash is deepseek-v4-flash, so a call under either
-// name makes one row. The model's own id filters to both, and the name still
-// filters to its own calls alone.
+// kimi-k3, so a call under either name makes one row. The model's own id
+// filters to both, and the name still filters to its own calls alone.
 func TestRequestPageModelRankingFoldsAnAlias(t *testing.T) {
 	pageHome(t)
 	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
 	records := []Record{
 		{Time: now, Provider: "kimi", Agent: "claude", Model: "k3", Input: 10},
 		{Time: now, Provider: "moonshot", Agent: "claude", Model: "kimi-k3", Input: 20},
-		{Time: now, Provider: "pi", Agent: "pi", Model: "deepseek-flash", Input: 30},
-		{Time: now, Provider: "deepseek", Agent: "codex", Model: "deepseek-v4-flash", Input: 40},
 	}
 	gateway := &rowChunk{}
 	all := Ledgered{}
@@ -286,7 +283,7 @@ func TestRequestPageModelRankingFoldsAnAlias(t *testing.T) {
 			for _, s := range page.By["model"] {
 				models[s.ID] = s.Calls
 			}
-			if want := map[string]int{"kimi-k3": 2, "deepseek-v4-flash": 2}; !reflect.DeepEqual(models, want) {
+			if want := map[string]int{"kimi-k3": 2}; !reflect.DeepEqual(models, want) {
 				t.Fatalf("model ranking = %v, want %v", models, want)
 			}
 		})
@@ -294,7 +291,7 @@ func TestRequestPageModelRankingFoldsAnAlias(t *testing.T) {
 	for _, c := range []struct {
 		model string
 		calls int
-	}{{"kimi-k3", 2}, {"k3", 1}, {"deepseek-v4-flash", 2}, {"deepseek-flash", 1}} {
+	}{{"kimi-k3", 2}, {"k3", 1}} {
 		f := Filter{Model: c.model}
 		for name, page := range map[string]RequestPage{
 			"compact": buildRequestPage(Today, f, 0, 100, gateway, nil),
