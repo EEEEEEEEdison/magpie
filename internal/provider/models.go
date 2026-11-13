@@ -2733,9 +2733,9 @@ func MakerPrice(model string) (catalog.Price, bool) {
 	// a relay's running tag in the id (gemini-3.8-flash-high,
 	// minimax-m3.1-flash-free) or a suffix of the model's own name
 	// (hy4-preview-f) is not part of it: the maker's price of the model it is
-	// a variant of is read. An id that is its own name is left as it is — k3
-	// is Kimi Code's alias, not the API's kimi-k3, and deepseek-v4-pro-202606
-	// is a snapshot of its own.
+	// a variant of is read. An id that is its own name is left as it is: k3
+	// is Kimi Code's plan name, priced by the plan (PricedNameFor), and
+	// deepseek-v4-pro-202606 is a snapshot of its own.
 	if canon, ok := VariantName(model); ok {
 		for _, m := range pricedNames(canon) {
 			if pr, ok := catalog.PricedBy(makerPriceCatalogs(), m); ok {

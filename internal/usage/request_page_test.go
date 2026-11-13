@@ -211,7 +211,7 @@ func TestRequestPageModelRankingFoldsALevelInTheID(t *testing.T) {
 		{Time: now, Provider: "cpa", Agent: "claude", Model: "gemini-3.8-flash", Input: 10},
 		{Time: now, Provider: "cpa", Agent: "claude", Model: "gemini-3.8-flash-high", Input: 20},
 		{Time: now, Provider: "antigravity", Agent: "claude", Model: "antigravity/gemini-3.8-flash", Input: 30},
-		{Time: now, Provider: "kimi", Agent: "claude", Model: "k3", Input: 40},
+		{Time: now, Provider: "kimi", Agent: "claude", Model: "mistral-medium", Input: 40},
 	}
 	gateway := &rowChunk{}
 	all := Ledgered{}
@@ -229,7 +229,7 @@ func TestRequestPageModelRankingFoldsALevelInTheID(t *testing.T) {
 			for _, s := range page.By["model"] {
 				models[s.ID] = s.Calls
 			}
-			if want := map[string]int{"gemini-3.8-flash": 3, "k3": 1}; !reflect.DeepEqual(models, want) {
+			if want := map[string]int{"gemini-3.8-flash": 3, "mistral-medium": 1}; !reflect.DeepEqual(models, want) {
 				t.Fatalf("model ranking = %v, want %v", models, want)
 			}
 			at := map[string]bool{}
@@ -244,7 +244,57 @@ func TestRequestPageModelRankingFoldsALevelInTheID(t *testing.T) {
 	for _, c := range []struct {
 		model string
 		calls int
-	}{{"gemini-3.8-flash", 3}, {"gemini-3.8-flash-high", 1}} {
+	}{{"gemini-3.8-flash", 3}, {"gemini-3.8-flash-high", 1}, {"mistral-medium", 1}} {
+		f := Filter{Model: c.model}
+		for name, page := range map[string]RequestPage{
+			"compact": buildRequestPage(Today, f, 0, 100, gateway, nil),
+			"ledger":  pageFromLedger(Today, f, 0, 100, all),
+		} {
+			if page.Total != c.calls || page.Sum.Calls != c.calls {
+				t.Errorf("%s: model %q kept %d calls, want %d", name, c.model, page.Total, c.calls)
+			}
+		}
+	}
+}
+
+// A name that is another model's own is that model in the ranking: k3 is
+// kimi-k3 and deepseek-flash is deepseek-v4-flash, so a call under either
+// name makes one row. The model's own id filters to both, and the name still
+// filters to its own calls alone.
+func TestRequestPageModelRankingFoldsAnAlias(t *testing.T) {
+	pageHome(t)
+	now := holdClock(t, time.Date(2026, 9, 30, 12, 0, 0, 0, time.Local))
+	records := []Record{
+		{Time: now, Provider: "kimi", Agent: "claude", Model: "k3", Input: 10},
+		{Time: now, Provider: "moonshot", Agent: "claude", Model: "kimi-k3", Input: 20},
+		{Time: now, Provider: "pi", Agent: "pi", Model: "deepseek-flash", Input: 30},
+		{Time: now, Provider: "deepseek", Agent: "codex", Model: "deepseek-v4-flash", Input: 40},
+	}
+	gateway := &rowChunk{}
+	all := Ledgered{}
+	for i, r := range records {
+		row := Row{Record: r}
+		gateway.add(row, "", int64(i), false)
+		all.Rows = append(all.Rows, row)
+	}
+	for name, page := range map[string]RequestPage{
+		"compact": buildRequestPage(Today, Filter{}, 0, 100, gateway, nil),
+		"ledger":  pageFromLedger(Today, Filter{}, 0, 100, all),
+	} {
+		t.Run(name, func(t *testing.T) {
+			models := map[string]int{}
+			for _, s := range page.By["model"] {
+				models[s.ID] = s.Calls
+			}
+			if want := map[string]int{"kimi-k3": 2, "deepseek-v4-flash": 2}; !reflect.DeepEqual(models, want) {
+				t.Fatalf("model ranking = %v, want %v", models, want)
+			}
+		})
+	}
+	for _, c := range []struct {
+		model string
+		calls int
+	}{{"kimi-k3", 2}, {"k3", 1}, {"deepseek-v4-flash", 2}, {"deepseek-flash", 1}} {
 		f := Filter{Model: c.model}
 		for name, page := range map[string]RequestPage{
 			"compact": buildRequestPage(Today, f, 0, 100, gateway, nil),

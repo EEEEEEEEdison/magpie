@@ -154,7 +154,7 @@ func TestAnyPriceCoversTheModelUnderItsOtherNames(t *testing.T) {
 // The usage pages count a model asked for at a level a relay pins after a
 // versioned model's name (gemini-3.8-flash-high) or with -free as the model
 // itself: one row and one filter. An id that is its own name stays its
-// own: k3 is Kimi Code's plan name, gemini-3.8-flash-lite another model.
+// own: gemini-3.8-flash-lite another model.
 func TestUsageModelFoldsARunningTag(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"gemini-3.8-flash-high", "gemini-3.8-flash"},
@@ -164,7 +164,6 @@ func TestUsageModelFoldsARunningTag(t *testing.T) {
 		{"minimax-m3.1-flash-free", "minimax-m3.1-flash"},
 		{"kimi-k3-auto", "kimi-k3-auto"},
 		{"cn:deepseek-v4.1-flash", "deepseek-v4.1-flash"},
-		{"k3", "k3"},
 		{"gemini-3.8-flash-lite", "gemini-3.8-flash-lite"},
 		{"deepseek-v4-pro-202606", "deepseek-v4-pro"},
 		{"glm-5.3-flash-free", "glm-5.3-flash"},
@@ -186,6 +185,29 @@ func TestUsageModelFoldsARunningTag(t *testing.T) {
 		{"gpt-4o-search-preview", "gpt-4o-search"},
 		{"deepseek-v4.1-flash-online", "deepseek-v4.1-flash-online"},
 		{"", ""},
+	} {
+		if got := UsageModel(tc.in); got != tc.want {
+			t.Errorf("UsageModel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A name that is another model's own is that model in the usage pages: Kimi
+// Code's k3 is the API's kimi-k3, and the DeepSeek Flash OpenCode sells to Pi
+// is DeepSeek's deepseek-v4-flash. A model of its own beside them keeps its
+// name: k3.1-pro and kimi-k3-auto are not k3, and deepseek-v4-flash-vision is
+// not deepseek-v4-flash.
+func TestUsageModelCountsAnAliasAsItsModel(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"k3", "kimi-k3"},
+		{"moonshot/k3", "kimi-k3"},
+		{"kimi-k3", "kimi-k3"},
+		{"k3.1-pro", "k3.1-pro"},
+		{"kimi-k3-auto", "kimi-k3-auto"},
+		{"deepseek-flash", "deepseek-v4-flash"},
+		{"openrouter/deepseek/deepseek-flash-latest", "deepseek-v4-flash"},
+		{"deepseek-v4-flash", "deepseek-v4-flash"},
+		{"deepseek-v4-flash-vision", "deepseek-v4-flash-vision"},
 	} {
 		if got := UsageModel(tc.in); got != tc.want {
 			t.Errorf("UsageModel(%q) = %q, want %q", tc.in, got, tc.want)

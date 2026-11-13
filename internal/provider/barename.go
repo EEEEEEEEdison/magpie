@@ -81,8 +81,9 @@ func HasTurnTag(m string) bool {
 // id with its running tag off (gemini-3.8-flash-high) or with a suffix of
 // the same name off (hy4-preview-f is hy4-preview, kimi-k3-auto is
 // kimi-k3) — and false when the id is its own name. A short alias that
-// stands for a different name is not a variant: k3 is Kimi Code's plan
-// name, not the API's kimi-k3, so nothing of kimi-k3's is read for it.
+// stands for a different name is not a variant here: k3 is Kimi Code's
+// plan name, and its price is the plan's (PricedNameFor), not read for it
+// as a variant's.
 func VariantName(id string) (string, bool) {
 	canon, bare := CanonicalModel(id), BareModel(id)
 	if canon == "" || canon == bare {
@@ -95,11 +96,12 @@ func VariantName(id string) (string, bool) {
 }
 
 // UsageModel is the name the usage pages count a model's calls under and
-// filter them by: its own name (BareModel), and for an id with a level a
+// filter them by: its own name (BareModel), for an id with a level a
 // relay pins after a versioned model's name (gemini-3.8-flash-high,
-// gpt-oss-120b-high, glm-5.3-flash-free) that model's name. Narrower than
-// VariantName on purpose: a word that names a model of its own
-// (mistral-medium, kimi-k2-thinking, gpt-4o-search) or an alias (k3) is
+// gpt-oss-120b-high, glm-5.3-flash-free) that model's name, and for a
+// name that is another model's own (usageAlias: k3 is kimi-k3) that
+// model. It is not the price rules' VariantName: a word that names a
+// model of its own (mistral-medium, kimi-k2-thinking, gpt-4o-search) is
 // never folded, so two models never share a row.
 func UsageModel(m string) string { return UsageOfBare(BareModel(m)) }
 
@@ -107,10 +109,24 @@ func UsageModel(m string) string { return UsageOfBare(BareModel(m)) }
 // UsageModel folds; the model's name before it must hold a digit.
 var usageLevel = lazyre.New(`^(.*\d.*?)(?:-(?:minimal|low|medium|high|xhigh|free))+$`)
 
+// usageAlias is a name that is another model sold under a name of its own:
+// Kimi Code's plan name k3 is the API's kimi-k3, and the DeepSeek Flash
+// OpenCode sells to Pi is DeepSeek's deepseek-v4-flash. The usage pages
+// count the two as one model, as they count a level's id as its model's;
+// each call keeps the id it was made under for its price and the Model ·
+// provider split.
+var usageAlias = map[string]string{
+	"k3":             "kimi-k3",
+	"deepseek-flash": "deepseek-v4-flash",
+}
+
 // UsageOfBare is UsageModel of a name BareModel already read.
 func UsageOfBare(bare string) string {
 	if m := usageLevel.FindStringSubmatch(bare); m != nil && m[1] != "" {
-		return m[1]
+		bare = m[1]
+	}
+	if name, ok := usageAlias[bare]; ok {
+		return name
 	}
 	return bare
 }
