@@ -86,13 +86,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const rows = page.locator(".rt-req");
       await rows.nth(fixtures.length - 1).waitFor();
       const check = async () => {
-        assert.equal(await rows.nth(0).locator(".cache-hit .v").textContent(), "60%");
+        assert.equal(await rows.nth(0).locator(".cache-hit .v").textContent(), "60.00%");
         assert.match(await rows.nth(0).locator(".cache-hit").getAttribute("title"), lang === "zh" ? /缓存命中率.*提示词/ : /Cache hit rate.*prompt/);
         // 400 tokens over its whole 11 s turn
         assert.match(await rows.nth(0).locator(".speed .v").textContent(), lang === "zh" ? /^36 token\/秒$/ : /^36 tok\/s$/);
         assert.match(await rows.nth(1).locator(".cache-hit .v").textContent(), /0%$/);
-        assert.match(await rows.nth(2).locator(".cache-hit .v").textContent(), /100%$/);
-        assert.equal(await rows.nth(1).locator(".cost").textContent(), "≈$0.000", "known zero cost remains visible");
+        assert.match(await rows.nth(2).locator(".cache-hit .v").textContent(), /100\.00%$/);
+        assert.equal(await rows.nth(1).locator(".cost").textContent(), "$0.000", "known zero cost remains visible");
         assert.equal(await rows.nth(3).locator(".cache-hit").count(), 0, "legacy totals cannot establish a cache rate");
         assert.equal(await rows.nth(4).locator(".cache-hit").count(), 0, "output is not part of the prompt");
         // every completed reply with output tells its whole turn's speed now,
@@ -104,8 +104,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         // 8,264 tokens over its 24 s turn
         assert.match(await rows.nth(6).locator(".speed .v").textContent(), /^339 /, "one burst at the end over a long wait is a speed over the whole turn");
         // 8,264 tokens over 1.5 s
-        assert.match(await rows.nth(7).locator(".speed .v").textContent(), /^5509 /, "a fast turn's whole time is what it took");
-        assert.match(await rows.nth(8).locator(".cache-hit").textContent(), /60%$/, "sum the billable prompt tiers across retries");
+        assert.match(await rows.nth(7).locator(".speed .v").textContent(), /^5,?509 /, "a fast turn's whole time is what it took");
+        assert.match(await rows.nth(8).locator(".cache-hit").textContent(), /60\.00%$/, "sum the billable prompt tiers across retries");
         // 400 tokens over its 21 s turn, the ten-second retry wait in it
         assert.match(await rows.nth(8).locator(".speed .v").textContent(), /^19 /, "the retry wait is part of the turn its speed is over");
         assert.equal(await rows.nth(9).locator(".cache-hit").count(), 0, "a request still underway has no final rate");
@@ -135,16 +135,16 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await unknown.locator(".cost").isVisible(), false, "a session with unknown cost omits it");
       assert.equal(await page.locator("button.rt-session").filter({ hasText: "kiro-metrics" }).locator(".cache-hit").count(), 0, "a session of uncounted cache has no hit rate");
       assert.doesNotMatch(await unknown.locator(".summary").textContent(), /token|—/, "a session without token counts has no fake zero or dash");
-      assert.equal(await group.locator(".cache-hit .v").textContent(), "63%", "cache average is weighted by prompt tokens, not by request count");
+      assert.equal(await group.locator(".cache-hit .v").textContent(), "63.04%", "cache average is weighted by prompt tokens, not by request count");
       assert.match(await group.locator(".speed .v").textContent(), /^176 /, "speed is output divided by summed turns, not the mean of individual speeds");
       assert.match(await group.locator(".cache-hit").getAttribute("title"), /9.*11|11.*9/, "unknown and unfinished requests are excluded and coverage is disclosed");
       assert.match(await group.locator(".rt-token-total").getAttribute("title"), /11.*12|12.*11/, "session token breakdown discloses missing records");
       await group.click();
       assert.equal(await group.getAttribute("aria-expanded"), "false");
-      assert.equal(await group.locator(".cache-hit .v").textContent(), "63%", "closed sessions retain their metrics");
+      assert.equal(await group.locator(".cache-hit .v").textContent(), "63.04%", "closed sessions retain their metrics");
       await group.click();
       await rows.nth(0).click();
-      assert.match(await page.locator(".rt-steps").textContent(), lang === "zh" ? /请求缓存命中率 60%/ : /request cache hit rate 60%/);
+      assert.match(await page.locator(".rt-steps").textContent(), lang === "zh" ? /请求缓存命中率 60\.00%/ : /request cache hit rate 60\.00%/);
       if (lang === "zh") {
         assert.match(await page.locator(".rt-steps").textContent(), /后出首字/);
         assert.doesNotMatch(await page.locator(".rt-steps").textContent(), /首响/);
@@ -208,7 +208,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert(feed.next, "live poll started");
       feed.seq = 13;
       feed.next([req(12, [tier(1920, 2080, 1200, 200)], { seq: 13, out: 200 })]);
-      await page.waitForFunction(() => document.querySelector(".rt-req .cache-hit")?.textContent.endsWith("40%"));
+      await page.waitForFunction(() => document.querySelector(".rt-req .cache-hit")?.textContent.endsWith("40.00%"));
       // 200 tokens over its whole 11 s turn
       assert.match(await rows.nth(0).locator(".speed .v").textContent(), /^18 /);
       const updated = await rows.nth(0).locator(".tokens").getAttribute("title");

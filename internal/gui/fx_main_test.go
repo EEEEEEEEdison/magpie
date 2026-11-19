@@ -25,6 +25,7 @@ func TestMain(m *testing.M) {
 		addr := l.Addr().String()
 		l.Close() // refused at once from here on
 		fx.SetRateURL("http://" + addr + "/")
+		os.Setenv("MAGPIE_NOTES_FEED", "http://"+addr+"/") // no test asks the site for notes
 	}
 	// 测试仅使用显式夹具提供的网络，不监听本机 WSL 网卡。
 	gateway.WSLNets = func() []*net.IPNet { return nil }

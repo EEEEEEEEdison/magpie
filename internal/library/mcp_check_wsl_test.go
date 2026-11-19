@@ -145,6 +145,12 @@ func TestCheckWindowsServerHere(t *testing.T) {
 // A server both this machine's agents and a distro's have is checked in
 // each place, and a failure says which one failed.
 func TestCheckMixedServerEachSide(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// the fake server is this test binary, a Windows program here, and
+		// one is checked on this machine only (TestCheckWindowsServerHere);
+		// the distro's side runs it through /usr/bin/env
+		t.Skip("the fake server is a Windows program here")
+	}
 	w := fakeWSLCheck(t, "Ubuntu")
 	s := fakeStdio(t, "ok", nil)
 	// 两侧都能查找的命令名；Windows 绝对路径按契约只在本机运行。

@@ -63,7 +63,21 @@ var windowTail = lazyre.New(`@\d+[km]?$`)
 // modifierTail matches operational modifiers, promotional tags, and runtime
 // effort variants attached to a model name (e.g. "-free", "-thinking",
 // "-thought", "-high", "-low", "-medium", "-minimal", "-online", "-search").
+// Effort words (-high/-low/-medium/-minimal) are only stripped when the base
+// name contains a digit, so size-named models like "vision-medium" or
+// "mistral-medium" are not conflated with another model.
 var modifierTail = lazyre.New(`(?:[-_](?:free|thinking|thought|high|low|medium|minimal|online|search))+$`)
+var nonEffortModifierTail = lazyre.New(`(?:[-_](?:free|thinking|thought|online|search))+$`)
+
+func stripModifierTail(bare string) string {
+	if s := modifierTail.ReplaceAllString(bare, ""); s != bare {
+		if strings.ContainsAny(s, "0123456789") {
+			return s
+		}
+		return nonEffortModifierTail.ReplaceAllString(bare, "")
+	}
+	return bare
+}
 
 // HasTurnTag reports whether a model id ends in a running tag a relay adds
 // to the model's own name — a promotional one (-free), an effort pinned in
@@ -74,7 +88,7 @@ var modifierTail = lazyre.New(`(?:[-_](?:free|thinking|thought|high|low|medium|m
 // for an id without a tag is the id's own, whatever the alias map folds.
 func HasTurnTag(m string) bool {
 	bare := BareModel(m)
-	return bare != "" && modifierTail.MatchString(bare)
+	return bare != "" && stripModifierTail(bare) != bare
 }
 
 // VariantName is the name of the model a relay's id is a variant of — the
@@ -139,7 +153,7 @@ func CanonicalModel(m string) string {
 	if bare == "" {
 		return ""
 	}
-	canon := modifierTail.ReplaceAllString(bare, "")
+	canon := stripModifierTail(bare)
 	switch canon {
 	case "k3", "kimi-k3-auto":
 		return "kimi-k3"

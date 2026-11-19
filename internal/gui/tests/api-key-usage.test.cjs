@@ -96,9 +96,9 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         ? { addButton: "添加", first: "设为首选", remove: "移除", failed: "失败", all: "全部网关密钥" }
         : { addButton: "Add", first: "Make first", remove: "Remove", failed: "Failed", all: "All gateway keys" };
       await page.goto("http://magpie.test/?view=providers");
-      await page.locator(".row.provider", { hasText: "Relay" }).dispatchEvent("click");
+      await page.locator(".row.provider", { hasText: "Relay" }).click();
       await page.locator("#modal:not([hidden]) .accts .acc").first().waitFor();
-      assert.equal(await page.locator(".accts .acc:not(.add)").count(), 2);
+      assert.equal(await page.locator(".accts .acc:not(.add):not(.keys-copy-all)").count(), 2);
       await page.locator(".accts .acc.add").click();
       await page.locator(".acc.adding .kf input").nth(0).fill("Backup");
       await page.locator(".acc.adding .kf input").nth(1).fill("test-new");
@@ -138,11 +138,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await page.locator("#stats .kpi-pick").click();
       await page.locator(".proto-menu:visible .pm-item").nth(0).click();
       assert.deepEqual(await page.locator("#usageKeys .num b").allTextContents(), ["2.2K", "1.1K"]);
-      assert.deepEqual(await page.locator("#usageKeys .cost").allTextContents(), ["≈$0.400", "≈$0.200"]);
+      assert.deepEqual(await page.locator("#usageKeys .cost").allTextContents(), ["$0.400", "$0.200"]);
       await page.locator("#stats .kpi-pick").click();
       await page.locator(".proto-menu:visible .pm-item").nth(1).click();
       assert.deepEqual(await page.locator("#usageKeys .num b").allTextContents(), ["3.2K", "1.1K"]);
-      assert.deepEqual(await page.locator("#usageKeys .cost").allTextContents(), ["≈$0.400", "≈$0.200"]);
+      assert.deepEqual(await page.locator("#usageKeys .cost").allTextContents(), ["$0.400", "$0.200"]);
       assert(!/Workspace|Personal/.test(await page.locator("#usageKeys").textContent()));
       await page.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();
       await page.locator(".led tbody tr").first().waitFor();

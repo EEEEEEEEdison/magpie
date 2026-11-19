@@ -184,6 +184,24 @@ var (
 // 5.2 and Mythos 5.2); Fable 5.1 and before never had it.
 var claudeFastModels = []string{"claude-opus-4-8", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-2"}
 
+// openAIUltraModels are the models OpenAI's API serves at service_tier
+// "ultrafast" (OoopsHh on X): GPT-6.2 Astra, GPT-6.2 Sol, GPT-6 Astra and
+// GPT-6.1 Sol, as its Ultrafast mode guide names them
+// (developers.openai.com/api/docs/guides/ultrafast-mode), on its Responses
+// API alone: on 11-18 api.openai.com's /v1/responses took the tier for these
+// four and turned it away ("Invalid service_tier argument") for GPT-6 Sol
+// and GPT-6.1 Terra, and /v1/chat/completions turned it away for all.
+var openAIUltraModels = []string{"gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-astra", "gpt-6.1-sol"}
+
+// openAIDated is a dated snapshot's suffix: gpt-6-astra-2026-09-14.
+var openAIDated = lazyre.New(`-(\d{4}-\d{2}-\d{2}|\d{8})$`)
+
+// OpenAIUltra reports whether OpenAI's API serves model, or a dated
+// snapshot of it, at service_tier "ultrafast".
+func OpenAIUltra(model string) bool {
+	return slices.Contains(openAIUltraModels, openAIDated.ReplaceAllString(modelSlug(model), ""))
+}
+
 // ClaudeFast reports whether a Claude model has fast mode.
 func ClaudeFast(model string) bool {
 	return slices.Contains(claudeFastModels, claudeDated.ReplaceAllString(strings.ToLower(model), ""))
@@ -221,15 +239,37 @@ func cleanFast(entries []Entry, g *Group) error {
 		out = append(out, f)
 	}
 	g.Fast = out
+	// Ultra is a part of Fast: a member kept out of it is kept out here
+	g.Ultra = slices.DeleteFunc(slices.Clone(g.Ultra), func(u string) bool { return !slices.Contains(out, key(u)) })
 	return nil
+}
+
+// IsUltra reports whether the group sends member id in the faster mode.
+func (g Group) IsUltra(id string) bool {
+	return slices.Contains(g.Ultra, id) && slices.Contains(g.Fast, id)
 }
 
 // SetMemberFast sends the group's member id fast, or not, where it is in
 // the group.
 func (g *Group) SetMemberFast(id string, fast bool) {
+	tier := ""
+	if fast {
+		tier = "priority"
+	}
+	g.SetMemberTier(id, tier)
+}
+
+// SetMemberTier sends the group's member id at tier: "" the usual speed,
+// "priority" fast, "ultrafast" the faster mode of an account that offers
+// it. Only a member that is in the group is switched on.
+func (g *Group) SetMemberTier(id, tier string) {
 	g.Fast = slices.DeleteFunc(slices.Clone(g.Fast), func(x string) bool { return x == id })
-	if fast && slices.Contains(g.Members, id) {
+	g.Ultra = slices.DeleteFunc(slices.Clone(g.Ultra), func(x string) bool { return x == id })
+	if tier != "" && slices.Contains(g.Members, id) {
 		g.Fast = append(g.Fast, id)
+		if tier == "ultrafast" {
+			g.Ultra = append(g.Ultra, id)
+		}
 	}
 }
 
@@ -256,6 +296,11 @@ func (g *Group) RenameMember(from, to string) {
 	for i, f := range g.Fast {
 		if f == from {
 			g.Fast[i] = to
+		}
+	}
+	for i, f := range g.Ultra {
+		if f == from {
+			g.Ultra[i] = to
 		}
 	}
 	for i, p := range g.Placed {

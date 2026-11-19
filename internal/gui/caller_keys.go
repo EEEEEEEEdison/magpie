@@ -2,6 +2,7 @@ package gui
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/budget"
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/provider"
@@ -53,8 +55,9 @@ type keyMCPJSON struct {
 func withLimits(keys []access.Key) []keyRow {
 	now := time.Now()
 	out := make([]keyRow, 0, len(keys))
-	for _, k := range keys {
-		row := keyRow{Key: k, UsedAll: budget.All(k, now)}
+	all := budget.AllOf(keys, now)
+	for i, k := range keys {
+		row := keyRow{Key: k, UsedAll: all[i]}
 		if len(row.UsedAll) > 0 {
 			row.Used = &row.UsedAll[0]
 		}
@@ -74,6 +77,20 @@ func callerKeyRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"keys": withLimits(keys), "accountNames": provider.AccountNames(), "accountGroups": accountGroupsJSON()})
 	})
+	// the subscription accounts' windows a key's limit can follow
+	// (ljayic on X): each one's 5 hours, week or month, from the cards as
+	// last read; an account not read yet is read meanwhile, waited for a
+	// few seconds at most
+	mux.HandleFunc("GET /api/caller-keys/account-windows", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+		defer cancel()
+		out := provider.KeyWindows(ctx, time.Now())
+		if out == nil {
+			out = []provider.KeyWindow{}
+		}
+		writeJSON(w, map[string]any{"windows": out})
+	})
 	// the models a key may be held to (#882), and the accounts and keys
 	// (#905): the routing groups, then each provider's models, then its
 	// accounts and keys; a group the key names is its with every member
@@ -90,6 +107,31 @@ func callerKeyRoutes(mux *http.ServeMux) {
 				continue
 			}
 			out = append(out, keyModelJSON{ID: e.Provider.ID + "/" + e.Model, Name: cmp.Or(e.Name, e.Model), Provider: e.Provider.ID, ProviderName: cmp.Or(e.Provider.Name, e.Provider.ID)})
+		}
+		// the decision groups, after the chat groups: Catalog keeps them
+		// out as no agent chats with one, but the gateway gives a key
+		// naming one its models at /v1/systemone (serveDecisionGroup's
+		// groupGiven), so a key held to some models had no way to be let
+		// use one but All models (Kautism on Discord: a group of Clef and
+		// Jev, not in the key's list). Only those the gateway serves now:
+		// on, and the user's own while their groups are served.
+		groupsEnd := 0
+		for groupsEnd < len(out) && out[groupsEnd].Group {
+			groupsEnd++
+		}
+		for _, g := range provider.Groups() {
+			if g.Hidden || g.Disabled || !g.Decides() {
+				continue
+			}
+			if _, _, ok := provider.FindGroup(provider.GroupPrefix + g.ID); !ok {
+				continue
+			}
+			id := provider.GroupPrefix + g.ID
+			if slices.ContainsFunc(out, func(m keyModelJSON) bool { return strings.EqualFold(m.ID, id) }) {
+				continue
+			}
+			out = slices.Insert(out, groupsEnd, keyModelJSON{ID: id, Name: cmp.Or(g.Name, g.ID), Group: true, Decides: true})
+			groupsEnd++
 		}
 		// the models a routing group listing alone keeps out of the lists,
 		// each after its provider's: a key not given the group is listed
@@ -133,11 +175,49 @@ func callerKeyRoutes(mux *http.ServeMux) {
 			}
 			out = slices.Insert(out, at, m)
 		}
+		// the image and video models, which Catalog leaves out as agents
+		// don't chat with them: /v1/images and /v1/videos hold a key to its
+		// models as chat does (keyHolds), so a key held to some models had
+		// no way to be let draw but All models (aipha2025 on X)
+		for _, p := range provider.All() {
+			if !p.On() {
+				continue
+			}
+			var media []catalog.Model
+			media = append(media, gateway.Drawers(p)...)
+			media = append(media, gateway.Videomakers(p)...)
+			for _, e := range media {
+				id := p.ID + "/" + e.ID
+				if slices.ContainsFunc(out, func(m keyModelJSON) bool { return strings.EqualFold(m.ID, id) }) {
+					continue
+				}
+				m := keyModelJSON{ID: id, Name: cmp.Or(e.Name, e.ID), Provider: p.ID, ProviderName: cmp.Or(p.Name, p.ID)}
+				at := len(out)
+				for i := len(out) - 1; i >= 0; i-- {
+					if out[i].Provider == m.Provider {
+						at = i + 1
+						break
+					}
+				}
+				out = slices.Insert(out, at, m)
+			}
+		}
+		// a provider that serves no model now (a plugin still starting, a
+		// list not fetched yet) can still be allowed whole, <provider>/*,
+		// for the models it serves later
+		listed := map[string]bool{}
+		for _, m := range out {
+			listed[m.Provider] = true
+		}
+		empty := []keyModelJSON{}
 		for _, p := range provider.All() {
 			if !p.On() {
 				continue
 			}
 			name := cmp.Or(p.Name, p.ID)
+			if !listed[p.ID] {
+				empty = append(empty, keyModelJSON{ID: p.ID + "/*", Name: name, Provider: p.ID, ProviderName: name})
+			}
 			// an account by its stable id, kept through renames, shown by the
 			// name the user gave it, else who is signed in; a key by its
 			// fingerprint
@@ -147,7 +227,7 @@ func callerKeyRoutes(mux *http.ServeMux) {
 		}
 		// the account groups a key's accounts may name, "@<id>" or "!@<id>"
 		// (LeiWang_2000 on X), each with its accounts
-		writeJSON(w, map[string]any{"models": out, "accounts": accounts, "groups": accountGroupsJSON()})
+		writeJSON(w, map[string]any{"models": out, "accounts": accounts, "providers": empty, "groups": accountGroupsJSON()})
 	})
 	// the MCP servers and tools a key may be held to (wakaka on Discord):
 	// magpie's own, then the Library's, each with its tools by name

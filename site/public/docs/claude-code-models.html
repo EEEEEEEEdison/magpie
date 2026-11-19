@@ -106,6 +106,14 @@
     },
     {
      "@type": "Question",
+     "name": "Does Claude Code’s Code Mode work through magpie?",
+     "acceptedAnswer": {
+      "@type": "Answer",
+      "text": "No. Claude Code turns Code Mode on only when it talks to Anthropic’s API directly: with ANTHROPIC_BASE_URL pointing anywhere but api.anthropic.com, or with ANTHROPIC_AUTH_TOKEN set, it starts with the ordinary tools and says “it only works directly with the Anthropic API”. That is a check in Claude Code, and it holds for every model magpie serves, a Claude subscription’s or an Anthropic API key’s included. To use Code Mode, pick one of Claude Code’s own models in magpie so it goes straight to Anthropic, then start claude with CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1. Code Mode also needs the feature flags Claude Code downloads, so leave Claude Code’s telemetry on in magpie’s Agents page."
+     }
+    },
+    {
+     "@type": "Question",
      "name": "Can I use my Claude subscription and DeepSeek side by side?",
      "acceptedAnswer": {
       "@type": "Answer",
@@ -274,7 +282,7 @@ magpie claude codex/gpt-5.5</pre></div>
     </ul>
     <p>The routing modes are in <a href="/docs/start#routing">Get started</a>.</p>
 
-    <p><b>By provider:</b> <a href="/docs/deepseek">DeepSeek</a> · <a href="/docs/kimi">Kimi and Kimi Code</a> · <a href="/docs/glm">GLM Coding Plan</a> · <a href="/docs/qwen">Qwen</a> · <a href="/docs/minimax">MiniMax</a> · <a href="/docs/anthropic">Anthropic</a> · <a href="/docs/openai">OpenAI</a> · <a href="/docs/gemini">Gemini</a> · <a href="/docs/grok">Grok</a> · <a href="/docs/mistral">Mistral</a> · <a href="/docs/openrouter">OpenRouter</a> · <a href="/docs/copilot">GitHub Copilot</a> · <a href="/docs/ollama">Ollama</a></p>
+    <p><b>By provider:</b> <a href="/docs/deepseek">DeepSeek</a> · <a href="/docs/kimi">Kimi and Kimi Code</a> · <a href="/docs/glm">GLM Coding Plan</a> · <a href="/docs/volcengine">Volcengine Ark</a> · <a href="/docs/tencent-cloud">Tencent Cloud</a> · <a href="/docs/baidu-qianfan">Baidu Qianfan</a> · <a href="/docs/siliconflow">SiliconFlow</a> · <a href="/docs/modelscope">ModelScope</a> · <a href="/docs/huaweicloud">Huawei Cloud MaaS</a> · <a href="/docs/xiaomi-mimo">Xiaomi MiMo</a> · <a href="/docs/stepfun">StepFun</a> · <a href="/docs/longcat">LongCat</a> · <a href="/docs/qwen">Qwen</a> · <a href="/docs/minimax">MiniMax</a> · <a href="/docs/anthropic">Anthropic</a> · <a href="/docs/openai">OpenAI</a> · <a href="/docs/gemini">Gemini</a> · <a href="/docs/grok">Grok</a> · <a href="/docs/mistral">Mistral</a> · <a href="/docs/openrouter">OpenRouter</a> · <a href="/docs/copilot">GitHub Copilot</a> · <a href="/docs/ollama">Ollama</a></p>
 
     <h2 id="faq"><a class="anchor" href="#faq">FAQ</a></h2>
     <h3>Do I set <code>ANTHROPIC_BASE_URL</code> myself?</h3>
@@ -287,12 +295,14 @@ magpie claude codex/gpt-5.5</pre></div>
     <p>Yes, while Claude Code is on a model through magpie: the gateway runs with the app. <code>magpie daemon install</code> keeps it running as a service with no window.</p>
     <h3>Can I keep my claude.ai sign-in?</h3>
     <p>The Claude Code row has a sign-in setting. With <span class="ui">magpie’s key</span>, the default, Claude Code is signed out of claude.ai while it runs through magpie, so the plan limits in <code>/usage</code>, connectors, voice and <code>/teleport</code> are off. With <span class="ui">claude.ai</span> it keeps its sign-in, which magpie never passes on. Remote Control and ultrareview stay off either way.</p>
+    <h3>Does Claude Code’s Code Mode work through magpie?</h3>
+    <p>No. Claude Code turns Code Mode on only when it talks to Anthropic’s API directly: with <code>ANTHROPIC_BASE_URL</code> pointing anywhere but <code>api.anthropic.com</code>, or with <code>ANTHROPIC_AUTH_TOKEN</code> set, it starts with the ordinary tools and says “it only works directly with the Anthropic API”. That is a check in Claude Code, and it holds for every model magpie serves, a Claude subscription’s or an Anthropic API key’s included. To use Code Mode, pick one of Claude Code’s own models in magpie so it goes straight to Anthropic, then start <code>claude</code> with <code>CLAUDE_CODE_EXPERIMENTAL_CODE_MODE=1</code>. Code Mode also needs the feature flags Claude Code downloads, so leave Claude Code’s telemetry on in magpie’s Agents page.</p>
     <h3>Can I use my Claude subscription and DeepSeek side by side?</h3>
     <p>Yes. Sign in to Claude in magpie and its models are <code>claude/…</code> in the same picker. Requests on a Claude subscription run through the Claude Code installed on your computer.</p>
     <h3>How do I undo it?</h3>
     <p>Pick one of Claude Code’s own models in magpie, or run <code>magpie claude default</code>. What magpie wrote comes out, and what it replaced comes back.</p>
 
-    <p style="margin-top:48px">Using Codex too? See <a href="/docs/codex-models">Use any model in Codex</a>. Stuck? Ask on <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>.</p>
+    <p style="margin-top:48px">Using Codex too? See <a href="/docs/codex-models">Use any model in Codex</a>. On Claude Desktop? See <a href="/docs/claude-desktop">Claude Desktop on any model</a>. Stuck? Ask on <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>.</p>
   </article>
 </main>
 

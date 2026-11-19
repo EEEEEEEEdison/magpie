@@ -65,8 +65,8 @@ func TestWholeTurnSpeed(t *testing.T) {
 	for _, c := range []*rowChunk{&hiddenChunk, hiddenChunk.pack().unpack()} {
 		row := c.row(0)
 		n, w := row.Decode()
-		if !row.ReasoningHidden || n != 1500 || w != 15000 {
-			t.Fatal("cache lost hidden reasoning flag")
+		if !row.ReasoningHidden || row.FirstReasoning != 1000 || n != 1500 || w != 15000 {
+			t.Fatalf("cache lost sealed reasoning: %+v, %d/%d", row, n, w)
 		}
 	}
 	var sum Totals
@@ -85,7 +85,7 @@ func TestWholeTurnSpeed(t *testing.T) {
 func TestPricedRowKeepsReasoningEvidence(t *testing.T) {
 	visible := Record{Time: time.Now(), Provider: "deepseek", Model: "deepseek-chat", Output: 1500, Reasoning: 1400, Millis: 15000, TTFT: 1000, FirstReasoning: 1000, Flow: 12000, Status: 200}
 	toolOnly := Record{Time: time.Now(), Provider: "deepseek", Model: "deepseek-chat", Output: 120, Millis: 9000, TTFT: 1000, Flow: 7000, Status: 200}
-	sealed := visible
+	sealed := toolOnly
 	sealed.ReasoningHidden = true
 	for _, c := range []struct {
 		name   string

@@ -13,36 +13,46 @@ import (
 	"github.com/yetone/magpie/internal/usage"
 )
 
+// A reply's first sign of reasoning is seen in every protocol, as the
+// speed counts all its output from its first output of any kind
+// (usage.DecodeOf, Archivemylife on X): reasoning deltas paced over 100 ms
+// or more, a reasoning item's start, a thinking block's start, sealed
+// thinking. Deltas that came at once, a buffered burst, tell none, nor does
+// a summary (a Responses summary, a Gemini thought), written after some of
+// the reasoning it sums up (#1463).
 func TestReasoningSpeedEvidence(t *testing.T) {
 	thought := `data: {"choices":[{"delta":{"reasoning_content":"a thought"}}]}` + "\n\n"
 	for _, c := range []struct {
 		name   string
-		proto  provider.Protocol
-		event  string
-		hidden bool
+		events []string
+		paced  bool
 		want   bool
 	}{
-		{"chat", provider.Chat, thought, false, true},
-		{"anthropic", provider.Anthropic, `data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"a thought"}}` + "\n\n", false, true},
-		{"late Responses summary", provider.Responses, `data: {"type":"response.reasoning_summary_text.delta","delta":"a thought"}` + "\n\n", false, false},
-		{"translated hidden Responses", provider.Responses, thought, false, false},
-		{"translated redacted thinking", provider.Anthropic, thought, true, false},
-		{"Gemini summary", provider.Gemini, thought, false, false},
+		{"chat", []string{thought}, true, true},
+		{"anthropic", []string{`data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"a thought"}}` + "\n\n"}, true, true},
+		{"Responses summary", []string{`data: {"type":"response.reasoning_summary_text.delta","delta":"a thought"}` + "\n\n"}, true, false},
+		{"Gemini thought", []string{`data: {"candidates":[{"content":{"parts":[{"text":"a thought","thought":true}]}}]}` + "\n\n"}, true, false},
+		{"Responses reasoning item", []string{`data: {"type":"response.output_item.added","item":{"type":"reasoning","summary":[]}}` + "\n\n"}, false, true},
+		{"Anthropic thinking block", []string{`data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}` + "\n\n"}, false, true},
+		{"Anthropic redacted block", []string{`data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"sealed-test"}}` + "\n\n"}, false, true},
+		{"chat burst", []string{thought + thought}, false, false},
+		{"no reasoning", []string{`data: {"choices":[{"delta":{"content":"hi"}}]}` + "\n\n"}, true, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			f := firstToken{start: time.Now().Add(-time.Second), hidden: c.hidden}
-			f.see([]byte(c.event))
-			f.start = f.start.Add(-time.Second)
-			f.see([]byte(c.event))
-			if got := f.reasoningMs(c.proto) > 0; got != c.want {
+			f := firstToken{start: time.Now().Add(-time.Second)}
+			for _, ev := range c.events {
+				f.see([]byte(ev))
+			}
+			if c.paced {
+				f.start = f.start.Add(-time.Second)
+				for _, ev := range c.events {
+					f.see([]byte(ev))
+				}
+			}
+			if got := f.reasoningMs() > 0; got != c.want {
 				t.Fatalf("reasoning evidence=%v; want %v", got, c.want)
 			}
 		})
-	}
-	f := firstToken{start: time.Now().Add(-time.Second)}
-	f.see([]byte(thought + thought))
-	if f.reasoningMs(provider.Chat) != 0 {
-		t.Fatal("a buffered burst acquired reasoning timing")
 	}
 }
 
@@ -58,7 +68,9 @@ func TestReasoningSpeedThroughGateway(t *testing.T) {
 	for _, path := range []string{"/v1/chat/completions", "/v1/responses", "/v1/messages"} {
 		t.Run(path, func(t *testing.T) {
 			fresh(t)
-			up := httptest.NewServer(&paced{events: events, gap: 150 * time.Millisecond})
+			// each thought a gap after the agent had the one before (#5948)
+			rec := newHearing(0, "first thought", "second thought", "third thought")
+			up := httptest.NewServer(&paced{events: events, gap: 150 * time.Millisecond, heard: rec.heard})
 			t.Cleanup(up.Close)
 			if err := provider.Save(provider.Provider{ID: "fake", Name: "Fake", Chat: up.URL + "/v1", Key: "k", Models: []string{"m1"}}); err != nil {
 				t.Fatal(err)
@@ -68,7 +80,6 @@ func TestReasoningSpeedThroughGateway(t *testing.T) {
 				body = `{"model":"fake/m1","stream":true,"input":"hi"}`
 			}
 			s := New()
-			rec := httptest.NewRecorder()
 			s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", path, strings.NewReader(body)))
 			u := lastUsage(t)
 			r := lastRoute(s)
@@ -94,7 +105,7 @@ func TestReasoningSpeedThroughGateway(t *testing.T) {
 // stood in for by holding the sticks' save.
 func TestSpeedEndsWithTheReply(t *testing.T) {
 	events := []string{
-		`data: {"choices":[{"delta":{"reasoning_content":"first thought"}}]}`,
+		`~data: {"choices":[{"delta":{"reasoning_content":"first thought"}}]}`,
 		`~data: {"choices":[{"delta":{"reasoning_content":"second thought"}}]}`,
 		`~data: {"choices":[{"delta":{"reasoning_content":"third thought"}}]}`,
 		`~data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"check","arguments":"{}"}}]}}]}`,
@@ -103,13 +114,14 @@ func TestSpeedEndsWithTheReply(t *testing.T) {
 	}
 	const held = 2 * time.Second
 	fresh(t)
-	up := httptest.NewServer(&paced{events: events, gap: 150 * time.Millisecond})
+	// each thought a gap after the agent had the one before (#5948)
+	rec := newHearing(0, "first thought", "second thought", "third thought")
+	up := httptest.NewServer(&paced{events: events, gap: 150 * time.Millisecond, heard: rec.heard})
 	t.Cleanup(up.Close)
 	if err := provider.Save(provider.Provider{ID: "fake", Name: "Fake", Chat: up.URL + "/v1", Key: "k", Models: []string{"m1"}}); err != nil {
 		t.Fatal(err)
 	}
 	s := New()
-	rec := httptest.NewRecorder()
 	sticksSaving.Lock()
 	let := time.AfterFunc(held, sticksSaving.Unlock)
 	t.Cleanup(func() {
@@ -206,8 +218,8 @@ func TestMixedRedactedReasoning(t *testing.T) {
 			s.Handler().ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
 			row := lastUsage(t)
 			n, ms := row.Decode()
-			if w.Code != 200 || row.FirstReasoning != 0 || !row.ReasoningHidden || n != 120 || ms != row.Millis {
-				t.Fatalf("mixed sealed reasoning: %d %+v", w.Code, row)
+			if w.Code != 200 || row.FirstReasoning <= 0 || !row.ReasoningHidden || n != 120 || ms != row.Millis {
+				t.Fatalf("mixed sealed reasoning: %d %d/%d %+v", w.Code, n, ms, row)
 			}
 		})
 	}
@@ -228,7 +240,7 @@ func TestReasoningPacingEdges(t *testing.T) {
 			f.see(thought)
 			f.start = time.Now().Add(-f.reasoning - c.gap)
 			f.see(thought)
-			if got := f.reasoningMs(provider.Chat) > 0; got != c.want {
+			if got := f.reasoningMs() > 0; got != c.want {
 				t.Fatalf("paced=%v; want %v", got, c.want)
 			}
 		})
@@ -239,14 +251,15 @@ func TestReasoningPacingEdges(t *testing.T) {
 	f.see(thought)
 	f.start = f.start.Add(-time.Second)
 	f.see(thought)
-	if f.reasoningMs(provider.Chat) != 0 {
-		t.Fatal("a tool-first turn acquired reasoning timing")
+	// reasoning after a tool call: the window still starts at the tool's
+	if got := f.reasoningMs(); got > 0 && got < f.first.Milliseconds() {
+		t.Fatalf("a tool-first turn's window starts at its later reasoning: %d < %d", got, f.first.Milliseconds())
 	}
 	// Two writes after a long quiet start still form a burst below the decode minimum.
 	f = firstToken{start: time.Now().Add(-14 * time.Second)}
 	f.see(thought)
 	f.see(thought)
-	if f.reasoningMs(provider.Chat) != 0 {
+	if f.reasoningMs() != 0 {
 		t.Fatal("buffered reasoning acquired timing")
 	}
 }
@@ -261,7 +274,7 @@ func TestSlowReleasedReasoningIsUntimed(t *testing.T) {
 		f.see(thought)
 	}
 	end := first.Milliseconds() + 10250
-	n, w := usage.DecodeOf(500, 450, end, first.Milliseconds(), 0, f.flowFor(450), f.reasoningMs(provider.Chat))
+	n, w := usage.DecodeOf(500, 450, end, first.Milliseconds(), 0, f.flowFor(450), f.reasoningMs())
 	if n != 0 || w != 0 {
 		t.Fatalf("held reasoning inflated speed: %d/%d flow=%d", n, w, f.flowFor(450))
 	}
@@ -278,7 +291,7 @@ func TestEncryptedReasoningWithoutTokenDetails(t *testing.T) {
 func TestGeminiSummaryWithoutThoughtCount(t *testing.T) {
 	f := firstToken{start: time.Now().Add(-time.Second)}
 	f.see([]byte(`data: {"candidates":[{"content":{"parts":[{"text":"visible summary","thought":true}]}}]}` + "\n\n"))
-	if !f.hidesReasoning(provider.Gemini, 0) || !f.hidesReasoning(provider.Gemini, 7) || f.reasoningMs(provider.Gemini) != 0 {
+	if !f.hidesReasoning(provider.Gemini, 0) || !f.hidesReasoning(provider.Gemini, 7) || f.reasoningMs() != 0 {
 		t.Fatal("Gemini summary timed without its hidden thought count")
 	}
 }
@@ -296,10 +309,12 @@ func TestCodexBackendHiddenReasoningWithoutCount(t *testing.T) {
 	if code, body := codexPost(t, `{"model":"gpt-5.5","stream":true,"input":"hi"}`); code != 200 {
 		t.Fatalf("%d %s", code, body)
 	}
+	// its reasoning has no count of its own, but its output holds it, and
+	// the stream showed when it began: all 120 are timed from there
 	r := lastUsage(t)
 	n, ms := r.Decode()
-	if !r.ReasoningHidden || n != 120 || ms != r.Millis {
-		t.Fatalf("Codex hidden reasoning wasn't timed by its whole turn: %+v", r)
+	if !r.ReasoningHidden || r.FirstReasoning <= 0 || n != 120 || ms != r.Millis {
+		t.Fatalf("Codex sealed reasoning wasn't timed by its whole turn: %d/%d %+v", n, ms, r)
 	}
 }
 
@@ -339,8 +354,9 @@ func TestMultipleVisibleReasoningBlocks(t *testing.T) {
 		f.start = time.Now().Add(-time.Second - time.Duration(i)*150*time.Millisecond)
 		f.see([]byte(ev + "\n\n"))
 	}
-	if first := f.reasoningMs(provider.Anthropic); first <= 0 || first != f.first.Milliseconds() {
-		t.Fatal("multiple visible blocks lost their first reasoning time")
+	// from the first block's start, when the model began to think
+	if first := f.reasoningMs(); first < 1000 || first >= 1150 || first > f.first.Milliseconds() {
+		t.Fatalf("multiple visible blocks lost their first reasoning time: %d (first content %d)", first, f.first.Milliseconds())
 	}
 }
 
@@ -365,14 +381,22 @@ func TestLiveVisibleReasoningFixture(t *testing.T) {
 	if err = json.Unmarshal(b, &sample); err != nil {
 		t.Fatal(err)
 	}
+	// see reads the wall clock after start is set, so the first event lands
+	// at its at_ms plus however long that took: a millisecond more on a busy
+	// machine (6790/6789 on macOS CI), so the bound is what really passed.
 	f := firstToken{}
-	for _, e := range sample.Events {
+	var slack int64
+	for i, e := range sample.Events {
 		delta, _ := json.Marshal(e.Delta)
-		f.start = time.Now().Add(-time.Duration(e.At) * time.Millisecond)
+		set := time.Now()
+		f.start = set.Add(-time.Duration(e.At) * time.Millisecond)
 		f.see([]byte(`data: {"choices":[{"delta":{"reasoning_content":` + string(delta) + `}}]}` + "\n\n"))
+		if i == 0 {
+			slack = time.Since(set).Milliseconds() + 1
+		}
 	}
-	if f.reasoningMs(provider.Chat) != sample.Events[0].At {
-		t.Fatalf("live reasoning fixture lost its start: %d/%d", f.reasoningMs(provider.Chat), sample.Events[0].At)
+	if got, at := f.reasoningMs(), sample.Events[0].At; got < at || got > at+slack {
+		t.Fatalf("live reasoning fixture lost its start: %d/%d (+%d ms passing)", got, at, slack)
 	}
 	n, ms := usage.DecodeOf(sample.Record.Out, sample.Record.Reasoning, sample.Record.Ms, sample.Record.TTFT, 0, sample.Record.Flow, sample.First)
 	if n != 0 || ms != 0 {
@@ -381,5 +405,62 @@ func TestLiveVisibleReasoningFixture(t *testing.T) {
 	// without its flow, the whole turn: 76 tokens over 7.5 s
 	if n, ms := usage.DecodeOf(sample.Record.Out, sample.Record.Reasoning, sample.Record.Ms, sample.Record.TTFT, 0, 0, sample.First); n != 76 || ms != 7518 {
 		t.Fatalf("live tool turn speed %d/%d; want 76/7518", n, ms)
+	}
+}
+
+// A Codex turn that wrote a preamble, reasoned, then called a tool
+// (Archivemylife on X, gpt-6.1-sol at service_tier priority): its speed is
+// all its output, the reasoning and the call's arguments too, over the time
+// from its first output to its end, as the vendor's usage counts it. Counted
+// as its answer alone after its last reasoning, it read 630 tokens in about
+// 1.6 s, near 390 tok/s, though the turn wrote 1,239 tokens over 18 s.
+func TestCodexPreambleThenReasoningTellsSpeed(t *testing.T) {
+	var sample struct {
+		Record struct {
+			Out       int   `json:"out"`
+			Reasoning int   `json:"reasoning"`
+			Ms        int64 `json:"ms"`
+		} `json:"record"`
+		Events []struct {
+			At   int64           `json:"at_ms"`
+			Data json.RawMessage `json:"data"`
+		} `json:"events"`
+	}
+	b, err := os.ReadFile("testdata/codex-preamble-reasoning-tool.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(b, &sample); err != nil {
+		t.Fatal(err)
+	}
+	f := firstToken{}
+	var reasoned int64 // the reasoning item's start, as it came
+	for _, e := range sample.Events {
+		if reasoned == 0 && strings.Contains(string(e.Data), `"type":"reasoning"`) {
+			reasoned = e.At
+		}
+		f.start = time.Now().Add(-time.Duration(e.At) * time.Millisecond)
+		f.see([]byte("data: " + string(e.Data) + "\n\n"))
+	}
+	rec := sample.Record
+	ttft, text := f.ms()
+	if !f.hidesReasoning(provider.Responses, rec.Reasoning) {
+		t.Fatal("the reasoning after the preamble was not seen")
+	}
+	think := f.reasoningMs()
+	if think < reasoned || think > reasoned+50 {
+		t.Fatalf("reasoning seen from %d ms; want the reasoning item's start, %d", think, reasoned)
+	}
+	n, w := usage.DecodeOf(rec.Out, rec.Reasoning, rec.Ms, ttft, text, f.flowFor(rec.Reasoning), think)
+	if n != rec.Out || w < rec.Ms-ttft-50 || w > rec.Ms-ttft {
+		t.Fatalf("speed counted %d/%d; want all %d tokens from the first output, %d ms (ttft %d, text %d, flow %d)", n, w, rec.Out, rec.Ms-ttft, ttft, text, f.flowFor(rec.Reasoning))
+	}
+	// 1,239 tokens over about 18.4 s
+	if s := float64(n) / (float64(w) / 1000); s < 55 || s > 80 {
+		t.Fatalf("speed %.0f tok/s", s)
+	}
+	row := usage.Record{Output: rec.Out, Reasoning: rec.Reasoning, Millis: rec.Ms, TTFT: ttft, FirstText: text, Flow: f.flowFor(rec.Reasoning), FirstReasoning: think, ReasoningHidden: true, Status: 200}
+	if rn, rw := row.Decode(); rn != n || rw != w {
+		t.Fatalf("the row counts %d/%d, the stream %d/%d", rn, rw, n, w)
 	}
 }

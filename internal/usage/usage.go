@@ -62,6 +62,13 @@ type Record struct {
 	// vendor's own bill. Neither is in a record written before they were.
 	Requested string `json:"req,omitempty"`
 	Served    string `json:"served,omitempty"`
+	// Wire is the model id the request went out to the vendor under, when
+	// it is another than Model: a name the user gave the model upstream
+	// (ModelWires), or the variant a plugin picked for the effort, which
+	// the plugin says (provider.SentModelHeader) — Antigravity's
+	// gemini-…-high for gemini-… at high. "" when it went as Model, and in
+	// a record written before it was kept.
+	Wire string `json:"wire,omitempty"`
 	// Upstream: the provider an aggregator (OpenRouter …) said answered
 	// behind it — DeepInfra, Novita — when its reply named one
 	Upstream string `json:"upstream,omitempty"`
@@ -113,7 +120,7 @@ type Record struct {
 	// Compaction is Codex's explicit native marker. Nil means no matching
 	// native Codex call established whether a gateway row compacted.
 	Compaction *bool `json:"compaction,omitempty"`
-	// FirstReasoning is the start of paced visible reasoning, absent for hidden reasoning.
+	// FirstReasoning: ms to the reply's first sign of reasoning, streamed or sealed (a reasoning delta, a reasoning item's or thinking block's start); 0 for none.
 	FirstReasoning int64 `json:"first_reasoning_ms,omitempty"`
 	// ReasoningHidden: the reply reasoned and its stream doesn't tell how
 	// much — sealed or summarised, or streamed with no reasoning count in
@@ -161,7 +168,12 @@ type Record struct {
 	RequestID string `json:"rid,omitempty"`
 	// ResponseID is the response object ID actually sent to the client.
 	ResponseID string `json:"response_id,omitempty"`
-	Endpoint   string `json:"ep,omitempty"`
+	// MessageID is the id the agent's own session file gives the call's
+	// message (Claude Code's msg_…), on a call read from such a file. Not
+	// persisted: it is read back with the file, and told by the request
+	// feed (FeedOriginals).
+	MessageID string `json:"-"`
+	Endpoint  string `json:"ep,omitempty"`
 	// Stop is why the upstream said its reply ended, in its own words
 	// (stop_reason, finish_reason …): "" when it said none, a stream that
 	// just stopped. Told apart by it, a reply that ended too soon is the
@@ -224,6 +236,11 @@ type Record struct {
 	// what ImageFilesSaved was saved on (matrix0487 on Discord). None in a
 	// row from before it was kept.
 	ImageFiles int `json:"image_files,omitempty"`
+	// UpParts is what UpBytes was made of, where the body was read to
+	// know (UpParts); nil where it wasn't: a socket's delta, a request
+	// whose images went by file, a row from before it was kept
+	// (theforeveriris on X: 8.6 GB up from plain-text projects).
+	UpParts *UpParts `json:"up_parts,omitempty"`
 	// Socket says the request went over the Responses WebSocket, its
 	// last try (provider.Socket, matrix0487 on Discord): UpBytes is then
 	// what the socket was sent, a delta on a kept socket.
@@ -609,6 +626,27 @@ type Totals struct {
 	UpBytes         int64 `json:"up_bytes,omitempty"`
 	DownBytes       int64 `json:"down_bytes,omitempty"`
 	ImageFilesSaved int64 `json:"image_files_saved,omitempty"`
+	// UpCalls is how many rows sent any bytes up, what UpBytes is spread
+	// over; UpMeasured the bytes of those whose parts were read
+	// (Record.UpParts), and UpSystem, UpTools and UpImages those parts
+	// summed: the conversation is UpMeasured less the three
+	UpCalls    int   `json:"up_calls,omitempty"`
+	UpMeasured int64 `json:"up_measured,omitempty"`
+	UpSystem   int64 `json:"up_system,omitempty"`
+	UpTools    int64 `json:"up_tools,omitempty"`
+	UpImages   int64 `json:"up_images,omitempty"`
+}
+
+// UpParts is a request's bytes up by what they were: the agent's own
+// prompt and instructions (system prompt, skills, memory), the tools'
+// definitions, and the images and documents it sent inline, each scaled
+// to the bytes that went up (Record.UpBytes). The rest is the
+// conversation: the messages, the tool calls and their results, which an
+// agent sends again whole on every request.
+type UpParts struct {
+	System int `json:"system,omitempty"`
+	Tools  int `json:"tools,omitempty"`
+	Images int `json:"images,omitempty"`
 }
 
 // addBytes adds r's bytes on the wire (Totals.UpBytes …).
@@ -616,6 +654,27 @@ func (t *Totals) addBytes(r *Record) {
 	t.UpBytes += int64(r.UpBytes)
 	t.DownBytes += int64(r.DownBytes)
 	t.ImageFilesSaved += int64(r.ImageFilesSaved)
+	if r.UpBytes > 0 {
+		t.UpCalls++
+		if u := r.UpParts; u != nil {
+			t.UpMeasured += int64(r.UpBytes)
+			t.UpSystem += int64(u.System)
+			t.UpTools += int64(u.Tools)
+			t.UpImages += int64(u.Images)
+		}
+	}
+}
+
+// plusBytes adds what addBytes counted of another sum.
+func (t *Totals) plusBytes(d *Totals) {
+	t.UpBytes += d.UpBytes
+	t.DownBytes += d.DownBytes
+	t.ImageFilesSaved += d.ImageFilesSaved
+	t.UpCalls += d.UpCalls
+	t.UpMeasured += d.UpMeasured
+	t.UpSystem += d.UpSystem
+	t.UpTools += d.UpTools
+	t.UpImages += d.UpImages
 }
 
 // Tokens is what went in and out, excluding cache traffic.
@@ -873,6 +932,13 @@ func (t *Totals) count(r Record) {
 // failed row that no later try took over from.
 func (r Record) LostRequest() bool { return r.Failed() && !r.HandedOn }
 
+// FailedTry is whether a try of r's request failed: r failed (whether the
+// agent got the error or a later try took over), or r answered after a
+// try that failed first. What Usage's Failed filter keeps: Routing shows
+// those tries failed, and a request a fallback answered had none of its
+// own failures listed under Failed (maohy915 on X).
+func (r Record) FailedTry() bool { return r.Failed() || r.RetriedRequest() }
+
 // RetriedRequest is whether r ends a request that was answered after a try
 // that failed first (not one its agent canceled after a failed try).
 func (r Record) RetriedRequest() bool { return !r.HandedOn && r.Answered() && r.Tries > 1 }
@@ -895,6 +961,10 @@ type Group struct {
 	Host string `json:"host,omitempty"`
 	// Agent is the agent a session is of (sessions only).
 	Agent string `json:"agent,omitempty"`
+	// Last is when the group's newest call in the period was made (agents
+	// only): the Usage page folds a small client idle for days into one
+	// "Other" row (WJaunita45604 on X: dozens of test clients).
+	Last time.Time `json:"last,omitzero"`
 	Totals
 	// Own is the share of these calls magpie made by itself (Record.ByMagpie):
 	// a routing classifier's, a web search's or an image description's,
@@ -993,7 +1063,7 @@ type Summary struct {
 // Summarize caches the four periods over an indexed log snapshot. Callers
 // receive their own result slices, without retaining historical Records.
 func Summarize(p Period) Summary {
-	return indexedSummary(p, Clock())
+	return indexedSummary(p, localNow())
 }
 
 func summarize(p Period, now time.Time, recs []Record) Summary {

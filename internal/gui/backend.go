@@ -29,9 +29,16 @@ var serving sync.WaitGroup
 // stopServing stops this process's gateway taking requests and returns
 // once those in flight have finished.
 func stopServing() {
+	gatewayMu.Lock()
 	endBackend()
+	gatewayMu.Unlock()
 	serving.Wait()
 }
+
+// StopServing is stopServing, for a signal Wails doesn't handle (SIGHUP:
+// the terminal the app was started from closing), so the gateway drains and
+// saves its idle Claude sessions before magpie dies of it.
+func StopServing() { stopServing() }
 
 // startBackend starts what serves the page and the agents: the gateway,
 // unless another magpie has it (then that one serves and this one only
@@ -136,6 +143,9 @@ func serveGateway() *gateway.Server {
 }
 
 func serveGatewayLocked() *gateway.Server {
+	if backendCtx.Err() != nil {
+		return nil
+	}
 	// paused by the user (gatewaypause.go): nothing serves it until resumed
 	if pausedNow() {
 		return nil
@@ -165,12 +175,17 @@ func serveGatewayLocked() *gateway.Server {
 		if gateway.Taken() {
 			if !takenSaid.Swap(true) {
 				log.Printf("gateway: %s is taken but doesn't answer as magpie yet; this magpie serves the gateway once it is free", gateway.URL())
+				// who has it, when that can be read: the page says it too
+				if h, ok := gateway.NoteHeld(); ok {
+					log.Printf("gateway: %s", h.Sentence())
+				}
 			}
 			return nil
 		}
 	}
 	takenSaid.Store(false)
 	gatewayOther.Store(nil)
+	gateway.ClearHeld()
 	gw := gateway.New()
 	served.Store(gw)
 	serving.Add(1)

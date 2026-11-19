@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/tidwall/gjson"
+
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -32,6 +35,42 @@ func codexTiered(r *http.Request, body []byte, model string) []byte {
 		set = ""
 	}
 	return withServiceTier(body, set)
+}
+
+// keyTiered is body with the service tier the gateway key behind r is set
+// to (access.Key.ServiceTier, JackyFill on X) in place of the one the client
+// asked, for any OpenAI-API request. "" follows the request. A bare model
+// that no account lists Ultrafast on is asked for priority instead, as
+// codexTiered does. Whether the tier is then sent is the providers' own
+// say (serve, fits), so a vendor without service tiers never sees it.
+func keyTiered(r *http.Request, body []byte, model string) []byte {
+	set := access.Caller(r.Context()).ServiceTier
+	if set == "" {
+		return body
+	}
+	if set == "ultrafast" && !strings.Contains(model, "/") && !provider.UltraModels()[model] {
+		set = "priority"
+	}
+	if set == settings.CodexTierStandard {
+		set = ""
+	}
+	return withServiceTier(body, set)
+}
+
+// fastTier is body with a service_tier of "fast" as "priority", every
+// other byte as it came. "fast" is Codex's own name for its Fast mode,
+// which Codex sends as "priority" and nothing else
+// (ServiceTier::from_request_value in openai/codex's config_types.rs,
+// which reads "fast" and "priority" alike as Fast): a client that writes
+// Codex's word (Archivemylife on X, gpt-6.1-sol on a Codex account) had
+// it dropped by the ChatGPT backend's filter (codexBody) and by every
+// check of the IR's Fast, which go by "priority". Any other tier, and a
+// body with none, goes as it came.
+func fastTier(body []byte) []byte {
+	if t := topValue(body, tierField); t.Type != gjson.String || t.Str != "fast" {
+		return body
+	}
+	return withServiceTier(body, "priority")
 }
 
 // withServiceTier is body with its top-level service_tier set to tier, or

@@ -40,22 +40,22 @@ func TestCopilotFolderFromAnIDEPluginIsNotTheCLI(t *testing.T) {
 	bin := t.TempDir()
 	t.Setenv("PATH", bin)
 	home := t.TempDir()
-	a := copilot(home)
+	a := copilot(home, filepath.Join(home, ".config"))
 	for _, f := range []string{"ide/.registry/1.jsonl", "instructions/a.md", "prompts/b.md", "agents/c.agent.md", "hooks/h.json"} {
 		writeAt(t, filepath.Join(a.Dir, f), "{}")
 	}
-	if copilot(home).Detected() {
+	if copilot(home, filepath.Join(home, ".config")).Detected() {
 		t.Errorf("a ~/.copilot holding only the JetBrains plugin's folders is taken for the Copilot CLI")
 	}
 	command := ideCLI(t, bin, "copilot")
-	if !copilot(home).Detected() {
+	if !copilot(home, filepath.Join(home, ".config")).Detected() {
 		t.Error("the copilot command on PATH no longer finds the Copilot CLI")
 	}
 	if err := os.Remove(command); err != nil {
 		t.Fatal(err)
 	}
 	writeAt(t, a.Path, `{"model":"auto"}`)
-	if !copilot(home).Detected() {
+	if !copilot(home, filepath.Join(home, ".config")).Detected() {
 		t.Error("~/.copilot/settings.json no longer finds the Copilot CLI")
 	}
 }
