@@ -37,7 +37,8 @@ const groupUsage = `usage:
                                           id (what agents pick it as: id=gpt-6-astra drops auto-; the groups
                                           it is in follow; an agent set to the old id needs setting again),
                                           effort=auto (the classifier picks each turn's reasoning; needs classifier=),
-                                          effort=agent (the agent's again), classifier=<provider/model>|group/<id>,
+                                          effort=agent (the agent's again), classifier=<provider/model>|group/<id>
+                                          (or several, a,b: b asked when a can't answer),
                                           intent-sure=<0…1> (how sure the classifier must be of an intent for it
                                           to count; 0 takes its likeliest however unsure, "none of these" never
                                           counting; empty is the 0.4 groups have always asked),
@@ -145,6 +146,7 @@ const groupUsage = `usage:
        magpie group set deepseek-anywhere routing=cheap  # the provider it costs least on now first (DeepSeek's off-peak hours)
        magpie group set free-pool routing=drain          # one account until it is used up, then the next, never back
        magpie group set checkins routing=expiring        # free quota first, the soonest to expire first; paid only when none is left
+       magpie group set mixed routing=fit                # the smallest context window that holds the request first; the big ones kept for long requests
        magpie group pick opus-anywhere copilot/claude-opus-5.5
        magpie claude group/opus-anywhere`
 
@@ -165,6 +167,7 @@ var routingNames = []struct {
 	{provider.Cheapest, "cheap", []string{"cheapest", "cheapest-first", "price", "cost"}},
 	{provider.Drain, "drain", []string{"until-used-up", "use-up", "sticky"}},
 	{provider.FreeExpiring, "expiring", []string{"free-expiring", "free-expiry", "free-soonest", "soonest-free"}},
+	{provider.SmallFirst, "fit", []string{"small-first", "smallest-first", "small-context-first", "context"}},
 	{provider.Manual, "manual", []string{"pick", "picked", "pinned"}},
 }
 
@@ -561,8 +564,9 @@ func applyGroupPairs(g *provider.Group, pairs []string, resolve func(string) (st
 			default:
 				err = fmt.Errorf("effort=auto (the classifier picks each turn's) or effort=agent (the agent's), not %q", v)
 			}
-		case "classifier", "classify":
-			g.Classifier = strings.TrimPrefix(strings.TrimSpace(v), "magpie/")
+		case "classifier", "classify", "classifiers":
+			// classifier=a,b: a first, b when a can't answer
+			g.SetClassifiers(strings.Split(v, ","))
 		case "intent-sure", "intentsure":
 			// how sure the classifier must be of an intent for it to count
 			// (#5101): 0 takes its likeliest however unsure, "none of
@@ -993,7 +997,7 @@ func memberLabel(id string, names map[string]provider.Entry) (string, bool) {
 		return "", false
 	}
 	model, effort := provider.MemberEffort(id)
-	if e, ok := names[model]; ok {
+	if e, ok := servedEntry(names, model); ok {
 		n := e.Name
 		if n == "" {
 			n = e.Model
@@ -1038,6 +1042,25 @@ func catalogByID() map[string]provider.Entry {
 		}
 	}
 	return out
+}
+
+// servedEntry is the served model a member names: one saved in another
+// case than its provider lists the model by is that model, as the gateway
+// takes it (provider's listedSpelling; @CHENGJIAHEGOXIS on X:
+// deepseek-agents/DeepSeek-V4-Pro read "not served").
+func servedEntry(names map[string]provider.Entry, model string) (provider.Entry, bool) {
+	if e, ok := names[model]; ok {
+		return e, true
+	}
+	pid, _, _ := strings.Cut(model, "/")
+	found := "" // the first spelling, so two of one model read the same each time
+	for id := range names {
+		if strings.HasPrefix(id, pid+"/") && strings.EqualFold(id, model) && (found == "" || id < found) {
+			found = id
+		}
+	}
+	e, ok := names[found]
+	return e, ok && found != ""
 }
 
 // groups: `magpie groups`
@@ -1142,7 +1165,12 @@ func groups() error {
 	names, uses := catalogByID(), groupUses()
 	for _, e := range provider.Served() {
 		if e.Group != "" {
-			names[e.ID] = e // a group in a group is served when it is
+			// a group in a group is served when it is. The catalog lists a
+			// found group by its public auto/<model>, while a group's
+			// members keep group/auto-<slug> (Will on Discord: a group of
+			// found groups read each "not served", "no member ready")
+			names[e.ID] = e
+			names[provider.GroupPrefix+e.Group] = e
 		}
 	}
 	type row struct{ name, id, how, members, uses, note string }
@@ -1167,7 +1195,7 @@ func groups() error {
 		var ms []string
 		for _, id := range g.Members {
 			model, _ := provider.MemberEffort(id)
-			served := names[model].ID != ""
+			_, served := servedEntry(names, model)
 			picked := g.Routing == provider.Manual && id == g.Picked()
 			if served && (picked || g.Routing != provider.Manual) {
 				ready = true
@@ -1316,7 +1344,7 @@ func showGroup(g provider.Group) error {
 		if !slices.ContainsFunc(g.Rules, func(r provider.Rule) bool { return r.Intent != "" }) {
 			what = "  rates how hard each turn is"
 		}
-		kv("classifier", g.Classifier+muted.Render(what))
+		kv("classifier", strings.Join(g.Classifiers(), ", ")+muted.Render(what))
 	}
 	if g.IntentSure != nil {
 		kv("intent-sure", fmt.Sprintf("%g", *g.IntentSure)+muted.Render("  how sure the classifier must be of an intent for it to count; 0 takes its likeliest"))
@@ -1361,7 +1389,7 @@ func templateCmd(rest []string) error {
 			}
 			fmt.Println("  " + strings.Join(tp.Group.Members, " → "))
 			if tp.Group.Classifier != "" {
-				fmt.Println("  " + muted.Render("classifier "+tp.Group.Classifier))
+				fmt.Println("  " + muted.Render("classifier "+strings.Join(tp.Group.Classifiers(), ", ")))
 			}
 		}
 		fmt.Println(muted.Render("magpie group template <kind> [name] adds one"))

@@ -1,7 +1,10 @@
 package usage
 
 import (
+	"encoding/json"
 	"math"
+	"math/rand/v2"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -25,7 +28,7 @@ func TestModelSpeedRankIsTheMedianOfFairRequests(t *testing.T) {
 		return r
 	}
 	recs := []Record{
-		// gpt: 40, 50, 60 tok/s and one burst of 5,000; first tokens 2, 3, 4, 1 s
+		// gpt: about 34, 38, 41 and 1,429 tok/s over the whole turns; first tokens 2, 3, 4, 1 s
 		call("a", "gpt", 500, 2000, 14500, nil),
 		call("a", "gpt", 500, 3000, 13000, nil),
 		call("a", "gpt", 500, 4000, 12333, nil),
@@ -36,7 +39,7 @@ func TestModelSpeedRankIsTheMedianOfFairRequests(t *testing.T) {
 		call("a", "gpt", 500, 0, 20000, nil),
 		call("a", "gpt", 500, 100, 20000, func(r *Record) { r.Rejected = true }),
 		// a model whose replies came in a burst: a first token, no speed
-		call("b", "burst", 200, 500, 550, nil),
+		call("b", "burst", 200, 500, 550, func(r *Record) { r.Flow = 50 }),
 		// the fastest
 		call("b", "quick", 800, 300, 3300, nil),
 	}
@@ -59,11 +62,11 @@ func TestModelSpeedRankIsTheMedianOfFairRequests(t *testing.T) {
 			if len(got) != 3 || got[0].Model != "quick" || got[1].Model != "gpt" || got[2].Model != "burst" {
 				t.Fatalf("ranked %+v, want quick, gpt, burst", got)
 			}
-			if q := got[0]; offBin(q.Speed, 266.7) || offBin(float64(q.TTFT), 300) || q.Requests != 1 {
+			if q := got[0]; offBin(q.Speed, 800/3.3) || offBin(float64(q.TTFT), 300) || q.Requests != 1 {
 				t.Fatalf("quick: %+v", q)
 			}
-			// median of 40, 50, 60.002 and 5,000; of 1, 2, 3 and 4 s
-			if g := got[1]; offBin(g.Speed, 55) || offBin(float64(g.TTFT), 2500) || g.Requests != 4 || g.SpeedN != 4 {
+			// The middle speeds are those of the 13 s and 12.333 s turns.
+			if g := got[1]; offBin(g.Speed, (500.0/13+500/12.333)/2) || offBin(float64(g.TTFT), 2500) || g.Requests != 4 || g.SpeedN != 4 {
 				t.Fatalf("gpt: %+v", g)
 			}
 			if b := got[2]; b.Speed != 0 || b.SpeedN != 0 || offBin(float64(b.TTFT), 500) || b.Requests != 1 {
@@ -105,14 +108,14 @@ func TestModelSpeedRankMergesAndSurvivesTheFile(t *testing.T) {
 		return &Row{Record: Record{Model: "gpt", Output: out, TTFT: ttft, Millis: ms, Status: 200}}
 	}
 	a, b := speedRank{}, speedRank{}
-	a.add(row(500, 1000, 11000)) // 50 tok/s
-	b.add(row(500, 3000, 13000)) // 50 tok/s, a slower start
-	b.add(row(500, 2000, 7000))  // 100 tok/s
+	a.add(row(500, 1000, 11000)) // 500 tokens in 11 s
+	b.add(row(500, 3000, 13000)) // 500 tokens in 13 s, a slower start
+	b.add(row(500, 2000, 7000))  // 500 tokens in 7 s
 	part := addCells(&chunkPart{speeds: a}, &chunkPart{speeds: b})
 	disk := pageDiskPart(pageDiskEntry{Speeds: part.speeds})
 	for name, rank := range map[string]speedRank{"merged": part.speeds, "file": disk.speeds} {
 		got := rank.result()
-		if len(got) != 1 || got[0].Requests != 3 || got[0].SpeedN != 3 || offBin(got[0].Speed, 50) || offBin(float64(got[0].TTFT), 2000) {
+		if len(got) != 1 || got[0].Requests != 3 || got[0].SpeedN != 3 || offBin(got[0].Speed, 500.0/11) || offBin(float64(got[0].TTFT), 2000) {
 			t.Fatalf("%s: %+v", name, got)
 		}
 	}
@@ -136,10 +139,10 @@ func TestModelSpeedRankByProvider(t *testing.T) {
 		return r
 	}
 	rows := []Row{
-		// fast: 100 tok/s, first token 1 s, twice
+		// fast: 500 tokens in 6 s, first token 1 s, twice
 		call("fast", 1000, 6000, nil),
 		call("fast", 1000, 6000, nil),
-		// slow: 25 tok/s, first token 4 s; one answer from another model,
+		// slow: 500 tokens in 24 s, first token 4 s; one answer from another model,
 		// one failed, one handed on, one canceled, one rejected
 		call("slow", 4000, 24000, nil),
 		call("slow", 4000, 24000, func(r *Row) { r.Served, r.Swapped = "claude-haiku-9", true }),
@@ -173,10 +176,10 @@ func TestModelSpeedRankByProvider(t *testing.T) {
 				t.Fatalf("by provider: %+v", got)
 			}
 			f, s, d := got[0], got[1], got[2]
-			if f.Provider != "fast" || f.Model != "gpt" || f.Tries != 2 || f.Failed != 0 || f.Swapped != 0 || f.Requests != 2 || offBin(f.Speed, 100) || offBin(float64(f.TTFT), 1000) {
+			if f.Provider != "fast" || f.Model != "gpt" || f.Tries != 2 || f.Failed != 0 || f.Swapped != 0 || f.Requests != 2 || offBin(f.Speed, 500.0/6) || offBin(float64(f.TTFT), 1000) {
 				t.Fatalf("fast first: %+v", f)
 			}
-			if s.Provider != "slow" || s.Tries != 4 || s.Failed != 2 || s.Swapped != 1 || s.Requests != 2 || offBin(s.Speed, 25) || offBin(float64(s.TTFT), 4000) {
+			if s.Provider != "slow" || s.Tries != 4 || s.Failed != 2 || s.Swapped != 1 || s.Requests != 2 || offBin(s.Speed, 500.0/24) || offBin(float64(s.TTFT), 4000) {
 				t.Fatalf("slow: %+v", s)
 			}
 			if d.Provider != "down" || d.Model != "gone" || d.Tries != 1 || d.Failed != 1 || d.Requests != 0 || d.Speed != 0 {
@@ -197,5 +200,67 @@ func TestModelSpeedRankByProvider(t *testing.T) {
 		if got := rank.providers(); len(got) != 1 || got[0].Tries != 2 || got[0].Failed != 1 || got[0].Swapped != 1 || got[0].Requests != 1 {
 			t.Fatalf("%s: %+v", name, got)
 		}
+	}
+}
+
+// A histogram kept as bins in order counts, merges and takes its median
+// as the map of bin to count it replaced did, and reads the page file that
+// map wrote: the same JSON object.
+func TestSpeedHistIsTheMap(t *testing.T) {
+	median := func(m map[uint16]uint32) float64 {
+		var h speedHist
+		for b, n := range m {
+			h.inc(b, n)
+		}
+		return h.median()
+	}
+	r := rand.New(rand.NewPCG(1, 2))
+	for round := range 200 {
+		ma, mb := map[uint16]uint32{}, map[uint16]uint32{}
+		var a, b speedHist
+		for range r.IntN(300) {
+			bin, n := uint16(r.IntN(40*(round%5+1))), uint32(r.IntN(3)+1)
+			ma[bin] += n
+			a.inc(bin, n)
+		}
+		for range r.IntN(300) {
+			bin := uint16(r.IntN(200))
+			mb[bin]++
+			b.inc(bin, 1)
+		}
+		sum := map[uint16]uint32{}
+		for _, m := range []map[uint16]uint32{ma, mb} {
+			for bin, n := range m {
+				sum[bin] += n
+			}
+		}
+		got := a.plus(b)
+		if got.total() != a.total()+b.total() || got.median() != median(sum) || len(got) != len(sum) {
+			t.Fatalf("round %d: merged %d values, median %v over %d bins; want %d, %v, %d", round, got.total(), got.median(), len(got), a.total()+b.total(), median(sum), len(sum))
+		}
+		for i := 1; i < len(got); i++ {
+			if got[i-1].bin >= got[i].bin {
+				t.Fatalf("round %d: bins out of order at %d", round, i)
+			}
+		}
+		old, err := json.Marshal(sum)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var read speedHist
+		if err := json.Unmarshal(old, &read); err != nil || !reflect.DeepEqual(read, got) && len(got) > 0 {
+			t.Fatalf("round %d: the map's JSON read back as %v, %v; want %v", round, read, err, got)
+		}
+		mine, _ := json.Marshal(got)
+		var back map[uint16]uint32
+		if err := json.Unmarshal(mine, &back); err != nil || !reflect.DeepEqual(back, sum) {
+			t.Fatalf("round %d: written %s, read by the map as %v, %v", round, mine, back, err)
+		}
+	}
+	var e struct {
+		H speedHist `json:"h,omitempty"`
+	}
+	if b, _ := json.Marshal(e); string(b) != "{}" {
+		t.Fatalf("an empty histogram is written: %s", b)
 	}
 }

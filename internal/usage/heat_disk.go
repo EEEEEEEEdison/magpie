@@ -34,7 +34,7 @@ import (
 // history again on its first start, the cold start's peak (#2278). Raise
 // it with any change to what a row counts as; TestSettledCountedAsVersioned
 // fails until it is raised.
-const settledCountVersion = "8"
+const settledCountVersion = "9"
 
 func heatDiskPath() string {
 	return filepath.Join(filepath.Dir(sessions.CachePath()), "heat-v1.json")
@@ -113,8 +113,8 @@ func heatSettledKey(d heatDiskRef, cut, since time.Time, f Filter, identities ma
 	}
 	f.Zone = nil
 	h := sha256.New()
-	fmt.Fprintf(h, "heat-v1\x00%s\x00%s\x00%s\x00%d\x00%d\x00%s\x00%#v\x00%s\x00%d:%d:%d\x00",
-		sessions.CallCacheVersion()+"\x00"+settledCountVersion, d.root, d.meta, cut.UnixNano(), since.UnixNano(), cut.Location(), f, zone, before.n, before.at, before.tokens)
+	fmt.Fprintf(h, "heat-v1\x00%s\x00%s\x00%s\x00%d\x00%d\x00%s\x00%#v\x00%s\x00%d:%d:%d:%d\x00",
+		sessions.CallCacheVersion()+"\x00"+settledCountVersion, d.root, d.meta, cut.UnixNano(), since.UnixNano(), cut.Location(), f, zone, before.n, before.at, before.tokens, before.cliSources)
 	hashCodexIdentities(h, identities)
 	var b []byte
 	rows := lentRows()
@@ -128,7 +128,7 @@ func heatSettledKey(d heatDiskRef, cut, since time.Time, f Filter, identities ma
 		for _, c := range set {
 			// a chunk without a serial (a probe's, made again for each
 			// query) is named by its rows below, as pairSerials allows
-			b = fmt.Appendf(b[:0], "\x01%d\x00%s\x00%d\x00%d\x00%s\x00", k, c.Computer, c.Count, c.Latest.UnixNano(), c.Source.Path)
+			b = fmt.Appendf(b[:0], "\x01%d\x00%s\x00%d\x00%d\x00%s\x00%t\x00", k, c.Computer, c.Count, c.Latest.UnixNano(), c.Source.Path, c.Source.NoDesktopApp)
 			h.Write(b)
 			if c.Source.Path != "" {
 				sum := sourceDigest(c, &rows)

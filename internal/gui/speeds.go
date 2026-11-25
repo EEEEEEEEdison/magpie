@@ -10,7 +10,7 @@ import (
 
 // speedJSON is how fast a model answered on one provider over the last
 // seven days, from the usage ledger: the mean time to its first token and
-// its whole-turn output rate, the numbers the Requests page shows per call.
+// total output divided by total whole-turn time across its speed samples.
 type speedJSON struct {
 	TTFT int64   `json:"ttft,omitempty"` // ms
 	TPS  float64 `json:"tps,omitempty"`  // output tokens a second over the whole turn

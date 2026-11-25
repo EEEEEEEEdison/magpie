@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -79,6 +80,60 @@ func TestGroupSpeedCountsEveryTimedReply(t *testing.T) {
 	m := summarize(Today, at.Add(time.Hour), recs).Models[0]
 	if m.Calls != 2 || m.DecodeN != 2 || m.DecodeMs != 30000 || m.DecodeOut != 2400 || m.Speed() != 80 {
 		t.Fatalf("summarized: %+v", m.Totals)
+	}
+}
+
+// The two short replies each ran at 300 tok/s. The median is 300, but
+// together the three replies wrote 1,000 tokens in 20 seconds, or 50 tok/s.
+func TestGroupSpeedUsesSummedWholeTurns(t *testing.T) {
+	at := time.Date(2026, 11, 20, 14, 30, 0, 0, time.UTC)
+	now := at.Add(time.Hour)
+	recs := []Record{
+		{Time: at, Model: "m", Output: 300, Reasoning: 200, Millis: 1000, TTFT: 800, Status: 200},
+		{Time: at, Model: "m", Output: 300, Reasoning: 200, Millis: 1000, TTFT: 800, Status: 200},
+		{Time: at, Model: "m", Output: 400, Reasoning: 200, Millis: 18000, TTFT: 17000, Status: 200},
+	}
+	var rows []Row
+	for _, r := range recs {
+		rows = append(rows, Row{Record: r})
+	}
+	check := func(name string, s Totals) {
+		t.Helper()
+		if s.Speed() != 50 || s.DecodeOut != 1000 || s.DecodeMs != 20000 || s.DecodeN != 3 || s.FloorN != 0 {
+			t.Errorf("%s: %v tok/s from %+v, want 50 from three whole turns", name, s.Speed(), s)
+		}
+	}
+	check("summary", summarize(Today, now, recs).Models[0].Totals)
+	check("breakdown", Breakdown(rows, "model")[0].Totals)
+	_, points := ledgerSeriesAt(Today, rows, now)
+	for _, p := range points {
+		if part, ok := p.By["model"]["m"]; ok {
+			if part.DecodeOut != 1000 || part.DecodeMs != 20000 {
+				t.Errorf("chart: %d tokens in %d ms, want 1000 in 20000", part.DecodeOut, part.DecodeMs)
+			}
+			return
+		}
+	}
+	t.Fatal("missing chart point for model m")
+}
+
+// Older cached groups carry sums, not per-reply rates. Speed and Floor
+// keep their own denominators when the groups are combined.
+func TestGroupSpeedAndFloorFromCachedSums(t *testing.T) {
+	var parts []Totals
+	err := json.Unmarshal([]byte(`[
+		{"decode_out":600,"decode_ms":2000,"decode_n":2,"floor_out":2000,"floor_ms":10000,"floor_n":1},
+		{"decode_out":400,"decode_ms":18000,"decode_n":1,"floor_out":1000,"floor_ms":30000,"floor_n":1}
+	]`), &parts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum Totals
+	for _, p := range parts {
+		sum.plus(&p)
+	}
+	if sum.Speed() != 50 || sum.Floor() != 75 || sum.DecodeN != 3 || sum.FloorN != 2 {
+		t.Errorf("cached sums: %v tok/s, floor %v from %+v; want 50 and 75", sum.Speed(), sum.Floor(), sum)
 	}
 }
 

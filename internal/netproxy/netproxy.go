@@ -13,6 +13,7 @@ package netproxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -268,6 +269,7 @@ type dispatch struct {
 type route struct {
 	choice    string
 	h1        bool
+	whole     bool // wholeRecords
 	unchecked string
 	client    string // clientRoute
 	resolve   string // resolveRoute
@@ -282,17 +284,14 @@ func (d *dispatch) RoundTrip(req *http.Request) (*http.Response, error) {
 	if d.moved() {
 		d.CloseIdleConnections()
 	}
-	r := route{choice: Resolve(choiceOf(req.Context())), h1: HTTP1 != nil && HTTP1(req.URL) || http1Asked(req) || overHTTP1(req.Context()) || h2BrokenFor(req), unchecked: uncheckedHost(req), client: clientRoute(req), resolve: resolveRoute(req)}
-	if freshOf(req.Context()) {
-		if r == (route{}) {
-			d.base.CloseIdleConnections()
-		} else {
-			d.transport(r).CloseIdleConnections()
-		}
-	}
+	broken := h2BrokenFor(req)
+	r := route{choice: Resolve(choiceOf(req.Context())), h1: HTTP1 != nil && HTTP1(req.URL) || http1Asked(req) || overHTTP1(req.Context()) || broken, whole: broken, unchecked: uncheckedHost(req), client: clientRoute(req), resolve: resolveRoute(req)}
 	t := d.base
 	if r != (route{}) {
 		t = d.transport(r)
+	}
+	if freshOf(req.Context()) {
+		t.CloseIdleConnections()
 	}
 	if r.resolve != "" {
 		// a rule is for a connection made direct: through a proxy, the
@@ -302,13 +301,14 @@ func (d *dispatch) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 	res, err := v4Retry(t, req)
-	if r.h1 {
-		return res, err
-	}
 	if err != nil {
 		if recordError(err) {
+			// over HTTP/1.1 too: the tries after it go in whole records
 			markH2Broken(req)
 		}
+		return res, err
+	}
+	if r.h1 {
 		return res, err
 	}
 	if res.ProtoMajor == 2 && res.Body != nil && res.Body != http.NoBody {
@@ -371,6 +371,9 @@ func (d *dispatch) transport(r route) *http.Transport {
 	if r.h1 {
 		http1Only(t)
 	}
+	if r.whole {
+		wholeRecords(t)
+	}
 	if r.unchecked != "" {
 		uncheckTLS(t)
 	}
@@ -405,6 +408,26 @@ func http1Only(t *http.Transport) {
 	}
 }
 
+// wholeRecords has t, a clone, write a request in TLS records as large as
+// TLS allows, as OpenSSL does (curl, Python): Go starts each connection
+// on records of about one TCP segment and grows them a segment a record
+// for its first 128KB (DynamicRecordSizingDisabled), and net/http hands
+// TLS a request's head and first bytes 4KB at a time (WriteBufferSize),
+// so a 70KB body went out as a dozen or more small records, each its own
+// write. Behind a fake-IP proxy whose path mangled
+// Go's requests ("tls: bad record MAC", over HTTP/1.1 too) while curl and
+// Python's were answered every time (#7567, k0ngk0ng), the requests to a
+// host after a record error (h2Broken) go out in the shape that got
+// through: a 64KB buffer, written as 16KB records. Nothing else of the
+// connection changes: its hello, its ciphers, its protocol.
+func wholeRecords(t *http.Transport) {
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	t.TLSClientConfig.DynamicRecordSizingDisabled = true
+	t.WriteBufferSize = 64 << 10
+}
+
 // CloseIdleConnections closes base's and every proxy's own.
 func (d *dispatch) CloseIdleConnections() {
 	d.base.CloseIdleConnections()
@@ -431,7 +454,7 @@ func For(u *url.URL) (*url.URL, error) {
 	if p, err := fromEnv(u); p != nil || err != nil {
 		return p, err
 	}
-	sys := System()
+	sys, _ := liveSystem()
 	if sys.URL == "" {
 		return fromShell(u), nil
 	}
@@ -479,7 +502,7 @@ func EnvWith(choice string, env []string) []string {
 				return env
 			}
 		}
-		sys := System()
+		sys, _ := liveSystem()
 		p, bypass = sys.URL, sys.Bypass
 		if p == "" {
 			if p, bypass = shellProxy(); p == "" {
@@ -566,11 +589,17 @@ func Describe() (proxy, source string) {
 	if p, _ := fromEnv(u); p != nil {
 		return p.String(), "environment"
 	}
-	if sys := System(); sys.URL != "" {
+	sys, dead := liveSystem()
+	if sys.URL != "" {
 		return sys.URL, "system"
 	}
 	if p := fromShell(u); p != nil {
 		return p.String(), "environment"
+	}
+	if dead != "" {
+		// the system's proxy is set, but nothing listens on its port:
+		// requests go direct until something does (liveSystem)
+		return dead, "down"
 	}
 	return "", "none"
 }
@@ -739,6 +768,29 @@ func System() Proxy {
 	sysCache.Lock()
 	defer sysCache.Unlock()
 	return sysCache.p
+}
+
+// liveSystem is System as Auto takes it, for magpie's own requests and
+// the CLIs and plugin hosts it starts: a system proxy on this computer's
+// loopback that nothing listens on is none, and dead is its address. A
+// VPN or proxy app that quits without clearing Windows' Internet Options
+// (or the system's on macOS and Linux) leaves 127.0.0.1:port there, and
+// every request failed with "proxy not reachable", a restart of magpie
+// too, until the user set the proxy Off (@bitssly on X). The login
+// shell's proxy is taken so already (shell.go). The environment's
+// *_PROXY, set for this process by whoever started it, and a proxy set
+// in magpie are never taken around: a dead one fails, so it shows. A
+// port is looked at again within 2 seconds while down (listening), so
+// the proxy app coming back is followed at once.
+func liveSystem() (p Proxy, dead string) {
+	p = System()
+	if p.URL == "" {
+		return p, ""
+	}
+	if u, err := Parse(p.URL); err == nil && u.Hostname() != "" && !listening(u) {
+		return Proxy{}, p.URL
+	}
+	return p, ""
 }
 
 // refreshSystem reads the system proxy into sysCache, then closes done.

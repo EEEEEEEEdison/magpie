@@ -77,6 +77,9 @@ func hintsOf(chunks []*rowChunk, rows *chunkRows) []*chunkHints {
 			if a := open.Strings[open.text(p, 0)]; agyLocal(a) || session == "" && agyGateway(a) {
 				session = agyMatchSession
 			}
+			if alias := open.aliasMatchSession(p); alias != "" {
+				h.sessions = append(h.sessions, matchHash(alias))
+			}
 			if s := matchHash(session); len(h.sessions) == 0 || h.sessions[len(h.sessions)-1] != s {
 				h.sessions = append(h.sessions, s)
 			}

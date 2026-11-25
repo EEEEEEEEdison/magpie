@@ -79,8 +79,11 @@ line; agents connected to magpie lose it when it quits.
   "Only models I pick" switch turns the list around: the models ticked
   when it is switched on stay, and a model added later, of any provider,
   stays out of that agent's picker and its config until it is ticked
-  (`magpie visible <agent> --only-picked`, back with `--show-new`). A
-  model asked for by name still works either way.
+  (`magpie visible <agent> --only-picked`, back with `--show-new`). With
+  "Add models I pick in a provider" on beside it, a model ticked in a
+  provider's editor, as the provider is added or later, is ticked there too
+  (`magpie visible <agent> --provider-picks`); other new models still wait.
+  A model asked for by name still works either way.
 - **Profiles.** Snapshot every agent's settings under a name and switch all of
   them back in one move. The profile in use, the one applying would change
   nothing, is ticked, the tray panel's Profiles button shows its name, and
@@ -141,13 +144,14 @@ line; agents connected to magpie lose it when it quits.
 | OpenClaw     | `openclaw.json` in `~/.openclaw` (`$OPENCLAW_CONFIG_PATH`, `$OPENCLAW_STATE_DIR`, `~/.openclaw-<profile>` for `$OPENCLAW_PROFILE`, `~` as `$OPENCLAW_HOME`) | model (a `magpie` provider in `models.providers`, `openai-completions`, with magpie's models in it; `agents.defaults.model`'s primary set to it, what was there put back on Disconnect; `magpie/*` added to a `modelPolicy.allow` that would refuse it; the user's own keys in the provider and its models kept; a chat already on a model keeps it until `/model default`) |
 | jcode        | `config.toml` in `$JCODE_HOME`, else `~/.jcode` | model (a `[providers.magpie]` profile, `openai-compatible`, with magpie's models in it; `[provider] default_provider`/`default_model` set to it, what was there put back on Disconnect; the user's own keys in the profile, such as `headers` and a model's `reasoning_effort`, kept; restart open jcode sessions after connecting) |
 | Dim (alpha, `dima`) | Dim's built-in **Magpie** provider, through Dim's own daemon (`$DIMCODE_HOME`, else `~/.dimcode-alpha`), and magpie's own `dim.json` beside its settings | model (Dim's Magpie provider gets the gateway's `/v1` and magpie's key, is turned on and made Dim's model, so a plain `dima` runs on magpie; no other provider is touched, and a key or address you set on the Magpie entry yourself is kept. Picking Dim's own again turns the entry off and puts back the model Dim was on. When Dim's daemon can't be reached, a `dima` function in your shell profiles starts it with `DIM_BASE_URL`, `DIM_API_KEY`, `DIM_MODEL` and the token limits for that run instead) |
-| Mistral Vibe | `config.toml` in `$VIBE_HOME`, else `~/.vibe` | model (a `[[providers]]` entry named magpie with the gateway's `/v1` and the key as an `Authorization` header in `extra_headers`, since Vibe reads keys only from the environment; one `[[models]]` entry per model, aliased `magpie/<provider>/<model>`; `active_model` set to the alias, what was there put back on Disconnect; a `thinking` level the user set on a model kept; restart open vibe sessions after connecting) |
+| Mistral Vibe | `config.toml` in `$VIBE_HOME`, else `~/.vibe` | model (a `[[providers]]` entry named magpie with the gateway's `/v1` and the key as an `Authorization` header in `extra_headers`, since Vibe reads keys only from the environment; one `[[models]]` entry per model, aliased `magpie/<provider>/<model>`; `active_model` set to the alias, what was there put back on Disconnect; a `thinking` level the user set on a model kept; restart open vibe sessions after connecting). Vibe Desktop (bundle `ai.mistral.lechat.desktop`; `le-chat-desktop\Vibe.exe` on Windows) runs the same app server on the same file, lists the agent with no CLI installed, and reads the file when a chat starts |
 | MiniMax Code (mcode) | `~/.minimax/config.yaml` (`$MINIMAX_DATA_DIR`, or the folder the desktop app moved it to) | model (a `magpie` custom provider; magpie's models in its /model) |
 | Droid (Factory) | `~/.factory/settings.json` (`$FACTORY_HOME_OVERRIDE`) | model (magpie's models as BYOK `customModels`, in Droid's /model) |
 | Cline (CLI)  | `~/.cline/data/settings/providers.json` (`$CLINE_DIR`) | model, effort (magpie takes its openai-compatible provider) |
 | Qoder (CLI)  | `~/.qoder/settings.json` (`$QODER_CONFIG_DIR`) | model, effort (a `magpie` custom provider; needs a Qoder plan with BYOK) |
 | Qoder CN (CLI) | `~/.qoder-cn/settings.json` (`$QODERCN_CONFIG_DIR`) | model, effort (as Qoder; its own accounts, a Qoder CN plan with BYOK) |
 | Grok Build   | `~/.grok/config.toml` (`$GROK_HOME`) | model, effort |
+| Kigi         | `~/.kigi/config.toml` (`$KIGI_SHARE_DIR`) | model, effort (Grok Build's tables; Kigi is its fork) |
 | Grok App     | `agent-home/config.toml` in its data folder (`$GROK_APP_HOME`, else `~/Library/Application Support/com.grokapp.grok-app`, `%APPDATA%\grokapp\grok-app\data`, `$XDG_DATA_HOME/grok-app`, or `~/.grok-app`) | model (a `[model.magpie]` custom provider under Accounts, with magpie's models and their effort levels in `app_models`; the route, `[models] default`, stays until the user presses Use on magpie there (one of the App's own routes picked in magpie is written as the route, and magpie's channel goes); a route an older magpie set to `magpie` is put back once; Disconnect drops the channel and puts the route back only if it is still `magpie`, else the one it was on before Connect if none is left; a model or default effort picked in the App kept; instructions, MCP and skills are the Library's Grok App row on agent-home; RTK has no hook for it or for Grok Build) |
 | ZCode        | `~/.zcode/v2/provider_config.json` and `config.json`, under the data folder moved in ZCode's settings (`dataBaseDir`); `~` is `$HOME` when set, on Windows too, as ZCode reads it before `%USERPROFILE%` | provider (magpie's models in ZCode's picker; the desktop app has Restart on the Agents page) |
 | WorkBuddy    | `~/.workbuddy/models.json` (`$WORKBUDDY_CONFIG_DIR`) | provider (magpie's models in WorkBuddy's picker) |
@@ -1580,7 +1584,11 @@ per middleware; `{skip: true}` passes the account over for that request),
 event of a streamed reply and `onResponse(body, ctx)` a whole one, all in
 the agent's own API. A hook returns the changed object, or nothing to
 leave it; `onEvent` returns `null` to drop an event, and
-`ctx.reject(status, message)` turns a request away. Declare it with
+`ctx.reject(status, message)` turns a request away. `ctx.caller` is
+the agent the request came from, `{agent, name, via}`, through any magpies
+that passed it on (as a plugin's `chat.headers` gets `input.caller`), so
+`onRequest` can refuse an agent before any provider is asked; the async
+request hooks get it too. Declare it with
 `"magpie": { "middleware": "./mw.js" }` in `package.json`, or add a single
 `*.middleware.js` file:
 
@@ -1652,7 +1660,7 @@ it is a single `*.agent.js` file:
 ```js
 export const agent = {
   id: "aider", name: "Aider", bin: "aider",
-  config: "~/.aider.conf.yml",   // json, yaml or env
+  config: "~/.aider.conf.yml",   // json, yaml, toml or env
   model: "model",                // the key of the model
   prefix: "openai/",             // written before magpie's model id
   ua: ["aider", "litellm"],
@@ -2290,7 +2298,7 @@ result for every request: who went first, and why.
    of a window (100% In order). *Stays: Strict* does, and asks no other:
    the conversation stays on its account, resting, spent or past its cap,
    and its errors go to the agent.
-   With *Stays: Session* or *Strict* under Smart, Least used first or
+   With *Stays: Session* or *Strict* under Quota first, Least used first or
    Use before expiry, a new conversation goes to the account the fewest other
    conversations of the last 30 minutes are on (of those not resting and
    under 90%), so sessions side by side each keep an account of their own;
@@ -2300,13 +2308,13 @@ So routing decides who goes first only for a conversation nobody has
 answered yet. An account that has used 90% goes behind the others for new
 conversations, but a conversation already on it stays there until 98%.
 
-**The routings.** Smart, Least used first and Use before expiry go by the share
+**The routings.** Quota first, Least used first and Use before expiry go by the share
 used of the fullest window that counts the model, the 5-hour window
-included. Smart and Use before expiry put an account behind the others once a
+included. Quota first and Use before expiry put an account behind the others once a
 window is at 90% or more, and behind those once one is at 98% or more,
 each of these groups ordered by the share used.
 
-- **Smart** (the default): of the accounts under 90%, the one whose
+- **Quota first** (the default): of the accounts under 90%, the one whose
   allowance renews soonest goes first, because what it has left is lost at
   the reset. It is not load balancing: every new conversation goes to that
   account too, the others showing "one renewing sooner goes first" on the
@@ -2369,7 +2377,7 @@ each of these groups ordered by the share used.
   counts. Accounts whose
   pace is within a tenth of the highest in their band count as alike, and
   among them the one magpie sent the fewest tokens lately goes first. A
-  Claude or ChatGPT account not known goes first once, as in Smart (a
+  Claude or ChatGPT account not known goes first once, as in Quota first (a
   ChatGPT one while another is known); another unknown account counts as
   a fresh week. A ChatGPT account whose usage
   page can't be read is known from the week its answers tell, until a
@@ -2402,10 +2410,21 @@ each of these groups ordered by the share used.
   time window sends a member first at its hours, and a Pause rule leaves
   one out at its hours. The Routing page says why the first went first:
   "costs least on Ollama now — $0.150 in, $0.600 out a million tokens".
+- **Small context first** (routing groups only): each request goes to the
+  member with the smallest context window that holds it, so the big ones
+  are kept for the long requests only they can take. A member whose window
+  the request is longer than is left out before it is asked, as under every
+  routing, and asked only once every one with room is out of its
+  allowance. Members of one size go as Quota first orders them, a member all but
+  used up still goes after those with room, and one whose window isn't
+  known goes after every known one. The window is the one you set for the
+  model, else the model list's. The Routing page says why the first went
+  first: "Composer 2.5's 200K context window is the smallest that holds
+  this request".
 
-The routings besides Smart are the built-in plugin `rotation` (Routing
+The routings besides Quota first are the built-in plugin `rotation` (Routing
 strategies in Plugins › Built-in). It stays on while a provider or group is
-routed by one of them. Turned off, the pickers offer Smart alone, and a
+routed by one of them. Turned off, the pickers offer Quota first alone, and a
 provider or group still set to one of them is tried in its listed order.
 
 Your own routing groups are the built-in plugin `groups` (Routing groups in
@@ -2421,11 +2440,12 @@ depends on the routing:
 | --- | --- |
 | In order | Everything: the first takes every request it can. |
 | In turn | Where the rotation goes next. |
-| Smart | Only between accounts whose windows all renew in the same hours, or whose shares used are equal. |
+| Quota first | Only between accounts whose windows all renew in the same hours, or whose shares used are equal. |
 | Least used first | Only between accounts with the same share used and the same tokens sent lately. |
 | Use before expiry | Only between accounts in the same pace band that magpie sent the same tokens lately, in practice none since magpie started. |
 | Speed first | Only between those within a tenth of each other's speed, and among those not measured lately. |
 | Cheapest first | Only between those that cost the same now, and among those with no known price. |
+| Small context first | Only between those whose context windows are the same size, after Quota first's order, and among those whose window isn't known. |
 
 For Claude Code and Codex, *Make first* also signs the agent in to that
 account, because the account the agent is signed in to is first. With
@@ -2826,6 +2846,23 @@ ASCII, so an account named in other letters (`北冥`) is sent percent-encoded
 (`X-Magpie-Account: %E5%8C%97%E5%86%A5`, JavaScript's `encodeURIComponent`);
 magpie decodes it, and a value that isn't such an encoding is the name as
 written.
+
+`GET /v1/magpie/accounts` lists the accounts and API keys of every
+provider, those whose vendor tells no quota included, by identifiers only:
+`provider`, `id` (a signed-in account's login id, a key's fingerprint,
+never the key), `kind` (`account` or `key`), `label`, `user`, `plan`, `on`
+and `pin`, `"<provider>/<id>"`. `?provider=<id>` lists one provider's.
+`X-Magpie-Account: <pin>` (or the id alone) pins a request to that
+account or key. `?models=1` adds each one's `models`: the id of every
+model it can be asked for, its provider's whole list (not the first 24
+agents are offered of a provider with no picks), less a model the user
+keeps off that account and one on none of the provider's APIs. Each is
+asked as `<provider>/<id>`, offered to agents or not. It is asked as
+`/v1/magpie/quotas` is: this machine, or another with a key of a gateway
+shared on the local network; a read-only
+key may read it, and a key held to a budget, models or accounts only when
+its owner lets it be told quotas, and then only of the accounts it may
+use.
 
 A status bar can show where a turn went before its first token arrives:
 send `X-Magpie-Session: <id>` with the requests (an agent's own session
@@ -3553,6 +3590,27 @@ downloaded, and downloads that one before it restarts, so you land on the
 newest (unless downloads wait for a click). Every release is on
 [yetone/magpie-releases](https://github.com/yetone/magpie-releases/releases).
 
+
+### Plugin links
+
+A plugin's author, or a page that lists plugins, can link to one:
+
+```
+magpie://plugin?name=opencode-acme-auth
+magpie://plugin?name=%40magpie-community%2Fopencode-zed-auth
+```
+
+Opening one brings up magpie's Plugins on the package's sheet: its README,
+publisher, license and *Install*. Nothing is installed until you press
+*Install*. A package magpie's list doesn't have says that nobody at magpie
+has reviewed it. Only an npm package's name is taken (no version, path,
+git repository or URL), and a link that comes within two seconds of the
+last is dropped. `magpie import <link>` prints the package and the
+`magpie plugin add` command for it, and installs nothing.
+
+A plugin's own page asks the same with `magpie.openPlugin(name)`
+([Pages in the window](https://usemagpie.ai/docs/plugins#pages)).
+
 ### Signed releases
 
 usemagpie.ai's feed only carries a release; it is not what magpie trusts. From
@@ -3788,7 +3846,7 @@ uses the service's gateway.
 
 ### Docker
 
-`docker build` makes a server image: the terminal-only binary on Debian 12
+`docker build` makes a server image: the terminal-only binary on Debian 13
 slim, with bash and curl, so a vendor's `curl … | bash` installer runs and
 the CLI it installs (Cursor's, Devin's, Grok Build) finds the glibc it links,
 as the plugins' Bun does, and a terminal opens in the container (`docker exec -it magpie bash`, or a
@@ -3835,10 +3893,11 @@ On Linux `host.docker.internal` is there only for a container given
 For the browser UI run the image with `magpie web --addr 0.0.0.0:3430 --no-open`
 in place of the default `serve`, and open
 `http://localhost:3430/?k=<key from docker logs magpie>` (set `MAGPIE_WEB_KEY`
-to keep one key across restarts; a browser then stays signed in for 400
-days, and `MAGPIE_NAME` to title its tab `<name> · magpie`, telling several
-deployments apart; a name set in Settings → Network and sharing → Advanced →
-Name comes first). A browser keeps cookies per host, not per port, so another service on
+to keep one key across restarts, and a browser stays signed in for 400 days;
+without it a browser stays signed in, closed and opened again too, until
+magpie starts again with a new key. Set `MAGPIE_NAME` to title its tab
+`<name> · magpie`, telling several deployments apart; a name set in Settings
+→ Network and sharing → Advanced → Name comes first). A browser keeps cookies per host, not per port, so another service on
 the same address can take the sign-in away: by clearing its site data, or by
 filling the host's cookie limit (the sign-in is the last Chrome drops). A page
 opened without it, such as a bookmark, says why it was turned away and takes
@@ -4717,11 +4776,14 @@ and models to look after first, by magpie's own ids only:
   fine-tune) is only `<provider>/other`; one on a provider of your own is
   only `custom`, a routing group only `group`;
 - how many of each, and how many routing groups you have.
-- for each partner (a sponsor listed first in the add sheet), by its id, how
-  many times a day the add sheet showed it, its row was opened, its key
-  page was opened and a provider was added from it (at most 20 of each,
-  5 adds), kept in `~/.cache/magpie/partner-counts.json` for at most 14
-  days and sent the day after as `magpie partner` events;
+- for each partner (a sponsor listed first in the add sheet, or in the
+  Plugins page's Discover), by its id, how many times a day it was shown,
+  its row was opened, its key page was opened and a provider was added
+  from it or its plugin installed (at most 20 of each, 5 adds), with where
+  it is listed (`slot`: `providers` or `plugins`), and how many times a
+  day the Plugins page was opened (at most 20), kept in
+  `~/.cache/magpie/partner-counts.json` for at most 14 days and sent the
+  day after as `magpie partner` and `magpie page` events;
 - to usemagpie.ai, not PostHog, which of the plugins Discover lists are
   installed and on (npm names, or `github:owner/repo` for a repository
   tagged `magpie-plugin`; never a folder, a private repository or an
@@ -4751,8 +4813,8 @@ Partners are also counted where usemagpie.ai sees them, whatever these
 settings say, as any website sees its visits. The partner list
 (`/api/partners`) gives each partner's website and key page as a
 `https://usemagpie.ai/go/<id>/site|keys[/<region>]` link, which sends a
-`magpie partner go` event (the partner, which link, the region, and the
-country Cloudflare gives) before sending the browser on; and one in ten
+`magpie partner go` event (the partner, which link, the region, where it
+is listed, and the country Cloudflare gives) before sending the browser on; and one in ten
 fetches of the list sends a `magpie partners fetch` event with weight 10
 and the country, while a partner is listed. Each event has an id of its
 own: no install id, address or account goes with it. The code is

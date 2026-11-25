@@ -11,7 +11,13 @@ const compactFill = function (list, a) {
   const row = el("div", "row pref agent-compact");
   row.dataset.agent = kind;
   const who = el("div", "who"), box = el("div");
-  who.append(el("div", "name", t("Long conversations")), el("div", "sub", t("{agent} compacts at 272K or the size picked; the full window is slower and costlier. magpie's models only: a subscription's own models keep their own.", { agent: a.name })));
+  // Grok Build compacts at a percent of the window of its own, and with no
+  // size typed for it or for every agent, that is where it compacts
+  // (settings.ForAgent: @taktoshilite on X, a 1M model compacted at 27%)
+  const sub = kind === "grok"
+    ? t("Grok Build compacts at 85% of the window, or at the size picked; a smaller size is faster and cheaper. magpie's models only: a subscription's own models keep their own.")
+    : t("{agent} compacts at 272K or the size picked; the full window is slower and costlier. magpie's models only: a subscription's own models keep their own.", { agent: a.name });
+  who.append(el("div", "name", t("Long conversations")), el("div", "sub", sub));
   row.append(who, box);
   // what Codex's own config holds back, said under the row (renderAgentPrefs)
   const held = el("div", "compact-helds");
@@ -24,7 +30,7 @@ const compactFill = function (list, a) {
     const key = JSON.stringify([own, s.compactAt, s.fullContext]);
     if (key === drawn) return;
     drawn = key;
-    const full = own ? !!own.full : !!s.fullContext;
+    const full = own ? !!own.full : !!s.fullContext || (kind === "grok" && !s.compactAt);
     const at = own ? own.at || 0 : s.compactAt || 0;
     const set = (body) => writingPrefs(api("settings/agent-compact", { agent: kind, own: true, ...body }))
       .then((ns) => { prefs = ns; renderSettings(); if (row.isConnected) draw(); }).catch(settingsErr);
@@ -52,7 +58,10 @@ const compactFill = function (list, a) {
   list.classList.add("own-compact");
   const above = list.querySelector("#fullContextRow");
   above ? above.after(row) : list.append(row);
-  if (kind === "claude") row.after(...claudeCacheRows(list), claudeAttributionRow(list));
+  if (kind === "claude") {
+    const options = claudeOptions(list, a);
+    row.after(...claudeCacheRows(options), claudeAttributionRow(options));
+  }
   // every agent's values, and Codex's hints, change when that row is drawn
   const seen = new MutationObserver(() => row.isConnected ? draw() : seen.disconnect());
   // Details can build this list before attaching it to the page.
@@ -60,12 +69,43 @@ const compactFill = function (list, a) {
   if (segsBox) seen.observe(segsBox, { childList: true });
 };
 
+function claudeOptions(list, a) {
+  const remote = a.id.startsWith("claude@wsl:");
+  const draws = [];
+  let current = null;
+  const refresh = (next) => {
+    current = next;
+    draws.forEach((draw) => draw());
+  };
+  const report = (err) => { if (list.isConnected) settingsErr(err); };
+  if (remote) api("settings/claude-options/" + encodeURIComponent(a.id)).then(refresh, report);
+  return {
+    get: () => remote ? current : prefs || {},
+    watch: (row, draw) => {
+      if (remote) draws.push(() => { if (row.isConnected) draw(); });
+      else {
+        const seen = new MutationObserver(() => row.isConnected ? draw() : seen.disconnect());
+        const box = list.querySelector("#fullContextSegs");
+        if (box) seen.observe(box, { childList: true });
+      }
+    },
+    set: (path, body, draw) => {
+      if (remote) api(path, { agent: a.id, ...body }).then(refresh, report);
+      else writingPrefs(api(path, body)).then((ns) => {
+        prefs = ns;
+        renderSettings();
+        draw();
+      }).catch(settingsErr);
+    },
+  };
+}
+
 // Claude Code's prompt cache, beside its compaction (Linka on Discord: the
 // Usage card offers no way to change one that is already the cheapest):
 // the main conversation's and the subagents', each 5 min, 1 hour or
 // Claude Code's own default, which takes the key out of its settings.json
 // (agent.ClaudeCacheSet). One a variable sets shows it, unchangeable here.
-function claudeCacheRows(list) {
+function claudeCacheRows(options) {
   const KNOBS = [["cache_ttl", "Prompt cache · main conversation"], ["subagent_cache_ttl", "Prompt cache · subagents"]];
   const OPTS = [["", "Claude Code's default"], ["5m", "5 min"], ["1h", "1 hour"]];
   return KNOBS.map(([knob, label]) => {
@@ -76,8 +116,9 @@ function claudeCacheRows(list) {
     row.append(who, val);
     let drawn;
     const draw = () => {
-      const c = ((prefs || {}).claudeCache || []).find((x) => x.knob === knob) || {};
-      const key = JSON.stringify(c);
+      const own = options.get();
+      const c = (own?.claudeCache || []).find((x) => x.knob === knob) || {};
+      const key = JSON.stringify([!!own, c]);
       if (key === drawn) return;
       drawn = key;
       const cur = c.value || "", known = OPTS.find(([v]) => v === cur);
@@ -86,15 +127,14 @@ function claudeCacheRows(list) {
       b.setAttribute("aria-label", t(label));
       b.setAttribute("aria-haspopup", "menu");
       b.setAttribute("aria-expanded", "false");
-      b.append(el("span", "", known ? t(known[1]) : cur), svg(CHEV, 11, 1.6));
-      b.disabled = !!c.locked;
+      b.append(el("span", "", own ? (known ? t(known[1]) : cur) : "—"), svg(CHEV, 11, 1.6));
+      b.disabled = !own || !!c.locked;
       b.onclick = (e) => {
         e.stopPropagation();
         if (b.classList.contains("open")) return closeProtoMenu();
         openProtoMenu(b, OPTS.map(([v, name]) => ({ v, name, note: "" })), cur, (v) => {
           if (v === cur) return;
-          writingPrefs(api("settings/claude-cache", { knob, value: v }))
-            .then((ns) => { prefs = ns; renderSettings(); if (row.isConnected) draw(); }).catch(settingsErr);
+          options.set("settings/claude-cache", { knob, value: v }, () => { if (row.isConnected) draw(); });
         }, label, "sess-menu", "right");
       };
       val.replaceChildren(b);
@@ -102,10 +142,7 @@ function claudeCacheRows(list) {
       if (c.locked) who.append(el("div", "sub", t("{name} is set and comes first", { name: c.locked })));
     };
     draw();
-    // drawn again when the settings are read again
-    const seen = new MutationObserver(() => row.isConnected ? draw() : seen.disconnect());
-    const box = list.querySelector("#fullContextSegs");
-    if (box) seen.observe(box, { childList: true });
+    options.watch(row, draw);
     return row;
   });
 }
@@ -114,7 +151,7 @@ function claudeCacheRows(list) {
 // X): On is Claude Code's own default, Off writes attribution.commit = "" in
 // its settings.json (agent.ClaudeAttributionSet). The user's own trailer
 // text is shown as it is and not changed here.
-function claudeAttributionRow(list) {
+function claudeAttributionRow(options) {
   const label = "Commit signature (Co-Authored-By)";
   const row = el("div", "row pref claude-attribution");
   const who = el("div", "who"), val = el("div", "val");
@@ -122,7 +159,8 @@ function claudeAttributionRow(list) {
   row.append(who, val);
   let drawn;
   const draw = () => {
-    const cur = (prefs || {}).claudeAttribution || "on";
+    const own = options.get();
+    const cur = own ? own.claudeAttribution || "on" : "";
     if (cur === drawn) return;
     drawn = cur;
     const b = el("button", "sess-pick");
@@ -130,23 +168,20 @@ function claudeAttributionRow(list) {
     b.setAttribute("aria-label", t(label));
     b.setAttribute("aria-haspopup", "menu");
     b.setAttribute("aria-expanded", "false");
-    b.append(el("span", "", t(cur === "off" ? "Off" : cur === "custom" ? "Your own text" : "On")), svg(CHEV, 11, 1.6));
-    b.disabled = cur === "custom";
+    b.append(el("span", "", cur ? t(cur === "off" ? "Off" : cur === "custom" ? "Your own text" : "On") : "—"), svg(CHEV, 11, 1.6));
+    b.disabled = !cur || cur === "custom";
     b.onclick = (e) => {
       e.stopPropagation();
       if (b.classList.contains("open")) return closeProtoMenu();
       openProtoMenu(b, [["on", "On"], ["off", "Off"]].map(([v, name]) => ({ v, name, note: "" })), cur, (v) => {
         if (v === cur) return;
-        writingPrefs(api("settings/claude-attribution", { on: v === "on" }))
-          .then((ns) => { prefs = ns; renderSettings(); if (row.isConnected) draw(); }).catch(settingsErr);
+        options.set("settings/claude-attribution", { on: v === "on" }, () => { if (row.isConnected) draw(); });
       }, label, "sess-menu", "right");
     };
     val.replaceChildren(b);
   };
   draw();
-  const seen = new MutationObserver(() => row.isConnected ? draw() : seen.disconnect());
-  const box = list.querySelector("#fullContextSegs");
-  if (box) seen.observe(box, { childList: true });
+  options.watch(row, draw);
   return row;
 }
 

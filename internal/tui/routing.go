@@ -68,7 +68,7 @@ func (m model) listedMembers(g provider.Group) ([]string, int) {
 	return on, len(g.Members) - len(on)
 }
 
-var routings = []string{"", provider.Ordered, provider.Rotate, provider.LeastUsed, provider.Pace, provider.Weighted, provider.FreeFirst, provider.Fastest, provider.Cheapest, provider.Drain, provider.FreeExpiring, provider.Manual}
+var routings = []string{"", provider.Ordered, provider.Rotate, provider.LeastUsed, provider.Pace, provider.Weighted, provider.FreeFirst, provider.Fastest, provider.Cheapest, provider.Drain, provider.FreeExpiring, provider.SmallFirst, provider.Manual}
 
 func routingName(v string) string {
 	switch v {
@@ -92,6 +92,8 @@ func routingName(v string) string {
 		return tr("until used up")
 	case provider.FreeExpiring:
 		return tr("free, soonest to expire")
+	case provider.SmallFirst:
+		return tr("small context first")
 	case provider.Manual:
 		return tr("manual")
 	}
@@ -326,7 +328,7 @@ func (m *model) openClassifier(g provider.Group) {
 		relist: list,
 		empty:  tr("magpie has no models yet · add a provider first"),
 		onPick: func(id string) tea.Cmd {
-			return saveGroup(g.ID, func(g *provider.Group) error { g.Classifier = id; return nil }, trf("%s classifies with %s", g.Name, id))
+			return saveGroup(g.ID, func(g *provider.Group) error { g.SetClassifiers(append([]string{id}, g.ClassifierMore...)); return nil }, trf("%s classifies with %s", g.Name, id))
 		},
 	}
 	m.pk.refilter()
@@ -372,7 +374,7 @@ func putRule(g *provider.Group, i int, line string) error {
 	}
 	r.InZoneHere()
 	if classifier != "" {
-		g.Classifier = classifier
+		g.SetClassifiers(strings.Split(classifier, ","))
 	}
 	if i >= 0 && i < len(g.Rules) {
 		g.Rules = slices.Delete(g.Rules, i, i+1)
@@ -754,7 +756,7 @@ func (m model) viewGroup() string {
 		b.WriteString(pad + marker + sFaint.Render(fmt.Sprintf("%d  ", i+1)) + sMuted.Render(strings.Join(r.Conditions(), " · ")+arrow) + use + "\n")
 	}
 	if slices.ContainsFunc(g.Rules, func(r provider.Rule) bool { return r.Intent != "" }) {
-		b.WriteString("\n" + pad + "  " + sFaint.Render(tr("classifier")+" ") + sText.Render(dash(g.Classifier)) + sFaint.Render(" · "+tr("tells which intent a message is")) + "\n")
+		b.WriteString("\n" + pad + "  " + sFaint.Render(tr("classifier")+" ") + sText.Render(dash(strings.Join(g.Classifiers(), ", "))) + sFaint.Render(" · "+tr("tells which intent a message is")) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

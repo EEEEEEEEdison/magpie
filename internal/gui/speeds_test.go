@@ -18,9 +18,10 @@ func TestModelSpeedsByRef(t *testing.T) {
 	sandboxHome(t)
 	now := time.Now()
 	for _, r := range []usage.Record{
-		// Two replies: 400 tokens over 5 whole seconds, including both waits.
-		{Time: now.Add(-time.Hour), Provider: "quick", Model: "glm-5", Output: 200, Millis: 2400, TTFT: 400, Status: 200},
-		{Time: now.Add(-time.Hour), Provider: "quick", Model: "glm-5", Output: 200, Millis: 2600, TTFT: 600, Status: 200},
+		// 400 tokens (including reasoning) over 5 whole seconds: 80 tok/s.
+		// The two individual speeds, 200 and 50 tok/s, have a median of 125.
+		{Time: now.Add(-time.Hour), Provider: "quick", Model: "glm-5", Output: 200, Reasoning: 80, Millis: 1000, TTFT: 400, Status: 200},
+		{Time: now.Add(-time.Hour), Provider: "quick", Model: "glm-5", Output: 200, Millis: 4000, TTFT: 600, Status: 200},
 		// 200 tokens over the whole 13s turn: about 15.38 tok/s.
 		{Time: now.Add(-time.Hour), Provider: "slow", Model: "glm-5", Output: 200, Millis: 13000, TTFT: 3000, Status: 200},
 		// A whole turn without a first-token clock still has a speed: 40 tok/s.

@@ -9,6 +9,8 @@ package usage
 // away itself.
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"slices"
 	"strings"
 	"sync"
@@ -233,6 +235,7 @@ type heatOld struct {
 type heatSum struct {
 	n          int
 	at, tokens int64
+	cliSources uint64 // 有结算日前记录且仅属 CLI 的来源路径摘要之和，与遍历顺序无关。
 }
 
 // heatBefore is the sum of the recent chunks' rows before cut: a recent
@@ -282,6 +285,10 @@ func heatBefore(cut time.Time, recent [3][]*rowChunk) heatSum {
 				}
 			}
 		}
+		if part.n > 0 && c.Source.NoDesktopApp {
+			digest := sha256.Sum256([]byte(c.Source.Path))
+			part.cliSources = binary.LittleEndian.Uint64(digest[:8])
+		}
 		s.plus(part)
 		if c.serial != 0 {
 			made[c.serial] = part
@@ -307,6 +314,7 @@ func (s *heatSum) plus(o heatSum) {
 	s.n += o.n
 	s.at += o.at
 	s.tokens += o.tokens
+	s.cliSources += o.cliSources
 }
 
 // heatBeforeOf is a chunk's rows before cut, kept as hintsOf keeps a

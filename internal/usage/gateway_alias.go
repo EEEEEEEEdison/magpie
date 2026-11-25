@@ -51,6 +51,26 @@ func viaGateway(c sessions.Call) bool {
 	return MagpieAlias(c.Model) || c.Requested != "" && MagpieAlias(c.Requested)
 }
 
+// 无会话 ID 的网关日志只能与同一客户端、带网关别名的会话记录配对。
+func aliasMatchSession(agent string) string {
+	switch agent {
+	case "claude":
+		return "\x00alias:claude"
+	case "claude-desktop":
+		return "\x00alias:claude-desktop"
+	default:
+		return ""
+	}
+}
+
+func (c *rowChunk) aliasMatchSession(p *packedRow) string {
+	agent := c.Strings[c.text(p, 0)]
+	if session := aliasMatchSession(agent); session != "" && (MagpieAlias(c.Strings[c.text(p, 6)]) || MagpieAlias(c.Strings[c.text(p, 7)])) {
+		return session
+	}
+	return ""
+}
+
 // ownCalls is cs without the calls the gateway's log counts (viaGateway). cs
 // is left as it is: a reader's slice may be one it keeps.
 func ownCalls(cs []sessions.Call) []sessions.Call {

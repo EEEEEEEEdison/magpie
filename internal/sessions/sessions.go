@@ -126,7 +126,7 @@ type Session struct {
 	// Gateway: seen only through magpie's gateway, with no file of the
 	// agent's on this computer (external.go)
 	Gateway       bool          `json:"gateway,omitempty"`
-	Agent         string        `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, workbuddy-ai, codebuddy, droid, cursor, hermes, alma, openmausbot, liveagent, kimi, agy
+	Agent         string        `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, workbuddy-ai, codebuddy, droid, cursor, hermes, alma, openmausbot, catpaw, liveagent, kimi, agy
 	ID            string        `json:"id"`
 	Cwd           string        `json:"cwd"`
 	Title         string        `json:"title"` // the name it was given, else the agent's own title, else the first prompt
@@ -279,6 +279,13 @@ type StateMore struct {
 	Custom                string            `json:"custom,omitempty"` // the name the user gave it
 	First                 string            `json:"first,omitempty"`  // the first message, when no prompt looked typed
 	Convs                 []string          `json:"convs,omitempty"`  // the gateway's ids for its requests (dshConvs)
+	// Claude Code subagent: what it was asked (its first user line, as
+	// ccTask reads it), and the agent-<id>.meta.json beside it. Kept with
+	// the file's state, so a restart opens neither again for each of
+	// thousands of subagent files (shangyuan0818 on X).
+	Task     string     `json:"task,omitempty"`
+	TaskRead bool       `json:"task_read,omitempty"`
+	SubMeta  *ccSubMeta `json:"sub_meta,omitempty"`
 	// ResponseIDs are the ids of the replies its own requests got, as the
 	// gateway wrote them on its routes and the agent kept them with the
 	// reply (dsh's replay state): they name a request after the fact, where
@@ -358,7 +365,7 @@ func moreOf(m StateMore) *StateMore {
 func (m *StateMore) zero() bool {
 	return m == nil || m.DBRevision == "" && !m.CodexIdentityConflict && m.CodexNickname == "" &&
 		len(m.CodexSpawnNames) == 0 && len(m.CodexSpawnConflicts) == 0 && len(m.CodexAgentIDs) == 0 &&
-		len(m.CodexAgentConflicts) == 0 && m.Named == "" && m.Custom == "" && m.First == "" &&
+		len(m.CodexAgentConflicts) == 0 && m.Named == "" && m.Custom == "" && m.First == "" && m.Task == "" && !m.TaskRead && m.SubMeta == nil &&
 		len(m.Convs) == 0 && len(m.ResponseIDs) == 0 && len(m.SeedConvs) == 0 && len(m.TurnConvs) == 0 &&
 		m.MsgAt.IsZero() && m.Root == "" && m.Leaf == "" && len(m.Compacts) == 0 && m.Since.IsZero() &&
 		m.Grok == nil && m.Droid == nil && m.Kimi == nil && m.Agy == nil && m.Dsh == nil && m.Cline == nil
@@ -712,7 +719,9 @@ type fileMore struct {
 	alma *almaStore
 	// OpenMausBot: its database, bots and usage rows
 	omb *ombStore
-	rev string
+	// CatPaw: its database, and the conversation's title and folder
+	catpaw *catpawConv
+	rev    string
 	// agy: what conversation_summaries.db says of the conversation
 	agy    *agySummary
 	editor *cursorEditorMeta
@@ -1136,7 +1145,7 @@ func allFilesWith(kept *filesKept, zcode func() []file) []file {
 	lists := callFileLists(codexFiles())
 	lists = append(lists, openCodeFiles(), piFiles(), raftFiles(), cindyFiles(), wslFiles("pi", "raft", "omp", "kimi", "antigravity", "agy"), zcode())
 	lists = append(lists, dshFiles(), clineFiles(), ccFiles("qoder", QoderDir("qoder")), ccFiles("qoder-cn", QoderDir("qoder-cn")),
-		grokFiles(), workbuddyFiles(), workbuddyAIFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), openmausbotFiles(), liveagentFiles(), kimiFiles(), agyFiles(),
+		grokFiles(), workbuddyFiles(), workbuddyAIFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), openmausbotFiles(), catpawFiles(), liveagentFiles(), kimiFiles(), agyFiles(),
 		antigravityFiles()) // #2190
 	// each lister asked Reads already; a file listed under another
 	// agent's name is held to that agent too
@@ -1251,6 +1260,7 @@ func Dirs() []string {
 		{filepath.Dir(cursorEditorDB()), cursorEditorDB()},
 		{AlmaDir(), almaDB()},
 		{OpenMausBotDir(), ombDB()},
+		{CatPawDir(), catpawDB()},
 		{LiveAgentDir(), liveagentSessions()},
 		{MiniMaxDir(), minimaxSessions()},
 		{KimiCodeDir(), kimiSessions()},
@@ -1614,9 +1624,15 @@ const cacheVersion = 30
 // request still answering carried and has no reply id for yet.
 // agy 1: a step's tokens are counted under the model its conversation's
 // database names (agyStepModels), not "agy".
+// agy 2, antigravity 3: the skills a prompt calls up (/<name>) and a
+// model's read of a SKILL.md calls up (agyAskedSkills, agyTools); the
+// app's tool calls, from its transcript.
 // pi 1, raft 1, cindy 1: a pi-subagents tool result's model work is its
 // subagents', counted from their own files (piSubagentsRead).
-var parseVersions = map[string]int{"codex": 3, "zcode": 1, "dsh": 3, "antigravity": 2, "agy": 1, "pi": 1, "raft": 1, "cindy": 1}
+// workbuddy 1, workbuddy-ai 1, codebuddy 1: a session's first prompt is
+// its <user_query> when WorkBuddy wrote it in one block with its context
+// (wbTyped).
+var parseVersions = map[string]int{"codex": 3, "zcode": 1, "dsh": 3, "antigravity": 3, "agy": 2, "pi": 1, "raft": 1, "cindy": 1, "workbuddy": 1, "workbuddy-ai": 1, "codebuddy": 1}
 
 type cacheFile struct {
 	Version int    `json:"version"`
@@ -1841,7 +1857,7 @@ func refresh(want, all []file) {
 		if f.cold {
 			continue // in a stopped WSL distro: what was read of it stands
 		}
-		if s := parsed(f.path); s == nil || s.Size != f.size || s.Mod != f.mod.UnixNano() || ccStale(f, s) || (f.agent == "hermes" && (f.m().hermes == nil || f.m().rev == "" || s.more().DBRevision != f.m().rev)) || ((f.agent == "alma" || f.agent == "openmausbot" || f.agent == "cursor" || f.agent == "agy" || f.agent == "antigravity") && s.more().DBRevision != f.m().rev) {
+		if s := parsed(f.path); s == nil || s.Size != f.size || s.Mod != f.mod.UnixNano() || ccStale(f, s) || (f.agent == "hermes" && (f.m().hermes == nil || f.m().rev == "" || s.more().DBRevision != f.m().rev)) || ((f.agent == "alma" || f.agent == "openmausbot" || f.agent == "catpaw" || f.agent == "cursor" || f.agent == "agy" || f.agent == "antigravity") && s.more().DBRevision != f.m().rev) {
 			if parsing[f.path] != nil {
 				// a refresh is reading it, another or this one (a path
 				// listed twice): its last parse stands until that one is
@@ -2467,6 +2483,8 @@ func parserFor(agent string) sessionParser {
 		return sessionParser{whole: parseAlma}
 	case "openmausbot":
 		return sessionParser{whole: parseOpenMausBot}
+	case "catpaw":
+		return sessionParser{whole: parseCatPaw}
 	case "liveagent":
 		return sessionParser{whole: parseLiveAgent}
 	case "opencode", "zcode":
@@ -2579,6 +2597,15 @@ func parseRead(f file, old *state, calls *callsRide) *state {
 	}
 	if calls != nil {
 		calls.finish(off, err)
+	}
+	if parser.claude && !f.main && err == nil && SubagentOf(f.path) != "" {
+		// read: found or not, so the parse is not read again for it
+		s.own().TaskRead = true
+		if s.more().SubMeta == nil {
+			if m, ok := readCCMeta(f.path); ok {
+				s.own().SubMeta = &m
+			}
+		}
 	}
 	if isBuddy(f.agent) && s.Cwd == "" {
 		workbuddyMeta(s, f.path)
@@ -3096,6 +3123,13 @@ func priceOf(s settings.Settings, model string) (catalog.Price, bool) {
 	if m == "" {
 		return catalog.Price{}, false
 	}
+	// Kimi Code's own sign-in names its models "kimi-code/<model>", and
+	// "kimi-code" there is Kimi Code's name, not magpie's provider: the
+	// call is priced as one to the user's Kimi Code membership (#3331),
+	// as the ledger prices it
+	if pr, ok, _ := provider.KimiCodeSessionPrice(s, m); ok {
+		return pr, true
+	}
 	if pid, rest, ok := strings.Cut(m, "/"); ok {
 		// without a rate window's rate (#2463): a session sums its calls by
 		// model, not by time, so the window of the hour it is read in
@@ -3128,7 +3162,8 @@ func priceOf(s settings.Settings, model string) (catalog.Price, bool) {
 	// claude-opus-4-6
 	for _, id := range []string{bare, canonical, dated.ReplaceAllString(canonical, ""), provider.PricedName(canonical)} {
 		if pr, ok := catalog.PricedBy(makers(id), id); ok {
-			return pr, true
+			// an Antigravity role id at what Antigravity counts it at
+			return provider.AgyScoped(m, pr), true
 		}
 	}
 	if strings.HasPrefix(bare, "gemini-") {

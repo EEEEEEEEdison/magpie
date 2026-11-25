@@ -98,6 +98,33 @@ func TestSettledDaysRejectChangedDesktopFallback(t *testing.T) {
 	}
 }
 
+func TestRecentFileRejectsSettledDaysAfterDesktopFallbackChanges(t *testing.T) {
+	pageHome(t)
+	cut := time.Now().Truncate(time.Hour)
+	key := func(cliOnly bool) string {
+		s := sessions.CallSource{Path: "/s/mixed.jsonl", Agent: "claude", NoDesktopApp: cliOnly}
+		c := &rowChunk{Source: s, serial: sourceSerial("r", "m", s)}
+		agent := "claude-desktop"
+		if cliOnly {
+			agent = "claude"
+		}
+		for _, at := range []time.Time{cut.Add(-24 * time.Hour), cut.Add(time.Hour)} {
+			c.add(Row{Record: Record{Time: at, Agent: agent, Input: 10, Output: 2}}, "", 0, false)
+		}
+		_, k, ok := settledAt(heatDiskRef{"r", "m"}, cut, time.Time{}, Filter{Agent: "claude-desktop"}, nil, [3][]*rowChunk{nil, {c}})
+		if !ok {
+			t.Fatal("missing settled key")
+		}
+		return k
+	}
+	if err := heatDiskWrite(key(false), cut, time.Time{}, []Day{{Calls: 1, Tokens: 12}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := heatDiskRead(key(true)); ok {
+		t.Fatal("recent CLI-only file reused the settled Desktop day")
+	}
+}
+
 // 两个查询看到不同的来源身份时，不能等待并复用对方的旧身份块。
 func TestSharedBlocksKeepTheirDesktopFallback(t *testing.T) {
 	pageHome(t)

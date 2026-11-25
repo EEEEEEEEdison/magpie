@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yetone/magpie/internal/bridgesid"
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/provider"
@@ -159,8 +160,8 @@ func TestClaudeWorkDirSymlinkIsAvoided(t *testing.T) {
 // directory, and a model told magpie's own folder wrote the caller's files
 // into it (a pelican.html left in magpie-claude-work), through tools that
 // run in the caller's. Each client's way of saying it is read, the last
-// said in the first text that says one counting. The caller's folder keeps sessions of its own, which are
-// never swept, and its repository's status is not added to the prompt.
+// said in the first text that says one counting. A run leaves old sessions
+// in the caller's project and keeps its repository status out of the prompt.
 func TestClaudeRunsInTheCallersWorkDir(t *testing.T) {
 	for _, c := range []struct {
 		name, said, folder string
@@ -178,7 +179,7 @@ func TestClaudeRunsInTheCallersWorkDir(t *testing.T) {
 		{name: "said twice", said: " - Primary working directory: /nowhere/at/all\nlater:\n - Primary working directory: %s"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			var proj, old string
+			var proj, old, left string
 			dirs, work, s, env, told := claudeWorkDirsTold(t, nil, func(home string) string {
 				folder := c.folder
 				if folder == "" {
@@ -198,8 +199,17 @@ func TestClaudeRunsInTheCallersWorkDir(t *testing.T) {
 				if err := os.WriteFile(old, []byte("{}\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
+				// and a run's, which a stopped gateway left
+				left = filepath.Join(sessions[0], bridgesid.New()+".jsonl")
+				if err := os.WriteFile(left, []byte("{}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 				then := time.Now().Add(-48 * time.Hour)
-				_ = os.Chtimes(old, then, then)
+				for _, path := range []string{old, left} {
+					if err := os.Chtimes(path, then, then); err != nil {
+						t.Fatal(err)
+					}
+				}
 				said := proj
 				if c.escaped {
 					said = html.EscapeString(proj)
@@ -210,13 +220,15 @@ func TestClaudeRunsInTheCallersWorkDir(t *testing.T) {
 			if len(dirs) != 2 || dirs[0] != proj || dirs[1] != proj {
 				t.Fatalf("working directories: %q, want the caller's %s (not %s)", dirs, proj, work)
 			}
-			for _, d := range claudeSessions("", proj) {
-				if _, swept := s.subscription.swept.Load(d); swept {
-					t.Fatalf("the caller's sessions in %s were swept", d)
+			for _, dir := range claudeSessions("", proj) {
+				if _, swept := s.subscription.swept.Load(dir); swept {
+					t.Fatalf("scheduled a sweep of the caller's project %s", dir)
 				}
 			}
-			if _, err := os.Stat(old); err != nil {
-				t.Fatalf("the user's own session: %v", err)
+			for _, path := range []string{old, left} {
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("expected to keep %s: %v", path, err)
+				}
 			}
 			if !strings.Contains(env, "CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1") {
 				t.Fatal("Claude Code would add the repository's status to the prompt")
